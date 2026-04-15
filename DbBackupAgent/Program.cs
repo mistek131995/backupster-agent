@@ -7,10 +7,16 @@ using DbBackupAgent.Workers;
 using SftpSettings = DbBackupAgent.Models.SftpSettings;
 using UploadSettings = DbBackupAgent.Models.UploadSettings;
 
-var configDir = Environment.GetEnvironmentVariable("CONFIG_PATH") ?? "/app/config";
+var defaultConfigDir = OperatingSystem.IsWindows()
+    ? Path.Combine(AppContext.BaseDirectory, "config")
+    : "/app/config";
+var configDir = Environment.GetEnvironmentVariable("CONFIG_PATH") ?? defaultConfigDir;
 ConfigBootstrapper.EnsureTemplate(configDir);
 
 var builder = Host.CreateApplicationBuilder(args);
+
+builder.Services.AddWindowsService();
+builder.Services.AddSystemd();
 
 builder.Configuration.AddJsonFile(
     Path.Combine(configDir, "appsettings.json"), optional: true, reloadOnChange: false);

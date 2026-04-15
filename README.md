@@ -18,28 +18,115 @@ Dump → Encrypt → Upload → Cleanup → File Snapshots → Report
 6. **Report** — отправляет отчёт на DbBackupDashboard, всегда, при успехе и при ошибке.
 
 Расписание запусков получает из Dashboard (cron, опрос каждые 5 минут).
+Проверка cron-расписания — каждые 30 секунд.
 
 Поддерживаемые БД: **PostgreSQL**, **MSSQL**.  
-Поддерживаемые хранилища: **S3-совместимые** (MinIO, Yandex Object Storage, AWS S3), **SFTP**.
+Поддерживаемые хранилища: **S3-совместимые** (MinIO, Yandex Object Storage, AWS S3, Cloudflare R2), **SFTP**.
 
 ---
 
 ## Требования
 
-- .NET 10 SDK
+- .NET 10 Runtime (или SDK для сборки из исходников)
 - `pg_dump` в `PATH` — для PostgreSQL
 - `sqlcmd` в `PATH` — для MSSQL
 - Зарегистрированный агент в DbBackupDashboard (нужен токен)
 
 ---
 
-## Быстрый старт
+## Запуск
+
+### Docker
+
+```bash
+docker run -d --name dbbackup-agent \
+  -e AgentSettings__Token=<токен> \
+  -e AgentSettings__DashboardUrl=<url дашборда> \
+  -v /root/dbbackup-agent:/app/config \
+  ghcr.io/mistek131995/db_backup_agent:latest
+```
+
+При первом запуске агент создаст шаблон `/app/config/appsettings.json`. Заполните его и перезапустите контейнер:
+
+```bash
+docker restart dbbackup-agent
+```
+
+### Linux (systemd)
+
+```bash
+sudo mkdir -p /opt/dbbackup-agent
+# скопируйте опубликованные файлы в /opt/dbbackup-agent
+
+sudo tee /etc/systemd/system/dbbackup-agent.service <<EOF
+[Unit]
+Description=DbBackup Agent
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/dbbackup-agent
+ExecStart=/opt/dbbackup-agent/DbBackupAgent
+Environment=AgentSettings__Token=<токен>
+Environment=AgentSettings__DashboardUrl=<url дашборда>
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now dbbackup-agent
+```
+
+При первом запуске агент создаст шаблон `/app/config/appsettings.json`. Заполните его и перезапустите службу:
+
+```bash
+sudo systemctl restart dbbackup-agent
+```
+
+### Windows (служба)
+
+```powershell
+# Распакуйте опубликованные файлы в C:\Services\DbBackupAgent
+
+sc.exe create DbBackupAgent binPath="C:\Services\DbBackupAgent\DbBackupAgent.exe"
+
+# Задайте переменные окружения
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\DbBackupAgent\Environment" ^
+  /v AgentSettings__Token /t REG_SZ /d "<токен>"
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\DbBackupAgent\Environment" ^
+  /v AgentSettings__DashboardUrl /t REG_SZ /d "<url дашборда>"
+
+sc.exe start DbBackupAgent
+```
+
+При первом запуске агент создаст шаблон `C:\Services\DbBackupAgent\config\appsettings.json`. Заполните его и перезапустите службу:
+
+```powershell
+sc.exe stop DbBackupAgent
+sc.exe start DbBackupAgent
+```
+
+### Для разработки
 
 ```bash
 cd DbBackupAgent
-# Заполнить appsettings.json (см. ниже)
 dotnet run --project DbBackupAgent/DbBackupAgent.csproj
 ```
+
+---
+
+## Поведение при пустом конфиге
+
+Агент **не падает** если конфигурация не заполнена:
+
+- Нет ключа шифрования — логирует warning, пропускает бэкапы
+- Нет настроек S3 — логирует warning, клиент не создаётся до первого вызова
+- Нет баз данных — логирует warning, пропускает бэкапы
+- Token и DashboardUrl пустые — расписание не загружается, агент простаивает
+
+Заполните `appsettings.json` и перезапустите — агент начнёт работать.
 
 ---
 
@@ -129,14 +216,22 @@ openssl rand -base64 32
 
 ### Подключение к Dashboard
 
-```json
-"AgentSettings": {
-  "DashboardUrl": "http://your-server:8080",
-  "Token": "<токен агента из Dashboard>"
-}
+Token и DashboardUrl передаются через переменные окружения (не в `appsettings.json`):
+
+```bash
+AgentSettings__Token=<токен агента из Dashboard>
+AgentSettings__DashboardUrl=http://your-server:8080
 ```
 
-Токен передаётся через заголовок `X-Agent-Token`. Расписание опрашивается каждые 5 минут.
+Токен передаётся на сервер через заголовок `X-Agent-Token`. Расписание опрашивается каждые 5 минут.
+
+### Путь к конфигу
+
+По умолчанию агент ищет `appsettings.json` в:
+- **Docker / Linux:** `/app/config/`
+- **Windows:** `{директория exe}\config\`
+
+Переопределяется через переменную окружения `CONFIG_PATH`.
 
 ---
 
@@ -157,3 +252,9 @@ openssl rand -base64 32
 - Отчёт отправляется всегда — и при успехе, и при ошибке.
 - Временные файлы удаляются даже если pipeline упал.
 - `ReportService` и `ScheduleService` делают до 3 повторных попыток (1 с → 2 с → 4 с) при недоступности Dashboard.
+
+---
+
+## Heartbeat
+
+Агент обновляет статус "в сети" на дашборде при каждом запросе расписания (каждые 5 минут). Отдельного heartbeat-эндпоинта нет — используется `GET /api/v1/agent/schedule`.
