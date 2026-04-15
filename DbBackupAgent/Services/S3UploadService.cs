@@ -8,16 +8,27 @@ namespace DbBackupAgent.Services;
 
 public sealed class S3UploadService : IUploadService, IDisposable
 {
-    private readonly AmazonS3Client _client;
     private readonly S3Settings _settings;
     private readonly ILogger<S3UploadService> _logger;
+    private AmazonS3Client? _client;
 
     public S3UploadService(IOptions<S3Settings> settings, ILogger<S3UploadService> logger)
     {
         _settings = settings.Value;
         _logger = logger;
 
-        // Credentials are validated here; never logged
+        if (string.IsNullOrWhiteSpace(_settings.EndpointUrl))
+            _logger.LogWarning("S3Settings:EndpointUrl is not set. S3 uploads will not work until configured.");
+    }
+
+    private AmazonS3Client GetClient()
+    {
+        if (_client is not null)
+            return _client;
+
+        if (string.IsNullOrWhiteSpace(_settings.EndpointUrl))
+            throw new InvalidOperationException("S3Settings:EndpointUrl is not configured.");
+
         var config = new AmazonS3Config
         {
             ServiceURL = _settings.EndpointUrl,
@@ -27,6 +38,7 @@ public sealed class S3UploadService : IUploadService, IDisposable
         };
 
         _client = new AmazonS3Client(_settings.AccessKey, _settings.SecretKey, config);
+        return _client;
     }
 
     /// <summary>
@@ -57,7 +69,7 @@ public sealed class S3UploadService : IUploadService, IDisposable
             DisablePayloadSigning = true,
         };
 
-        await _client.PutObjectAsync(request, ct);
+        await GetClient().PutObjectAsync(request, ct);
 
         var storagePath = $"s3://{_settings.BucketName}/{objectKey}";
         _logger.LogInformation("Upload completed. StoragePath: '{StoragePath}'", storagePath);
@@ -65,5 +77,5 @@ public sealed class S3UploadService : IUploadService, IDisposable
         return storagePath;
     }
 
-    public void Dispose() => _client.Dispose();
+    public void Dispose() => _client?.Dispose();
 }
