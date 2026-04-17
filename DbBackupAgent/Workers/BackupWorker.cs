@@ -44,7 +44,6 @@ public sealed class BackupWorker : BackgroundService
         return true;
     }
 
-    /// <summary>How often the worker checks whether a cron occurrence is due.</summary>
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -53,34 +52,43 @@ public sealed class BackupWorker : BackgroundService
             "BackupWorker started. Databases: {Count}, tick: {TickSec}s, schedule poll: {PollMin} min",
             _databases.Count, TickInterval.TotalSeconds, ScheduleService.PollInterval.TotalMinutes);
 
-        DateTime? lastRun = null;
+        var lastRunByDb = new Dictionary<string, DateTime?>(StringComparer.Ordinal);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var nextRun = await _schedule.GetNextRunAsync(stoppingToken);
+                var due = new List<(DatabaseConfig config, DateTime nextRun)>();
 
-                if (nextRun is null)
+                foreach (var config in _databases)
                 {
-                    _logger.LogDebug("BackupWorker: schedule is inactive, skipping");
-                }
-                else if (nextRun.Value <= DateTime.UtcNow && (lastRun is null || nextRun > lastRun))
-                {
-                    lastRun = nextRun;
+                    if (stoppingToken.IsCancellationRequested) break;
 
-                    if (!IsConfigured())
+                    var nextRun = await _schedule.GetNextRunAsync(config.Database, stoppingToken);
+
+                    if (nextRun is null)
+                    {
+                        _logger.LogDebug(
+                            "BackupWorker: schedule is inactive for '{Database}', skipping", config.Database);
                         continue;
+                    }
 
-                    _logger.LogInformation(
-                        "BackupWorker: scheduled run triggered (nextRun={NextRun:u})", nextRun.Value);
-                    await RunAllDatabasesAsync(stoppingToken);
+                    var last = lastRunByDb.GetValueOrDefault(config.Database);
+                    if (nextRun.Value <= DateTime.UtcNow && (last is null || nextRun.Value > last))
+                    {
+                        due.Add((config, nextRun.Value));
+                        lastRunByDb[config.Database] = nextRun.Value;
+                    }
+                    else
+                    {
+                        _logger.LogDebug(
+                            "BackupWorker: '{Database}' next run at {NextRun:u}, nothing to do yet",
+                            config.Database, nextRun.Value);
+                    }
                 }
-                else
-                {
-                    _logger.LogDebug(
-                        "BackupWorker: next run at {NextRun:u}, nothing to do yet", nextRun.Value);
-                }
+
+                if (due.Count > 0 && IsConfigured())
+                    await RunDueDatabasesAsync(due, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -104,23 +112,25 @@ public sealed class BackupWorker : BackgroundService
         _logger.LogInformation("BackupWorker stopped");
     }
 
-    private async Task RunAllDatabasesAsync(CancellationToken stoppingToken)
+    private async Task RunDueDatabasesAsync(
+        List<(DatabaseConfig config, DateTime nextRun)> due,
+        CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "BackupWorker: starting backup run for {Count} database(s)", _databases.Count);
+            "BackupWorker: starting backup run for {Count} due database(s)", due.Count);
 
         int succeeded = 0;
         int failed = 0;
 
-        for (int i = 0; i < _databases.Count; i++)
+        for (int i = 0; i < due.Count; i++)
         {
             if (stoppingToken.IsCancellationRequested) break;
 
-            var config = _databases[i];
+            var (config, nextRun) = due[i];
 
             _logger.LogInformation(
-                "[{Index}/{Total}] Starting backup. Database: '{Database}', Type: {DatabaseType}",
-                i + 1, _databases.Count, config.Database, config.DatabaseType);
+                "[{Index}/{Total}] Starting backup. Database: '{Database}', Type: {DatabaseType}, NextRun: {NextRun:u}",
+                i + 1, due.Count, config.Database, config.DatabaseType, nextRun);
 
             try
             {
@@ -131,14 +141,14 @@ public sealed class BackupWorker : BackgroundService
                     succeeded++;
                     _logger.LogInformation(
                         "[{Index}/{Total}] Backup succeeded. Database: '{Database}'",
-                        i + 1, _databases.Count, config.Database);
+                        i + 1, due.Count, config.Database);
                 }
                 else
                 {
                     failed++;
                     _logger.LogError(
                         "[{Index}/{Total}] Backup failed. Database: '{Database}', Error: {ErrorMessage}",
-                        i + 1, _databases.Count, config.Database, result.ErrorMessage);
+                        i + 1, due.Count, config.Database, result.ErrorMessage);
                 }
             }
             catch (OperationCanceledException)
@@ -151,12 +161,12 @@ public sealed class BackupWorker : BackgroundService
                 failed++;
                 _logger.LogError(ex,
                     "[{Index}/{Total}] Unhandled exception for database '{Database}'. Continuing.",
-                    i + 1, _databases.Count, config.Database);
+                    i + 1, due.Count, config.Database);
             }
         }
 
         _logger.LogInformation(
             "BackupWorker: run complete. Succeeded: {Succeeded}, Failed: {Failed}, Total: {Total}",
-            succeeded, failed, _databases.Count);
+            succeeded, failed, due.Count);
     }
 }

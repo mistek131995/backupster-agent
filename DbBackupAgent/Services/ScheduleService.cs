@@ -16,8 +16,9 @@ public sealed class ScheduleService
     private readonly ILogger<ScheduleService> _logger;
     private readonly ResiliencePipeline _pipeline;
 
-    /// <summary>How often to ask the server for a fresh schedule.</summary>
     public static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(5);
+
+    private const string DefaultKey = "__default__";
 
     private static readonly TimeSpan[] RetryDelays =
     [
@@ -28,7 +29,7 @@ public sealed class ScheduleService
 
     private ScheduleDto? _cachedSchedule;
     private DateTime _lastFetchAt = DateTime.MinValue;
-    private string? _lastCronExpression;
+    private readonly Dictionary<string, string> _lastCronByName = new(StringComparer.Ordinal);
 
     public ScheduleService(
         HttpClient http,
@@ -41,18 +42,21 @@ public sealed class ScheduleService
         _pipeline = BuildPipeline();
     }
 
-    /// <summary>
-    /// Returns the next scheduled run time (looking back one <see cref="PollInterval"/> so a
-    /// recently-past cron fire is not missed), or <c>null</c> if the schedule is inactive.
-    /// Fetches a fresh schedule from the server when the poll interval elapses;
-    /// falls back to the last known schedule on network errors.
-    /// </summary>
-    public async Task<DateTime?> GetNextRunAsync(CancellationToken ct)
+    public async Task<DateTime?> GetNextRunAsync(string databaseName, CancellationToken ct)
     {
         if (DateTime.UtcNow - _lastFetchAt >= PollInterval)
             await RefreshScheduleAsync(ct);
 
-        if (_cachedSchedule is null || !_cachedSchedule.IsActive)
+        if (_cachedSchedule is null)
+            return null;
+
+        var match = _cachedSchedule.Overrides?
+            .FirstOrDefault(o => string.Equals(o.DatabaseName, databaseName, StringComparison.Ordinal));
+
+        if (match is not null && match.IsActive)
+            return ParseNextOccurrence(match.CronExpression);
+
+        if (!_cachedSchedule.IsActive)
             return null;
 
         return ParseNextOccurrence(_cachedSchedule.CronExpression);
@@ -78,37 +82,63 @@ public sealed class ScheduleService
 
             if (fetched is null) return;
 
-            if (fetched.CronExpression != _lastCronExpression)
-            {
-                _logger.LogInformation(
-                    "ScheduleService: cron expression changed. Old: '{OldCron}' → New: '{NewCron}'",
-                    _lastCronExpression ?? "(none)", fetched.CronExpression);
-                _lastCronExpression = fetched.CronExpression;
-            }
+            LogCronChanges(fetched);
 
             _cachedSchedule = fetched;
             _lastFetchAt = DateTime.UtcNow;
         }
         catch (Exception ex)
         {
-            // Back off for another full interval to avoid hammering an unavailable server.
             _lastFetchAt = DateTime.UtcNow;
             _logger.LogWarning(ex,
                 "ScheduleService: failed to fetch schedule from server. Using last known schedule.");
         }
     }
 
-    /// <summary>
-    /// Gets the next cron occurrence using a one-poll-interval lookback so a fire that happened
-    /// just before the worker woke up is not silently missed.
-    /// </summary>
+    private void LogCronChanges(ScheduleDto fetched)
+    {
+        var incoming = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [DefaultKey] = fetched.IsActive ? fetched.CronExpression : "(inactive)",
+        };
+
+        if (fetched.Overrides is not null)
+        {
+            foreach (var o in fetched.Overrides)
+                incoming[o.DatabaseName] = o.IsActive ? o.CronExpression : "(inactive)";
+        }
+
+        foreach (var (name, newCron) in incoming)
+        {
+            var oldCron = _lastCronByName.GetValueOrDefault(name);
+            if (oldCron == newCron) continue;
+
+            var label = name == DefaultKey ? "default" : $"override '{name}'";
+            _logger.LogInformation(
+                "ScheduleService: cron for {Label} changed. Old: '{OldCron}' → New: '{NewCron}'",
+                label, oldCron ?? "(none)", newCron);
+        }
+
+        foreach (var name in _lastCronByName.Keys.ToList())
+        {
+            if (incoming.ContainsKey(name)) continue;
+
+            var label = name == DefaultKey ? "default" : $"override '{name}'";
+            _logger.LogInformation(
+                "ScheduleService: cron for {Label} removed (was '{OldCron}')",
+                label, _lastCronByName[name]);
+        }
+
+        _lastCronByName.Clear();
+        foreach (var (k, v) in incoming)
+            _lastCronByName[k] = v;
+    }
+
     private DateTime? ParseNextOccurrence(string cronExpression)
     {
         try
         {
             var schedule = CrontabSchedule.Parse(cronExpression);
-            // Look back by PollInterval: returns the most recent occurrence in that window,
-            // or the next future one if the cron has not fired recently.
             return schedule.GetNextOccurrence(DateTime.UtcNow - PollInterval);
         }
         catch (Exception ex)

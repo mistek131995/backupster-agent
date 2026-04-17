@@ -1,8 +1,8 @@
 namespace DbBackupAgent.Models;
 
-public sealed class ScheduleDto
+public sealed class ScheduleOverrideDto
 {
+    public string DatabaseName { get; set; } = string.Empty;
     public string CronExpression { get; set; } = string.Empty;
     public bool IsActive { get; set; }
-    public List<ScheduleOverrideDto>? Overrides { get; set; }
 }
