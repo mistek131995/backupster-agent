@@ -34,7 +34,10 @@ public sealed class PostgresBackupProvider : IBackupProvider
                 "-h", config.Host,
                 "-p", config.Port.ToString(),
                 "-U", config.Username,
-                "-F", "p",       // plain SQL format — piped into GZipStream
+                "-F", "p",
+                "--create",
+                "--clean",
+                "--if-exists",
                 config.Database
             },
             RedirectStandardOutput = true,

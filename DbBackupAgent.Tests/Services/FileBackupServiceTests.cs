@@ -206,19 +206,8 @@ public sealed class FileBackupServiceTests
             () => _service.CaptureAsync([_tempRoot], cts.Token));
     }
 
-    private static byte[] DecryptAes(byte[] ivAndCiphertext, byte[] key)
-    {
-        const int ivLength = 16;
-        using var aes = Aes.Create();
-        aes.KeySize = 256;
-        aes.Mode = CipherMode.CBC;
-        aes.Padding = PaddingMode.PKCS7;
-        aes.Key = key;
-        aes.IV = ivAndCiphertext.AsSpan(0, ivLength).ToArray();
-
-        using var decryptor = aes.CreateDecryptor();
-        return decryptor.TransformFinalBlock(ivAndCiphertext, ivLength, ivAndCiphertext.Length - ivLength);
-    }
+    private static byte[] DecryptAes(byte[] encrypted, byte[] key) =>
+        EncryptionServiceTests.DecryptBytes(encrypted, key);
 
     private sealed class FakeUploadService : IUploadService
     {
