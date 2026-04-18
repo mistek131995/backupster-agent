@@ -68,8 +68,10 @@ builder.Services.AddSingleton<SftpUploadService>();
 builder.Services.AddSingleton<IUploadServiceFactory, UploadServiceFactory>();
 builder.Services.AddHttpClient<ReportService>();
 builder.Services.AddHttpClient<ScheduleService>();
+builder.Services.AddHttpClient<IConnectionSyncService, ConnectionSyncService>();
 builder.Services.AddSingleton<BackupJob>();
 builder.Services.AddHostedService<BackupWorker>();
+builder.Services.AddHostedService<ConnectionSyncWorker>();
 
 var host = builder.Build();
 host.Run();
