@@ -25,6 +25,9 @@ builder.Configuration.AddJsonFile(
 // Env vars must win over the external config file
 builder.Configuration.AddEnvironmentVariables();
 
+builder.Services.Configure<List<ConnectionConfig>>(
+    builder.Configuration.GetSection("Connections"));
+
 builder.Services.Configure<List<DatabaseConfig>>(
     builder.Configuration.GetSection("Databases"));
 
@@ -55,6 +58,7 @@ ActivitySource.AddActivityListener(new ActivityListener
 
 builder.Services.AddSingleton(new ActivitySource("DbBackupAgent"));
 
+builder.Services.AddSingleton<ConnectionResolver>();
 builder.Services.AddSingleton<EncryptionService>();
 builder.Services.AddSingleton<ContentDefinedChunker>();
 builder.Services.AddSingleton<FileBackupService>();

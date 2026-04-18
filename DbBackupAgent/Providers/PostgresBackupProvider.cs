@@ -14,7 +14,7 @@ public sealed class PostgresBackupProvider : IBackupProvider
         _logger = logger;
     }
 
-    public async Task<BackupResult> BackupAsync(DatabaseConfig config, CancellationToken ct)
+    public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
     {
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         var fileName = $"{config.Database}_{timestamp}.sql.gz";
@@ -24,16 +24,16 @@ public sealed class PostgresBackupProvider : IBackupProvider
 
         _logger.LogInformation(
             "Starting PostgreSQL backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}'",
-            config.Database, config.Host, config.Port, outputFile);
+            config.Database, connection.Host, connection.Port, outputFile);
 
         var psi = new ProcessStartInfo
         {
             FileName = "pg_dump",
             ArgumentList =
             {
-                "-h", config.Host,
-                "-p", config.Port.ToString(),
-                "-U", config.Username,
+                "-h", connection.Host,
+                "-p", connection.Port.ToString(),
+                "-U", connection.Username,
                 "-F", "p",
                 "--create",
                 "--clean",
@@ -46,8 +46,7 @@ public sealed class PostgresBackupProvider : IBackupProvider
             CreateNoWindow = true,
         };
 
-        // Password via environment variable, never via CLI arguments
-        psi.Environment["PGPASSWORD"] = config.Password;
+        psi.Environment["PGPASSWORD"] = connection.Password;
 
         var sw = Stopwatch.StartNew();
         using var process = new Process { StartInfo = psi };

@@ -13,7 +13,7 @@ public sealed class MssqlBackupProvider : IBackupProvider
         _logger = logger;
     }
 
-    public async Task<BackupResult> BackupAsync(DatabaseConfig config, CancellationToken ct)
+    public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
     {
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         var fileName = $"{config.Database}_{timestamp}.bak";
@@ -23,11 +23,10 @@ public sealed class MssqlBackupProvider : IBackupProvider
 
         _logger.LogInformation(
             "Starting MSSQL backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}'",
-            config.Database, config.Host, config.Port, outputFile);
+            config.Database, connection.Host, connection.Port, outputFile);
 
-        // T-SQL run via sqlcmd; SQL Server writes the .bak file itself (server-side path)
         var tsql = $"BACKUP DATABASE [{config.Database}] TO DISK = N'{outputFile}' WITH FORMAT, INIT, STATS = 10;";
-        var serverAddress = $"{config.Host},{config.Port}";
+        var serverAddress = $"{connection.Host},{connection.Port}";
 
         var psi = new ProcessStartInfo
         {
@@ -35,8 +34,8 @@ public sealed class MssqlBackupProvider : IBackupProvider
             ArgumentList =
             {
                 "-S", serverAddress,
-                "-U", config.Username,
-                "-P", config.Password,
+                "-U", connection.Username,
+                "-P", connection.Password,
                 "-Q", tsql
             },
             RedirectStandardOutput = true,

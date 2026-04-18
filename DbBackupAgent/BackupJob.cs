@@ -10,6 +10,7 @@ namespace DbBackupAgent;
 public sealed class BackupJob
 {
     private readonly IBackupProviderFactory _factory;
+    private readonly ConnectionResolver _connections;
     private readonly EncryptionService _encryption;
     private readonly IUploadServiceFactory _uploadFactory;
     private readonly FileBackupService _fileBackup;
@@ -22,6 +23,7 @@ public sealed class BackupJob
 
     public BackupJob(
         IBackupProviderFactory factory,
+        ConnectionResolver connections,
         EncryptionService encryption,
         IUploadServiceFactory uploadFactory,
         FileBackupService fileBackup,
@@ -33,6 +35,7 @@ public sealed class BackupJob
         ILogger<BackupJob> logger)
     {
         _factory = factory;
+        _connections = connections;
         _encryption = encryption;
         _uploadFactory = uploadFactory;
         _fileBackup = fileBackup;
@@ -48,13 +51,15 @@ public sealed class BackupJob
     {
         using var activity = _activitySource.StartActivity("backup.run");
         activity?.SetTag("database", config.Database);
+        activity?.SetTag("connection", config.ConnectionName);
 
-        var provider = _factory.GetProvider(config.DatabaseType);
+        var connection = _connections.Resolve(config.ConnectionName);
+        var provider = _factory.GetProvider(connection.DatabaseType);
         var backupFolder = $"{config.Database}_{DateTime.UtcNow:yyyy-MM-dd_HH-mm-ss}";
 
         _logger.LogInformation(
-            "BackupJob starting. Provider: {ProviderType}, Database: '{Database}', Folder: '{Folder}', TraceId: {TraceId}",
-            provider.GetType().Name, config.Database, backupFolder, activity?.TraceId.ToString() ?? "-");
+            "BackupJob starting. Provider: {ProviderType}, Connection: '{Connection}', Database: '{Database}', Folder: '{Folder}', TraceId: {TraceId}",
+            provider.GetType().Name, connection.Name, config.Database, backupFolder, activity?.TraceId.ToString() ?? "-");
 
         string? dumpFile = null;
         string? encryptedFile = null;
@@ -64,7 +69,7 @@ public sealed class BackupJob
         try
         {
             _logger.LogInformation("Step 1/3: dump");
-            var dumpResult = await provider.BackupAsync(config, ct);
+            var dumpResult = await provider.BackupAsync(config, connection, ct);
             dumpFile = dumpResult.FilePath;
 
             _logger.LogInformation("Step 2/3: encrypt");

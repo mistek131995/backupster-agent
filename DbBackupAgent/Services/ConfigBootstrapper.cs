@@ -4,14 +4,20 @@ public static class ConfigBootstrapper
 {
     private const string Template = """
         {
-          "Databases": [
+          "Connections": [
             {
+              "Name": "main",
               "DatabaseType": "Postgres",
               "Host": "",
               "Port": 5432,
-              "Database": "",
               "Username": "",
-              "Password": "",
+              "Password": ""
+            }
+          ],
+          "Databases": [
+            {
+              "ConnectionName": "main",
+              "Database": "",
               "OutputPath": "/backups",
               "FilePaths": []
             }

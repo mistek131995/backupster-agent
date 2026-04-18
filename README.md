@@ -150,33 +150,47 @@ dotnet run --project DbBackupAgent/DbBackupAgent.csproj
 
 Все настройки в `appsettings.json`. Любой параметр можно переопределить переменной окружения.
 
-### Базы данных
+### Подключения и базы данных
+
+Конфиг разделён на два списка: `Connections[]` хранит данные серверов (хост, логин, пароль, тип БД), `Databases[]` — список баз, каждая ссылается на подключение по имени. Это удобно, когда на одном сервере несколько БД — реквизиты не дублируются.
 
 ```json
-"Databases": [
+"Connections": [
   {
+    "Name": "main-pg",
     "DatabaseType": "Postgres",
     "Host": "localhost",
     "Port": 5432,
-    "Database": "mydb",
     "Username": "user",
-    "Password": "secret",
+    "Password": "secret"
+  },
+  {
+    "Name": "reporting-mssql",
+    "DatabaseType": "Mssql",
+    "Host": "localhost",
+    "Port": 1433,
+    "Username": "sa",
+    "Password": "secret"
+  }
+],
+"Databases": [
+  {
+    "ConnectionName": "main-pg",
+    "Database": "mydb",
     "OutputPath": "/tmp/backups",
     "FilePaths": []
   },
   {
-    "DatabaseType": "Mssql",
-    "Host": "localhost",
-    "Port": 1433,
+    "ConnectionName": "reporting-mssql",
     "Database": "mydb2",
-    "Username": "sa",
-    "Password": "secret",
     "OutputPath": "/tmp/backups",
     "FilePaths": ["/etc/myapp/config.yml", "/var/data/certs"]
   }
 ]
 ```
 
+- `Name` подключения должно быть уникальным в пределах `Connections[]`.
+- `ConnectionName` у БД обязан ссылаться на существующее подключение — иначе эта БД будет пропущена с ошибкой в логе, остальные продолжат работать.
 - `OutputPath` — папка для временных файлов дампа. Файлы удаляются после загрузки.
 - `FilePaths` — список путей к файлам или директориям для файлового бэкапа. Директории обходятся рекурсивно. Файлы режутся на content-defined chunks (FastCDC, ~4 МиБ) и дедуплицируются между бэкапами. Работает только при `UploadSettings.Provider = "S3"`. Поле необязательное, по умолчанию пустое.
 

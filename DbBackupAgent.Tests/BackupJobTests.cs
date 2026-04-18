@@ -151,6 +151,7 @@ public sealed class BackupJobTests
 
         return new BackupJob(
             new StubBackupProviderFactory(),
+            new ConnectionResolver([]),
             encryption,
             uploadFactory,
             fileBackup,

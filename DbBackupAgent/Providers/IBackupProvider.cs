@@ -4,5 +4,5 @@ namespace DbBackupAgent.Providers;
 
 public interface IBackupProvider
 {
-    Task<BackupResult> BackupAsync(DatabaseConfig config, CancellationToken ct);
+    Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct);
 }
