@@ -1,16 +1,10 @@
 using DbBackupAgent.Configuration;
-using Microsoft.Extensions.Options;
 
 namespace DbBackupAgent.Services.Common;
 
 public sealed class ConnectionResolver
 {
     private readonly Dictionary<string, ConnectionConfig> _byName;
-
-    public ConnectionResolver(IOptions<List<ConnectionConfig>> connections)
-        : this(connections.Value)
-    {
-    }
 
     public ConnectionResolver(IEnumerable<ConnectionConfig> connections)
     {

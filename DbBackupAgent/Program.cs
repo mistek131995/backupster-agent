@@ -6,6 +6,7 @@ using DbBackupAgent.Services;
 using DbBackupAgent.Services.Common;
 using DbBackupAgent.Settings;
 using DbBackupAgent.Workers;
+using Microsoft.Extensions.Options;
 
 var defaultConfigDir = OperatingSystem.IsWindows()
     ? Path.Combine(AppContext.BaseDirectory, "config")
@@ -68,7 +69,8 @@ ActivitySource.AddActivityListener(new ActivityListener
 builder.Services.AddSingleton(new ActivitySource("DbBackupAgent"));
 
 builder.Services.AddSingleton<IAgentActivityLock, AgentActivityLock>();
-builder.Services.AddSingleton<ConnectionResolver>();
+builder.Services.AddSingleton(sp =>
+    new ConnectionResolver(sp.GetRequiredService<IOptions<List<ConnectionConfig>>>().Value));
 builder.Services.AddSingleton<EncryptionService>();
 builder.Services.AddSingleton<ContentDefinedChunker>();
 builder.Services.AddSingleton<FileBackupService>();
