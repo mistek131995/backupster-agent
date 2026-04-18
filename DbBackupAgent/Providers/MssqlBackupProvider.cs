@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using DbBackupAgent.Models;
+using DbBackupAgent.Services;
 using Microsoft.Extensions.Logging;
 
 namespace DbBackupAgent.Providers;
@@ -17,15 +18,21 @@ public sealed class MssqlBackupProvider : IBackupProvider
     {
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         var fileName = $"{config.Database}_{timestamp}.bak";
-        var outputFile = Path.Combine(config.OutputPath, fileName);
 
-        Directory.CreateDirectory(config.OutputPath);
+        var sqlDir = MssqlSharedPathResolver.GetSqlDir(connection, config.OutputPath);
+        var agentDir = MssqlSharedPathResolver.GetAgentDir(connection, config.OutputPath);
+
+        Directory.CreateDirectory(agentDir);
+
+        var sqlFilePath = MssqlSharedPathResolver.JoinSqlPath(sqlDir, fileName);
+        var agentFilePath = Path.Combine(agentDir, fileName);
 
         _logger.LogInformation(
-            "Starting MSSQL backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}'",
-            config.Database, connection.Host, connection.Port, outputFile);
+            "Starting MSSQL backup. Database: '{Database}', Host: '{Host}:{Port}', " +
+            "SQL path: '{SqlPath}', Agent path: '{AgentPath}'",
+            config.Database, connection.Host, connection.Port, sqlFilePath, agentFilePath);
 
-        var tsql = $"BACKUP DATABASE [{config.Database}] TO DISK = N'{outputFile}' WITH FORMAT, INIT, STATS = 10;";
+        var tsql = $"BACKUP DATABASE [{config.Database}] TO DISK = N'{sqlFilePath}' WITH FORMAT, INIT, STATS = 10;";
         var serverAddress = $"{connection.Host},{connection.Port}";
 
         var psi = new ProcessStartInfo
@@ -56,7 +63,6 @@ public sealed class MssqlBackupProvider : IBackupProvider
             catch (Exception ex) { _logger.LogWarning(ex, "Failed to kill sqlcmd process"); }
         });
 
-        // Read stdout and stderr concurrently to drain the pipes
         var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
 
@@ -80,30 +86,26 @@ public sealed class MssqlBackupProvider : IBackupProvider
             throw new InvalidOperationException(message);
         }
 
-        // The .bak is written by SQL Server, so it may not be accessible from this host
-        // if SQL Server runs remotely. We report the path and size if reachable.
-        long sizeBytes = 0;
-        if (File.Exists(outputFile))
+        if (!File.Exists(agentFilePath))
         {
-            sizeBytes = new FileInfo(outputFile).Length;
+            throw new InvalidOperationException(
+                $"Backup file '{agentFilePath}' is not accessible from the agent host. " +
+                "Проверьте, что SharedBackupPath и AgentBackupPath указывают на один и тот же каталог.");
         }
-        else
-        {
-            _logger.LogWarning(
-                "Backup file '{OutputFile}' is not accessible from this host (SQL Server may be remote). " +
-                "The backup was still created on the server.", outputFile);
-        }
+
+        var sizeBytes = new FileInfo(agentFilePath).Length;
 
         _logger.LogInformation(
             "MSSQL backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
-            outputFile, sizeBytes, sw.ElapsedMilliseconds);
+            agentFilePath, sizeBytes, sw.ElapsedMilliseconds);
 
         return new BackupResult
         {
-            FilePath = outputFile,
+            FilePath = agentFilePath,
             SizeBytes = sizeBytes,
             DurationMs = sw.ElapsedMilliseconds,
             Success = true,
         };
     }
+
 }

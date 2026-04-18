@@ -157,6 +157,7 @@ public sealed class BackupJobTests
             fileBackup,
             manifestStore,
             report,
+            new AgentActivityLock(NullLogger<AgentActivityLock>.Instance),
             Options.Create(new UploadSettings { Provider = provider }),
             Options.Create(new AgentSettings { Token = "test-token", DashboardUrl = "http://localhost" }),
             new ActivitySource("DbBackupAgent.Tests"),

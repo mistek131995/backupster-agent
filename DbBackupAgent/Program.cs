@@ -46,9 +46,16 @@ builder.Services.Configure<UploadSettings>(
 builder.Services.Configure<AgentSettings>(
     builder.Configuration.GetSection("AgentSettings"));
 
+builder.Services.Configure<RestoreSettings>(
+    builder.Configuration.GetSection("RestoreSettings"));
+
 builder.Services.AddSingleton<PostgresBackupProvider>();
 builder.Services.AddSingleton<MssqlBackupProvider>();
 builder.Services.AddSingleton<IBackupProviderFactory, BackupProviderFactory>();
+
+builder.Services.AddSingleton<PostgresRestoreProvider>();
+builder.Services.AddSingleton<MssqlRestoreProvider>();
+builder.Services.AddSingleton<IRestoreProviderFactory, RestoreProviderFactory>();
 
 ActivitySource.AddActivityListener(new ActivityListener
 {
@@ -58,6 +65,7 @@ ActivitySource.AddActivityListener(new ActivityListener
 
 builder.Services.AddSingleton(new ActivitySource("DbBackupAgent"));
 
+builder.Services.AddSingleton<IAgentActivityLock, AgentActivityLock>();
 builder.Services.AddSingleton<ConnectionResolver>();
 builder.Services.AddSingleton<EncryptionService>();
 builder.Services.AddSingleton<ContentDefinedChunker>();
@@ -69,9 +77,13 @@ builder.Services.AddSingleton<IUploadServiceFactory, UploadServiceFactory>();
 builder.Services.AddHttpClient<ReportService>();
 builder.Services.AddHttpClient<ScheduleService>();
 builder.Services.AddHttpClient<IConnectionSyncService, ConnectionSyncService>();
+builder.Services.AddHttpClient<IRestoreTaskClient, RestoreTaskClient>();
+builder.Services.AddSingleton<DatabaseRestoreService>();
+builder.Services.AddSingleton<FileRestoreService>();
 builder.Services.AddSingleton<BackupJob>();
 builder.Services.AddHostedService<BackupWorker>();
 builder.Services.AddHostedService<ConnectionSyncWorker>();
+builder.Services.AddHostedService<RestoreTaskPollingService>();
 
 var host = builder.Build();
 host.Run();

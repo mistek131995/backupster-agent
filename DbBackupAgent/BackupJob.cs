@@ -16,6 +16,7 @@ public sealed class BackupJob
     private readonly FileBackupService _fileBackup;
     private readonly ManifestStore _manifestStore;
     private readonly ReportService _report;
+    private readonly IAgentActivityLock _activityLock;
     private readonly UploadSettings _uploadSettings;
     private readonly AgentSettings _agentSettings;
     private readonly ActivitySource _activitySource;
@@ -29,6 +30,7 @@ public sealed class BackupJob
         FileBackupService fileBackup,
         ManifestStore manifestStore,
         ReportService report,
+        IAgentActivityLock activityLock,
         IOptions<UploadSettings> uploadSettings,
         IOptions<AgentSettings> agentSettings,
         ActivitySource activitySource,
@@ -41,6 +43,7 @@ public sealed class BackupJob
         _fileBackup = fileBackup;
         _manifestStore = manifestStore;
         _report = report;
+        _activityLock = activityLock;
         _uploadSettings = uploadSettings.Value;
         _agentSettings = agentSettings.Value;
         _activitySource = activitySource;
@@ -49,6 +52,8 @@ public sealed class BackupJob
 
     public async Task<BackupResult> RunAsync(DatabaseConfig config, CancellationToken ct)
     {
+        using var _ = await _activityLock.AcquireAsync($"backup:{config.Database}", ct);
+
         using var activity = _activitySource.StartActivity("backup.run");
         activity?.SetTag("database", config.Database);
         activity?.SetTag("connection", config.ConnectionName);
@@ -77,7 +82,7 @@ public sealed class BackupJob
 
             _logger.LogInformation("Step 3/3: upload");
             var uploader = _uploadFactory.GetService();
-            var storagePath = await uploader.UploadAsync(encryptedFile, backupFolder, ct);
+            await uploader.UploadAsync(encryptedFile, backupFolder, ct);
             dumpObjectKey = $"{backupFolder}/{Path.GetFileName(encryptedFile)}";
 
             result = new BackupResult
@@ -86,13 +91,13 @@ public sealed class BackupJob
                 SizeBytes = dumpResult.SizeBytes,
                 DurationMs = dumpResult.DurationMs,
                 Success = true,
-                StoragePath = storagePath,
+                DumpObjectKey = dumpObjectKey,
             };
 
             _logger.LogInformation(
                 "Dump uploaded. File: '{FilePath}', Size: {SizeBytes} bytes, " +
-                "Duration: {DurationMs} ms, StoragePath: '{StoragePath}'",
-                result.FilePath, result.SizeBytes, result.DurationMs, result.StoragePath);
+                "Duration: {DurationMs} ms, DumpObjectKey: '{DumpObjectKey}'",
+                result.FilePath, result.SizeBytes, result.DurationMs, result.DumpObjectKey);
         }
         catch (OperationCanceledException)
         {
@@ -174,7 +179,7 @@ public sealed class BackupJob
             Status = result.Success ? "success" : "failed",
             SizeBytes = result.SizeBytes,
             DurationMs = result.DurationMs,
-            StoragePath = result.StoragePath ?? string.Empty,
+            DumpObjectKey = result.DumpObjectKey ?? string.Empty,
             ErrorMessage = result.ErrorMessage,
             BackupAt = DateTime.UtcNow,
             ManifestKey = fileMetrics?.ManifestKey,
