@@ -36,7 +36,6 @@ public sealed class PostgresBackupProvider : IBackupProvider
                 "-p", connection.Port.ToString(),
                 "-U", connection.Username,
                 "-F", "p",
-                "--create",
                 "--clean",
                 "--if-exists",
                 config.Database
