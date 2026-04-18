@@ -102,7 +102,7 @@ public sealed class RestoreTaskPollingService : BackgroundService
         return CombineResults(dbResult, fileResult);
     }
 
-    private static PatchRestoreTaskDto CombineResults(DatabaseRestoreResult db, FileRestoreResult files)
+    internal static PatchRestoreTaskDto CombineResults(DatabaseRestoreResult db, FileRestoreResult files)
     {
         var databaseStatus = db.IsSuccess ? "success" : "failed";
         var filesStatus = files.Status;

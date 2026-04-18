@@ -1,7 +1,7 @@
 using DbBackupAgent.Configuration;
 using Microsoft.Extensions.Options;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Common;
 
 public sealed class ConnectionResolver
 {

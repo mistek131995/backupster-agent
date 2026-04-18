@@ -5,6 +5,7 @@ using DbBackupAgent.Contracts;
 using DbBackupAgent.Domain;
 using DbBackupAgent.Exceptions;
 using DbBackupAgent.Providers;
+using DbBackupAgent.Services.Common;
 using DbBackupAgent.Settings;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
@@ -20,7 +21,7 @@ public sealed class DatabaseRestoreService
     private readonly ConnectionResolver _connections;
     private readonly IRestoreProviderFactory _restoreFactory;
     private readonly EncryptionService _encryption;
-    private readonly S3UploadService _s3;
+    private readonly IUploadService _upload;
     private readonly RestoreSettings _restoreSettings;
     private readonly List<DatabaseConfig> _databases;
     private readonly ILogger<DatabaseRestoreService> _logger;
@@ -29,7 +30,7 @@ public sealed class DatabaseRestoreService
         ConnectionResolver connections,
         IRestoreProviderFactory restoreFactory,
         EncryptionService encryption,
-        S3UploadService s3,
+        IUploadService upload,
         IOptions<RestoreSettings> restoreSettings,
         IOptions<List<DatabaseConfig>> databases,
         ILogger<DatabaseRestoreService> logger)
@@ -37,7 +38,7 @@ public sealed class DatabaseRestoreService
         _connections = connections;
         _restoreFactory = restoreFactory;
         _encryption = encryption;
-        _s3 = s3;
+        _upload = upload;
         _restoreSettings = restoreSettings.Value;
         _databases = databases.Value;
         _logger = logger;
@@ -66,7 +67,7 @@ public sealed class DatabaseRestoreService
             await provider.ValidatePermissionsAsync(connection, targetDatabase, ct);
 
             var encryptedPath = Path.Combine(tempDir, "dump.enc");
-            await _s3.DownloadAsync(task.DumpObjectKey, encryptedPath, ct);
+            await _upload.DownloadAsync(task.DumpObjectKey, encryptedPath, ct);
 
             var decryptedPath = Path.Combine(tempDir, "dump.bin");
             await _encryption.DecryptAsync(encryptedPath, decryptedPath, ct);
@@ -173,7 +174,7 @@ public sealed class DatabaseRestoreService
         }
     }
 
-    private ConnectionConfig ResolveTargetConnection(RestoreTaskForAgentDto task)
+    internal ConnectionConfig ResolveTargetConnection(RestoreTaskForAgentDto task)
     {
         if (!string.IsNullOrWhiteSpace(task.TargetConnectionName))
             return _connections.Resolve(task.TargetConnectionName);
@@ -191,11 +192,12 @@ public sealed class DatabaseRestoreService
         return _connections.Resolve(dbConfig.ConnectionName);
     }
 
-    private string ResolveTempDir(Guid taskId)
+    internal string ResolveTempDir(Guid taskId) =>
+        BuildTempDir(_restoreSettings.TempPath, taskId);
+
+    internal static string BuildTempDir(string? tempPath, Guid taskId)
     {
-        var raw = string.IsNullOrWhiteSpace(_restoreSettings.TempPath)
-            ? "./temp"
-            : _restoreSettings.TempPath;
+        var raw = string.IsNullOrWhiteSpace(tempPath) ? "./temp" : tempPath;
 
         var absolute = Path.IsPathRooted(raw)
             ? raw
@@ -220,11 +222,14 @@ public sealed class DatabaseRestoreService
     {
         foreach (SqlError error in ex.Errors)
         {
-            if (Array.IndexOf(MssqlPermissionErrorCodes, error.Number) >= 0)
+            if (IsKnownMssqlPermissionCode(error.Number))
                 return true;
         }
         return false;
     }
+
+    internal static bool IsKnownMssqlPermissionCode(int errorNumber) =>
+        Array.IndexOf(MssqlPermissionErrorCodes, errorNumber) >= 0;
 
     private void SafeDelete(string path)
     {

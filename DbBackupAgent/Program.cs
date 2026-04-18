@@ -3,6 +3,7 @@ using DbBackupAgent.Configuration;
 using DbBackupAgent.Enums;
 using DbBackupAgent.Providers;
 using DbBackupAgent.Services;
+using DbBackupAgent.Services.Common;
 using DbBackupAgent.Settings;
 using DbBackupAgent.Workers;
 
@@ -75,6 +76,7 @@ builder.Services.AddSingleton<ManifestStore>();
 builder.Services.AddSingleton<S3UploadService>();
 builder.Services.AddSingleton<SftpUploadService>();
 builder.Services.AddSingleton<IUploadServiceFactory, UploadServiceFactory>();
+builder.Services.AddSingleton<IUploadService>(sp => sp.GetRequiredService<S3UploadService>());
 builder.Services.AddHttpClient<ReportService>();
 builder.Services.AddHttpClient<ScheduleService>();
 builder.Services.AddHttpClient<IConnectionSyncService, ConnectionSyncService>();

@@ -17,16 +17,16 @@ public sealed class FileRestoreService
     };
 
     private readonly EncryptionService _encryption;
-    private readonly S3UploadService _s3;
+    private readonly IUploadService _upload;
     private readonly ILogger<FileRestoreService> _logger;
 
     public FileRestoreService(
         EncryptionService encryption,
-        S3UploadService s3,
+        IUploadService upload,
         ILogger<FileRestoreService> logger)
     {
         _encryption = encryption;
-        _s3 = s3;
+        _upload = upload;
         _logger = logger;
     }
 
@@ -38,7 +38,7 @@ public sealed class FileRestoreService
         FileManifest manifest;
         try
         {
-            var encrypted = await _s3.DownloadBytesAsync(manifestKey, ct);
+            var encrypted = await _upload.DownloadBytesAsync(manifestKey, ct);
             var json = _encryption.Decrypt(encrypted);
             manifest = JsonSerializer.Deserialize<FileManifest>(json, JsonOptions)
                 ?? throw new InvalidDataException("Manifest JSON deserialized to null.");
@@ -148,7 +148,7 @@ public sealed class FileRestoreService
                 {
                     if (ct.IsCancellationRequested) throw new OperationCanceledException(ct);
 
-                    var encrypted = await _s3.DownloadBytesAsync($"chunks/{chunkSha}", ct);
+                    var encrypted = await _upload.DownloadBytesAsync($"chunks/{chunkSha}", ct);
                     var plaintext = _encryption.Decrypt(encrypted);
                     await stream.WriteAsync(plaintext, ct);
                 }
