@@ -1,5 +1,9 @@
 using System.Security.Cryptography;
+using DbBackupAgent.Enums;
 using DbBackupAgent.Services;
+using DbBackupAgent.Services.Backup;
+using DbBackupAgent.Services.Common;
+using DbBackupAgent.Services.Upload;
 using DbBackupAgent.Settings;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -43,7 +47,7 @@ public sealed class FileBackupServiceTests
     [Test]
     public async Task CaptureAsync_EmptyFilePaths_ReturnsEmptyManifest()
     {
-        var result = await _service.CaptureAsync([], CancellationToken.None);
+        var result = await _service.CaptureAsync([], TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -62,7 +66,7 @@ public sealed class FileBackupServiceTests
 
         var missing = Path.Combine(_tempRoot, "does-not-exist");
 
-        var result = await _service.CaptureAsync([missing, existing], CancellationToken.None);
+        var result = await _service.CaptureAsync([missing, existing], TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         Assert.That(result.Manifest.Files, Has.Count.EqualTo(1));
         Assert.That(result.Manifest.Files[0].Path, Is.EqualTo("a.bin"));
@@ -75,7 +79,7 @@ public sealed class FileBackupServiceTests
         var filePath = Path.Combine(_tempRoot, "data.bin");
         await File.WriteAllBytesAsync(filePath, content);
 
-        var result = await _service.CaptureAsync([_tempRoot], CancellationToken.None);
+        var result = await _service.CaptureAsync([_tempRoot], TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         Assert.That(result.Manifest.Files, Has.Count.EqualTo(1));
         var entry = result.Manifest.Files[0];
@@ -101,7 +105,7 @@ public sealed class FileBackupServiceTests
         var filePath = Path.Combine(_tempRoot, "large.bin");
         await File.WriteAllBytesAsync(filePath, original);
 
-        var result = await _service.CaptureAsync([_tempRoot], CancellationToken.None);
+        var result = await _service.CaptureAsync([_tempRoot], TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         var entry = result.Manifest.Files.Single();
         Assert.That(entry.Chunks.Count, Is.GreaterThan(1));
@@ -123,7 +127,7 @@ public sealed class FileBackupServiceTests
         var zeros = new byte[ContentDefinedChunker.MaxSize * 3];
         await File.WriteAllBytesAsync(Path.Combine(_tempRoot, "zeros.bin"), zeros);
 
-        var result = await _service.CaptureAsync([_tempRoot], CancellationToken.None);
+        var result = await _service.CaptureAsync([_tempRoot], TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         var entry = result.Manifest.Files.Single();
         Assert.Multiple(() =>
@@ -148,7 +152,7 @@ public sealed class FileBackupServiceTests
         await File.WriteAllBytesAsync(Path.Combine(_tempRoot, "first.bin"), content);
         await File.WriteAllBytesAsync(Path.Combine(_tempRoot, "second.bin"), content);
 
-        var result = await _service.CaptureAsync([_tempRoot], CancellationToken.None);
+        var result = await _service.CaptureAsync([_tempRoot], TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -167,7 +171,7 @@ public sealed class FileBackupServiceTests
         Directory.CreateDirectory(nested);
         await File.WriteAllBytesAsync(Path.Combine(nested, "leaf.bin"), new byte[] { 9 });
 
-        var result = await _service.CaptureAsync([_tempRoot], CancellationToken.None);
+        var result = await _service.CaptureAsync([_tempRoot], TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         Assert.That(result.Manifest.Files, Has.Count.EqualTo(1));
         Assert.That(result.Manifest.Files[0].Path, Is.EqualTo("sub/deep/leaf.bin"));
@@ -181,7 +185,7 @@ public sealed class FileBackupServiceTests
         await File.WriteAllBytesAsync(filePath, content);
         var expectedMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(filePath)).ToUnixTimeSeconds();
 
-        var result = await _service.CaptureAsync([_tempRoot], CancellationToken.None);
+        var result = await _service.CaptureAsync([_tempRoot], TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         var entry = result.Manifest.Files.Single();
         Assert.Multiple(() =>
@@ -203,7 +207,7 @@ public sealed class FileBackupServiceTests
         cts.Cancel();
 
         Assert.ThrowsAsync<OperationCanceledException>(
-            () => _service.CaptureAsync([_tempRoot], cts.Token));
+            () => _service.CaptureAsync([_tempRoot], TestHelpers.NullReporter<BackupStage>(), cts.Token));
     }
 
     private static byte[] DecryptAes(byte[] encrypted, byte[] key) =>
@@ -215,7 +219,7 @@ public sealed class FileBackupServiceTests
         public int ExistsCalls { get; private set; }
         public int UploadCalls { get; private set; }
 
-        public Task<string> UploadAsync(string filePath, string folder, CancellationToken ct) =>
+        public Task<string> UploadAsync(string filePath, string folder, IProgress<long>? progress, CancellationToken ct) =>
             throw new NotSupportedException("FileBackupService must not call UploadAsync");
 
         public Task UploadBytesAsync(byte[] content, string objectKey, CancellationToken ct)
@@ -231,7 +235,7 @@ public sealed class FileBackupServiceTests
             return Task.FromResult(Uploaded.ContainsKey(objectKey));
         }
 
-        public Task DownloadAsync(string objectKey, string localPath, CancellationToken ct) =>
+        public Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct) =>
             throw new NotSupportedException("FileBackupService must not call DownloadAsync");
 
         public Task<byte[]> DownloadBytesAsync(string objectKey, CancellationToken ct) =>

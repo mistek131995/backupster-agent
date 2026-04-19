@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Backup;
 
 public sealed class ContentDefinedChunker
 {

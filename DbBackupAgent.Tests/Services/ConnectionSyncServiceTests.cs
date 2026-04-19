@@ -5,6 +5,7 @@ using DbBackupAgent.Contracts;
 using DbBackupAgent.Enums;
 using DbBackupAgent.Services;
 using DbBackupAgent.Services.Common;
+using DbBackupAgent.Services.Dashboard;
 using DbBackupAgent.Settings;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;

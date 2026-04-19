@@ -1,4 +1,4 @@
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Upload;
 
 public interface IUploadServiceFactory
 {

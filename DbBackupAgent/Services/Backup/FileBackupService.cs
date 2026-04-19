@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
 using DbBackupAgent.Domain;
-using Microsoft.Extensions.Logging;
+using DbBackupAgent.Enums;
+using DbBackupAgent.Services.Common;
+using DbBackupAgent.Services.Upload;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Backup;
 
 public sealed record FileBackupResult(FileManifest Manifest, int NewChunksCount);
 
@@ -26,7 +28,10 @@ public sealed class FileBackupService
         _logger = logger;
     }
 
-    public async Task<FileBackupResult> CaptureAsync(List<string> filePaths, CancellationToken ct)
+    public async Task<FileBackupResult> CaptureAsync(
+        List<string> filePaths,
+        IProgressReporter<BackupStage> reporter,
+        CancellationToken ct)
     {
         LogConsistencyWarningOnce();
 
@@ -52,6 +57,12 @@ public sealed class FileBackupService
             foreach (var filePath in Directory.EnumerateFiles(root, "*", enumOptions))
             {
                 ct.ThrowIfCancellationRequested();
+
+                reporter.Report(
+                    BackupStage.CapturingFiles,
+                    processed: files.Count,
+                    unit: "files",
+                    currentItem: filePath);
 
                 try
                 {

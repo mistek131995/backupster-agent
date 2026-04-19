@@ -2,7 +2,7 @@ using DbBackupAgent.Enums;
 using DbBackupAgent.Settings;
 using Microsoft.Extensions.Options;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Upload;
 
 public sealed class UploadServiceFactory : IUploadServiceFactory
 {

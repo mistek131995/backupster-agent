@@ -4,12 +4,11 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using DbBackupAgent.Contracts;
 using DbBackupAgent.Settings;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Dashboard;
 
 public sealed class RestoreTaskClient : IRestoreTaskClient
 {
@@ -91,6 +90,23 @@ public sealed class RestoreTaskClient : IRestoreTaskClient
         _logger.LogInformation(
             "RestoreTaskClient: patched task {TaskId} with status '{Status}'",
             taskId, patch.Status);
+    }
+
+    public async Task ReportProgressAsync(Guid taskId, RestoreProgressDto progress, CancellationToken ct)
+    {
+        if (!IsConfigured()) return;
+
+        var url = $"{_settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/restore-task/{taskId}/progress";
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Add("X-Agent-Token", _settings.Token);
+        request.Content = JsonContent.Create(progress, options: JsonOptions);
+
+        using var response = await _http.SendAsync(request, timeoutCts.Token);
+        response.EnsureSuccessStatusCode();
     }
 
     private bool IsConfigured()

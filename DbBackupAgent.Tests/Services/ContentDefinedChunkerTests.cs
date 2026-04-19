@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using DbBackupAgent.Services;
+using DbBackupAgent.Services.Backup;
 
 namespace DbBackupAgent.Tests.Services;
 

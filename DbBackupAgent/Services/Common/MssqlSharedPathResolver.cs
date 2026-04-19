@@ -1,6 +1,6 @@
 using DbBackupAgent.Configuration;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Common;
 
 public static class MssqlSharedPathResolver
 {

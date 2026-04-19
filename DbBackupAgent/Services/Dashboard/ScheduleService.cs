@@ -1,13 +1,12 @@
 using System.Net.Http.Json;
 using DbBackupAgent.Contracts;
 using DbBackupAgent.Settings;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NCrontab;
 using Polly;
 using Polly.Retry;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Dashboard;
 
 public sealed class ScheduleService
 {

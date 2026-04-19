@@ -1,8 +1,9 @@
 using System.Text.Json;
 using DbBackupAgent.Domain;
-using Microsoft.Extensions.Logging;
+using DbBackupAgent.Services.Common;
+using DbBackupAgent.Services.Upload;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Backup;
 
 public sealed class ManifestStore
 {

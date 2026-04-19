@@ -2,12 +2,11 @@ using System.Net.Http.Json;
 using DbBackupAgent.Contracts;
 using DbBackupAgent.Services.Common;
 using DbBackupAgent.Settings;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Dashboard;
 
 public sealed class ConnectionSyncService : IConnectionSyncService
 {

@@ -5,10 +5,12 @@ using DbBackupAgent.Domain;
 using DbBackupAgent.Enums;
 using DbBackupAgent.Providers;
 using DbBackupAgent.Services.Common;
+using DbBackupAgent.Services.Dashboard;
+using DbBackupAgent.Services.Upload;
 using DbBackupAgent.Settings;
 using Microsoft.Extensions.Options;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Backup;
 
 public sealed class BackupJob
 {
@@ -18,7 +20,8 @@ public sealed class BackupJob
     private readonly IUploadServiceFactory _uploadFactory;
     private readonly FileBackupService _fileBackup;
     private readonly ManifestStore _manifestStore;
-    private readonly ReportService _report;
+    private readonly IBackupRecordClient _recordClient;
+    private readonly IProgressReporterFactory _reporterFactory;
     private readonly IAgentActivityLock _activityLock;
     private readonly UploadSettings _uploadSettings;
     private readonly AgentSettings _agentSettings;
@@ -32,7 +35,8 @@ public sealed class BackupJob
         IUploadServiceFactory uploadFactory,
         FileBackupService fileBackup,
         ManifestStore manifestStore,
-        ReportService report,
+        IBackupRecordClient recordClient,
+        IProgressReporterFactory reporterFactory,
         IAgentActivityLock activityLock,
         IOptions<UploadSettings> uploadSettings,
         IOptions<AgentSettings> agentSettings,
@@ -45,7 +49,8 @@ public sealed class BackupJob
         _uploadFactory = uploadFactory;
         _fileBackup = fileBackup;
         _manifestStore = manifestStore;
-        _report = report;
+        _recordClient = recordClient;
+        _reporterFactory = reporterFactory;
         _activityLock = activityLock;
         _uploadSettings = uploadSettings.Value;
         _agentSettings = agentSettings.Value;
@@ -69,6 +74,27 @@ public sealed class BackupJob
             "BackupJob starting. Provider: {ProviderType}, Connection: '{Connection}', Database: '{Database}', Folder: '{Folder}', TraceId: {TraceId}",
             provider.GetType().Name, connection.Name, config.Database, backupFolder, activity?.TraceId.ToString() ?? "-");
 
+        var recordId = await _recordClient.OpenAsync(
+            new OpenBackupRecordDto
+            {
+                DatabaseName = config.Database,
+                ConnectionName = config.ConnectionName,
+            }, ct);
+
+        if (recordId is null)
+        {
+            _logger.LogWarning(
+                "BackupJob: could not open backup record on dashboard for '{Database}'. Skipping this run.",
+                config.Database);
+            return new BackupResult
+            {
+                Success = false,
+                ErrorMessage = "Could not open backup record on dashboard — run skipped.",
+            };
+        }
+
+        await using var reporter = _reporterFactory.CreateForBackup(recordId.Value);
+
         string? dumpFile = null;
         string? encryptedFile = null;
         string? dumpObjectKey = null;
@@ -77,15 +103,20 @@ public sealed class BackupJob
         try
         {
             _logger.LogInformation("Step 1/3: dump");
+            reporter.Report(BackupStage.Dumping);
             var dumpResult = await provider.BackupAsync(config, connection, ct);
             dumpFile = dumpResult.FilePath;
 
             _logger.LogInformation("Step 2/3: encrypt");
+            reporter.Report(BackupStage.EncryptingDump);
             encryptedFile = await _encryption.EncryptAsync(dumpFile, ct);
 
             _logger.LogInformation("Step 3/3: upload");
             var uploader = _uploadFactory.GetService();
-            await uploader.UploadAsync(encryptedFile, backupFolder, ct);
+            reporter.Report(BackupStage.UploadingDump, processed: 0, unit: "bytes");
+            var uploadProgress = new Progress<long>(bytes =>
+                reporter.Report(BackupStage.UploadingDump, processed: bytes, unit: "bytes"));
+            await uploader.UploadAsync(encryptedFile, backupFolder, uploadProgress, ct);
             dumpObjectKey = $"{backupFolder}/{Path.GetFileName(encryptedFile)}";
 
             result = new BackupResult
@@ -118,15 +149,23 @@ public sealed class BackupJob
             TryDelete(encryptedFile);
         }
 
-        var (fileMetrics, fileError) = await CaptureFilesSafelyAsync(config, backupFolder, dumpObjectKey, ct);
+        var (fileMetrics, fileError) = await CaptureFilesSafelyAsync(
+            config, backupFolder, dumpObjectKey, reporter, ct);
 
-        await _report.ReportAsync(BuildReportDto(result, config, fileMetrics, fileError), ct);
+        await _recordClient.FinalizeAsync(
+            recordId.Value,
+            BuildFinalizeDto(result, fileMetrics, fileError),
+            ct);
 
         return result;
     }
 
     internal async Task<(FileBackupMetrics? Metrics, string? Error)> CaptureFilesSafelyAsync(
-        DatabaseConfig config, string backupFolder, string? dumpObjectKey, CancellationToken ct)
+        DatabaseConfig config,
+        string backupFolder,
+        string? dumpObjectKey,
+        IProgressReporter<BackupStage> reporter,
+        CancellationToken ct)
     {
         if (config.FilePaths.Count == 0)
             return (null, null);
@@ -146,7 +185,8 @@ public sealed class BackupJob
                 "Capturing file backup for database '{Database}' ({Count} path(s))",
                 config.Database, config.FilePaths.Count);
 
-            var capture = await _fileBackup.CaptureAsync(config.FilePaths, ct);
+            reporter.Report(BackupStage.CapturingFiles);
+            var capture = await _fileBackup.CaptureAsync(config.FilePaths, reporter, ct);
             var manifest = capture.Manifest with
             {
                 Database = config.Database,
@@ -174,15 +214,14 @@ public sealed class BackupJob
         }
     }
 
-    private static BackupReportDto BuildReportDto(
-        BackupResult result, DatabaseConfig config, FileBackupMetrics? fileMetrics, string? fileBackupError) =>
+    private static FinalizeBackupRecordDto BuildFinalizeDto(
+        BackupResult result, FileBackupMetrics? fileMetrics, string? fileBackupError) =>
         new()
         {
-            DatabaseName = config.Database,
             Status = result.Success ? BackupStatus.Success : BackupStatus.Failed,
-            SizeBytes = result.SizeBytes,
-            DurationMs = result.DurationMs,
-            DumpObjectKey = result.DumpObjectKey ?? string.Empty,
+            SizeBytes = result.Success ? result.SizeBytes : null,
+            DurationMs = result.Success ? result.DurationMs : null,
+            DumpObjectKey = result.DumpObjectKey,
             ErrorMessage = result.ErrorMessage,
             BackupAt = DateTime.UtcNow,
             ManifestKey = fileMetrics?.ManifestKey,

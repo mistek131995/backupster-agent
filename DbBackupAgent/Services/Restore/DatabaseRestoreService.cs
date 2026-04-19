@@ -7,14 +7,14 @@ using DbBackupAgent.Enums;
 using DbBackupAgent.Exceptions;
 using DbBackupAgent.Providers;
 using DbBackupAgent.Services.Common;
+using DbBackupAgent.Services.Upload;
 using DbBackupAgent.Settings;
 using Microsoft.Data.SqlClient;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MySqlConnector;
 using Npgsql;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Restore;
 
 public sealed class DatabaseRestoreService
 {
@@ -46,7 +46,10 @@ public sealed class DatabaseRestoreService
         _logger = logger;
     }
 
-    public async Task<DatabaseRestoreResult> RunAsync(RestoreTaskForAgentDto task, CancellationToken ct)
+    public async Task<DatabaseRestoreResult> RunAsync(
+        RestoreTaskForAgentDto task,
+        IProgressReporter<RestoreStage> reporter,
+        CancellationToken ct)
     {
         var tempDir = ResolveTempDir(task.TaskId);
         var targetDatabase = string.IsNullOrWhiteSpace(task.TargetDatabaseName)
@@ -69,9 +72,13 @@ public sealed class DatabaseRestoreService
             await provider.ValidatePermissionsAsync(connection, targetDatabase, ct);
 
             var encryptedPath = Path.Combine(tempDir, "dump.enc");
-            await _upload.DownloadAsync(task.DumpObjectKey, encryptedPath, ct);
+            reporter.Report(RestoreStage.DownloadingDump, processed: 0, unit: "bytes");
+            var downloadProgress = new Progress<long>(bytes =>
+                reporter.Report(RestoreStage.DownloadingDump, processed: bytes, unit: "bytes"));
+            await _upload.DownloadAsync(task.DumpObjectKey, encryptedPath, downloadProgress, ct);
 
             var decryptedPath = Path.Combine(tempDir, "dump.bin");
+            reporter.Report(RestoreStage.DecryptingDump);
             await _encryption.DecryptAsync(encryptedPath, decryptedPath, ct);
             SafeDelete(encryptedPath);
 
@@ -79,6 +86,7 @@ public sealed class DatabaseRestoreService
             if (connection.DatabaseType is DatabaseType.Postgres or DatabaseType.Mysql)
             {
                 var sqlPath = Path.Combine(tempDir, "dump.sql");
+                reporter.Report(RestoreStage.DecompressingDump);
                 await DecompressGzipAsync(decryptedPath, sqlPath, ct);
                 SafeDelete(decryptedPath);
                 restoreFilePath = sqlPath;
@@ -102,7 +110,10 @@ public sealed class DatabaseRestoreService
                     $"Unsupported DatabaseType: '{connection.DatabaseType}'. Supported: Postgres, Mssql, Mysql.");
             }
 
+            reporter.Report(RestoreStage.PreparingDatabase);
             await provider.PrepareTargetDatabaseAsync(connection, targetDatabase, ct);
+
+            reporter.Report(RestoreStage.RestoringDatabase);
             await provider.RestoreAsync(connection, targetDatabase, restoreFilePath, ct);
 
             _logger.LogInformation(

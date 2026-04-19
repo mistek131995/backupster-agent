@@ -1,4 +1,4 @@
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Common;
 
 public interface IAgentActivityLock
 {

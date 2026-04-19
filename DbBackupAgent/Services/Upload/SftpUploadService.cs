@@ -1,9 +1,8 @@
 using DbBackupAgent.Settings;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Renci.SshNet;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Upload;
 
 public sealed class SftpUploadService : IUploadService
 {
@@ -16,7 +15,7 @@ public sealed class SftpUploadService : IUploadService
         _logger = logger;
     }
 
-    public async Task<string> UploadAsync(string filePath, string folder, CancellationToken ct)
+    public async Task<string> UploadAsync(string filePath, string folder, IProgress<long>? progress, CancellationToken ct)
     {
         var fileName = Path.GetFileName(filePath);
         var remoteDir = $"{_settings.RemotePath.TrimEnd('/')}/{folder.TrimEnd('/')}";
@@ -39,7 +38,11 @@ public sealed class SftpUploadService : IUploadService
                 filePath, FileMode.Open, FileAccess.Read, FileShare.Read,
                 bufferSize: 65536);
 
-            client.UploadFile(fileStream, remotePath, canOverride: true);
+            Action<ulong>? callback = progress is null
+                ? null
+                : uploaded => progress.Report((long)uploaded);
+
+            client.UploadFile(fileStream, remotePath, canOverride: true, uploadCallback: callback);
 
             client.Disconnect();
         }, ct);
@@ -56,7 +59,7 @@ public sealed class SftpUploadService : IUploadService
     public Task<bool> ExistsAsync(string objectKey, CancellationToken ct) =>
         throw new NotSupportedException("ExistsAsync is not supported for SFTP provider. File backup with deduplication requires S3.");
 
-    public Task DownloadAsync(string objectKey, string localPath, CancellationToken ct) =>
+    public Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct) =>
         throw new NotSupportedException("DownloadAsync is not supported for SFTP provider. Restore requires S3.");
 
     public Task<byte[]> DownloadBytesAsync(string objectKey, CancellationToken ct) =>

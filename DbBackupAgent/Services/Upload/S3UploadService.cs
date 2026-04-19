@@ -1,10 +1,9 @@
 using Amazon.S3;
 using Amazon.S3.Model;
 using DbBackupAgent.Settings;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Upload;
 
 public sealed class S3UploadService : IUploadService, IDisposable
 {
@@ -45,7 +44,7 @@ public sealed class S3UploadService : IUploadService, IDisposable
     /// Uploads <paramref name="filePath"/> to S3 under the key <c>{folder}/{filename}</c>.
     /// </summary>
     /// <returns>Storage path in the form <c>s3://bucket/key</c>.</returns>
-    public async Task<string> UploadAsync(string filePath, string folder, CancellationToken ct)
+    public async Task<string> UploadAsync(string filePath, string folder, IProgress<long>? progress, CancellationToken ct)
     {
         var fileName = Path.GetFileName(filePath);
         var objectKey = $"{folder.TrimEnd('/')}/{fileName}";
@@ -66,6 +65,11 @@ public sealed class S3UploadService : IUploadService, IDisposable
             // Payload signing is not supported by all S3-compatible endpoints (e.g. MinIO, Yandex)
             DisablePayloadSigning = true,
         };
+
+        if (progress is not null)
+        {
+            request.StreamTransferProgress += (_, args) => progress.Report(args.TransferredBytes);
+        }
 
         await GetClient().PutObjectAsync(request, ct);
 
@@ -109,7 +113,7 @@ public sealed class S3UploadService : IUploadService, IDisposable
         }
     }
 
-    public async Task DownloadAsync(string objectKey, string localPath, CancellationToken ct)
+    public async Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(objectKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(localPath);
@@ -138,7 +142,22 @@ public sealed class S3UploadService : IUploadService, IDisposable
                 tmpPath, FileMode.Create, FileAccess.Write, FileShare.None,
                 bufferSize: 65536, useAsync: true))
             {
-                await response.ResponseStream.CopyToAsync(fileStream, ct);
+                if (progress is null)
+                {
+                    await response.ResponseStream.CopyToAsync(fileStream, ct);
+                }
+                else
+                {
+                    var buffer = new byte[81920];
+                    long total = 0;
+                    int read;
+                    while ((read = await response.ResponseStream.ReadAsync(buffer, ct)) > 0)
+                    {
+                        await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
+                        total += read;
+                        progress.Report(total);
+                    }
+                }
             }
 
             File.Move(tmpPath, localPath, overwrite: true);

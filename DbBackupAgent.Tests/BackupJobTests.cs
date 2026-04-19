@@ -4,7 +4,9 @@ using DbBackupAgent.Configuration;
 using DbBackupAgent.Enums;
 using DbBackupAgent.Providers;
 using DbBackupAgent.Services;
+using DbBackupAgent.Services.Backup;
 using DbBackupAgent.Services.Common;
+using DbBackupAgent.Services.Upload;
 using DbBackupAgent.Settings;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -39,7 +41,8 @@ public sealed class BackupJobTests
         var config = new DatabaseConfig { Database = "db1", FilePaths = [] };
 
         var (metrics, error) = await job.CaptureFilesSafelyAsync(
-            config, backupFolder: "db1_2026-04-17_00-00-00", dumpObjectKey: "db1_.../dump.enc", CancellationToken.None);
+            config, backupFolder: "db1_2026-04-17_00-00-00", dumpObjectKey: "db1_.../dump.enc",
+            TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -59,7 +62,8 @@ public sealed class BackupJobTests
         var config = new DatabaseConfig { Database = "db1", FilePaths = [_tempRoot] };
 
         var (metrics, error) = await job.CaptureFilesSafelyAsync(
-            config, backupFolder: "db1_2026-04-17_00-00-00", dumpObjectKey: "db1_.../dump.enc", CancellationToken.None);
+            config, backupFolder: "db1_2026-04-17_00-00-00", dumpObjectKey: "db1_.../dump.enc",
+            TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -82,7 +86,7 @@ public sealed class BackupJobTests
         const string dumpKey = "customers_2026-04-17_14-30-00/dump.sql.gz.enc";
 
         var (metrics, error) = await job.CaptureFilesSafelyAsync(
-            config, backupFolder, dumpKey, CancellationToken.None);
+            config, backupFolder, dumpKey, TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         Assert.That(error, Is.Null);
         Assert.That(metrics, Is.Not.Null);
@@ -106,7 +110,8 @@ public sealed class BackupJobTests
         var config = new DatabaseConfig { Database = "db1", FilePaths = [_tempRoot] };
 
         var (metrics, error) = await job.CaptureFilesSafelyAsync(
-            config, backupFolder: "db1_2026-04-17_14-30-00", dumpObjectKey: "db1_.../dump.enc", CancellationToken.None);
+            config, backupFolder: "db1_2026-04-17_14-30-00", dumpObjectKey: "db1_.../dump.enc",
+            TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -131,7 +136,9 @@ public sealed class BackupJobTests
         cts.Cancel();
 
         Assert.ThrowsAsync<OperationCanceledException>(() =>
-            job.CaptureFilesSafelyAsync(config, "db1_2026-04-17_14-30-00", "dump.enc", cts.Token));
+            job.CaptureFilesSafelyAsync(
+                config, "db1_2026-04-17_14-30-00", "dump.enc",
+                TestHelpers.NullReporter<BackupStage>(), cts.Token));
     }
 
     private BackupJob BuildJob(UploadProvider provider)
@@ -146,11 +153,6 @@ public sealed class BackupJobTests
         var fileBackup = new FileBackupService(chunker, encryption, uploadFactory, NullLogger<FileBackupService>.Instance);
         var manifestStore = new ManifestStore(encryption, uploadFactory, NullLogger<ManifestStore>.Instance);
 
-        var report = new ReportService(
-            new HttpClient(new UnreachableHandler()),
-            Options.Create(new AgentSettings { Token = "test-token", DashboardUrl = "http://localhost" }),
-            NullLogger<ReportService>.Instance);
-
         return new BackupJob(
             new StubBackupProviderFactory(),
             new ConnectionResolver([]),
@@ -158,7 +160,8 @@ public sealed class BackupJobTests
             uploadFactory,
             fileBackup,
             manifestStore,
-            report,
+            new FakeBackupRecordClient(),
+            new FakeProgressReporterFactory(),
             new AgentActivityLock(NullLogger<AgentActivityLock>.Instance),
             Options.Create(new UploadSettings { Provider = provider }),
             Options.Create(new AgentSettings { Token = "test-token", DashboardUrl = "http://localhost" }),
@@ -173,7 +176,7 @@ public sealed class BackupJobTests
         public int UploadCalls { get; private set; }
         public Exception? ThrowOnUpload { get; set; }
 
-        public Task<string> UploadAsync(string filePath, string folder, CancellationToken ct) =>
+        public Task<string> UploadAsync(string filePath, string folder, IProgress<long>? progress, CancellationToken ct) =>
             throw new NotSupportedException("BackupJob file-backup path must not call UploadAsync");
 
         public Task UploadBytesAsync(byte[] content, string objectKey, CancellationToken ct)
@@ -190,7 +193,7 @@ public sealed class BackupJobTests
             return Task.FromResult(Uploaded.ContainsKey(objectKey));
         }
 
-        public Task DownloadAsync(string objectKey, string localPath, CancellationToken ct) =>
+        public Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct) =>
             throw new NotSupportedException("BackupJob must not call DownloadAsync");
 
         public Task<byte[]> DownloadBytesAsync(string objectKey, CancellationToken ct) =>
@@ -208,9 +211,4 @@ public sealed class BackupJobTests
             throw new NotSupportedException("CaptureFilesSafelyAsync must not touch the backup provider");
     }
 
-    private sealed class UnreachableHandler : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
-            throw new NotSupportedException("ReportService must not be invoked from CaptureFilesSafelyAsync tests");
-    }
 }

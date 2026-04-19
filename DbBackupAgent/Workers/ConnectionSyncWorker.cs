@@ -1,5 +1,6 @@
 using DbBackupAgent.Services;
 using DbBackupAgent.Services.Common;
+using DbBackupAgent.Services.Dashboard;
 using Microsoft.Extensions.Logging;
 
 namespace DbBackupAgent.Workers;

@@ -1,6 +1,4 @@
-using Microsoft.Extensions.Logging;
-
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Common;
 
 public sealed class AgentActivityLock : IAgentActivityLock, IDisposable
 {

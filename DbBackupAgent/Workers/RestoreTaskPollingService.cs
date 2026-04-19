@@ -2,6 +2,9 @@ using DbBackupAgent.Contracts;
 using DbBackupAgent.Domain;
 using DbBackupAgent.Enums;
 using DbBackupAgent.Services;
+using DbBackupAgent.Services.Common;
+using DbBackupAgent.Services.Dashboard;
+using DbBackupAgent.Services.Restore;
 using Microsoft.Extensions.Logging;
 
 namespace DbBackupAgent.Workers;
@@ -16,6 +19,7 @@ public sealed class RestoreTaskPollingService : BackgroundService
     private readonly DatabaseRestoreService _databaseRestore;
     private readonly FileRestoreService _fileRestore;
     private readonly IAgentActivityLock _activityLock;
+    private readonly IProgressReporterFactory _reporterFactory;
     private readonly ILogger<RestoreTaskPollingService> _logger;
 
     public RestoreTaskPollingService(
@@ -23,12 +27,14 @@ public sealed class RestoreTaskPollingService : BackgroundService
         DatabaseRestoreService databaseRestore,
         FileRestoreService fileRestore,
         IAgentActivityLock activityLock,
+        IProgressReporterFactory reporterFactory,
         ILogger<RestoreTaskPollingService> logger)
     {
         _client = client;
         _databaseRestore = databaseRestore;
         _fileRestore = fileRestore;
         _activityLock = activityLock;
+        _reporterFactory = reporterFactory;
         _logger = logger;
     }
 
@@ -94,11 +100,13 @@ public sealed class RestoreTaskPollingService : BackgroundService
             "RestoreTaskPollingService: executing task {TaskId} (source '{Source}')",
             task.TaskId, task.SourceDatabaseName);
 
-        var dbResult = await _databaseRestore.RunAsync(task, ct);
+        await using var reporter = _reporterFactory.CreateForRestore(task.TaskId);
+
+        var dbResult = await _databaseRestore.RunAsync(task, reporter, ct);
 
         var fileResult = task.ManifestKey is null
             ? FileRestoreResult.Skipped()
-            : await _fileRestore.RunAsync(task.ManifestKey, task.TargetFileRoot, ct);
+            : await _fileRestore.RunAsync(task.ManifestKey, task.TargetFileRoot, reporter, ct);
 
         return CombineResults(dbResult, fileResult);
     }

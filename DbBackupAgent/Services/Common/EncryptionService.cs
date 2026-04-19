@@ -2,10 +2,9 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using DbBackupAgent.Settings;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Common;
 
 public sealed class EncryptionService
 {

@@ -2,9 +2,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using DbBackupAgent.Domain;
-using Microsoft.Extensions.Logging;
+using DbBackupAgent.Enums;
+using DbBackupAgent.Services.Common;
+using DbBackupAgent.Services.Upload;
 
-namespace DbBackupAgent.Services;
+namespace DbBackupAgent.Services.Restore;
 
 public sealed class FileRestoreService
 {
@@ -33,8 +35,11 @@ public sealed class FileRestoreService
     public async Task<FileRestoreResult> RunAsync(
         string manifestKey,
         string? targetFileRoot,
+        IProgressReporter<RestoreStage> reporter,
         CancellationToken ct)
     {
+        reporter.Report(RestoreStage.DownloadingManifest);
+
         FileManifest manifest;
         try
         {
@@ -93,10 +98,20 @@ public sealed class FileRestoreService
 
         var restored = 0;
         var failed = new List<(string Path, string Reason)>();
+        var totalFiles = manifest.Files.Count;
+        var index = 0;
 
         foreach (var entry in manifest.Files)
         {
             if (ct.IsCancellationRequested) throw new OperationCanceledException(ct);
+
+            reporter.Report(
+                RestoreStage.RestoringFiles,
+                processed: index,
+                total: totalFiles,
+                unit: "files",
+                currentItem: entry.Path);
+            index++;
 
             try
             {
