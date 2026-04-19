@@ -1,0 +1,30 @@
+BackupsterAgent
+Copyright (C) 2026 IURII KUZNETSOV
+
+This product is licensed under the Fair Source License, version 1.1
+(FSL-1.1-Apache-2.0). See the LICENSE file distributed with this product
+for the full text and conditions.
+
+SUMMARY (not a substitute for the LICENSE file)
+
+Permitted:
+  - Internal use and access (running the agent for your own backups).
+  - Non-commercial education and research.
+  - Modifications for your own internal use.
+  - Professional services for a licensee using the Software in compliance
+    with the License.
+
+Not permitted (Competing Use):
+  - Offering the Software, a fork, or a derivative as a commercial product
+    or service that substitutes for the Software or for any product or
+    service the Licensor offers using the Software, or that provides the
+    same or substantially similar functionality.
+
+Future License:
+  - Two years after each release is made available, that release becomes
+    additionally available under the Apache License, Version 2.0.
+
+Trademarks:
+  - "Backupster" and associated names, logos and marks are used by
+    IURII KUZNETSOV. The License grants no permission to use these marks
+    for any purpose other than identifying the origin of the Software.
