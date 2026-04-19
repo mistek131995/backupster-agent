@@ -99,6 +99,7 @@ public sealed class BackupJob
         StorageConfig? storage = null;
         IUploadService? uploader = null;
         BackupResult result = new() { Success = false, ErrorMessage = "Unknown error" };
+        bool cancelled = false;
 
         try
         {
@@ -144,8 +145,9 @@ public sealed class BackupJob
         }
         catch (OperationCanceledException)
         {
-            _logger.LogWarning("BackupJob was cancelled");
-            throw;
+            _logger.LogWarning("BackupJob cancelled mid-pipeline for '{Database}'", config.Database);
+            result = new BackupResult { Success = false, ErrorMessage = "Бэкап прерван: агент остановлен." };
+            cancelled = true;
         }
         catch (Exception ex)
         {
@@ -161,16 +163,40 @@ public sealed class BackupJob
         FileBackupMetrics? fileMetrics = null;
         string? fileError = null;
 
-        if (storage is not null && uploader is not null && backupFolder is not null)
+        if (!result.Success)
+        {
+            if (config.FilePaths.Count > 0)
+            {
+                _logger.LogWarning(
+                    "File backup skipped for database '{Database}' because dump stage failed. " +
+                    "Invariant: БД и файлы восстанавливаются вместе — без дампа файлы не сохраняются.",
+                    config.Database);
+            }
+        }
+        else if (storage is not null && uploader is not null && backupFolder is not null)
         {
             (fileMetrics, fileError) = await CaptureFilesSafelyAsync(
                 config, storage, uploader, backupFolder, dumpObjectKey, reporter, ct);
         }
 
-        await _recordClient.FinalizeAsync(
-            recordId.Value,
-            BuildFinalizeDto(result, fileMetrics, fileError),
-            ct);
+        using var cancelFinalizeCts = cancelled ? new CancellationTokenSource(TimeSpan.FromSeconds(10)) : null;
+        var finalizeCt = cancelled ? cancelFinalizeCts!.Token : ct;
+
+        try
+        {
+            await _recordClient.FinalizeAsync(
+                recordId.Value,
+                BuildFinalizeDto(result, fileMetrics, fileError),
+                finalizeCt);
+        }
+        catch (Exception ex) when (cancelled)
+        {
+            _logger.LogError(ex,
+                "BackupJob: could not finalize cancelled record for '{Database}'. Sweeper will close it.",
+                config.Database);
+        }
+
+        if (cancelled) throw new OperationCanceledException(ct);
 
         return result;
     }

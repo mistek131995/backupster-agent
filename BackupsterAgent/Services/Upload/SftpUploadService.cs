@@ -1,5 +1,7 @@
+using System.Security.Cryptography;
 using BackupsterAgent.Settings;
 using Renci.SshNet;
+using Renci.SshNet.Common;
 
 namespace BackupsterAgent.Services.Upload;
 
@@ -7,12 +9,16 @@ public sealed class SftpUploadService : IUploadService
 {
     private readonly SftpSettings _settings;
     private readonly ILogger<SftpUploadService> _logger;
+    private int _warnedUntrusted;
 
     public SftpUploadService(SftpSettings settings, ILogger<SftpUploadService> logger)
     {
         _settings = settings;
         _logger = logger;
     }
+
+    internal static string ComputeFingerprint(byte[] hostKey) =>
+        "SHA256:" + Convert.ToBase64String(SHA256.HashData(hostKey)).TrimEnd('=');
 
     public async Task<string> UploadAsync(string filePath, string folder, IProgress<long>? progress, CancellationToken ct)
     {
@@ -69,6 +75,7 @@ public sealed class SftpUploadService : IUploadService
         var port = _settings.Port;
         var username = _settings.Username;
 
+        SftpClient client;
         if (!string.IsNullOrWhiteSpace(_settings.PrivateKeyPath))
         {
             PrivateKeyFile keyFile = string.IsNullOrWhiteSpace(_settings.PrivateKeyPassphrase)
@@ -76,11 +83,48 @@ public sealed class SftpUploadService : IUploadService
                 : new PrivateKeyFile(_settings.PrivateKeyPath, _settings.PrivateKeyPassphrase);
 
             _logger.LogDebug("SFTP using key-based auth for {Username}@{Host}:{Port}", username, host, port);
-            return new SftpClient(host, port, username, keyFile);
+            client = new SftpClient(host, port, username, keyFile);
+        }
+        else
+        {
+            _logger.LogDebug("SFTP using password auth for {Username}@{Host}:{Port}", username, host, port);
+            client = new SftpClient(host, port, username, _settings.Password);
         }
 
-        _logger.LogDebug("SFTP using password auth for {Username}@{Host}:{Port}", username, host, port);
-        return new SftpClient(host, port, username, _settings.Password);
+        client.HostKeyReceived += OnHostKeyReceived;
+        return client;
+    }
+
+    private void OnHostKeyReceived(object? sender, HostKeyEventArgs e)
+    {
+        var actual = ComputeFingerprint(e.HostKey);
+        var expected = _settings.HostKeyFingerprint;
+
+        if (string.IsNullOrWhiteSpace(expected))
+        {
+            if (Interlocked.Exchange(ref _warnedUntrusted, 1) == 0)
+            {
+                _logger.LogWarning(
+                    "SFTP host key verification is disabled for {Host}:{Port}. " +
+                    "Current host key fingerprint: {Fingerprint}. " +
+                    "For production, set SftpSettings.HostKeyFingerprint to this value to prevent MITM.",
+                    _settings.Host, _settings.Port, actual);
+            }
+            e.CanTrust = true;
+            return;
+        }
+
+        if (!string.Equals(actual, expected.Trim(), StringComparison.Ordinal))
+        {
+            _logger.LogError(
+                "SFTP host key mismatch for {Host}:{Port}. Expected: {Expected}, actual: {Actual}. " +
+                "Connection refused — possible MITM or server key rotation.",
+                _settings.Host, _settings.Port, expected, actual);
+            e.CanTrust = false;
+            return;
+        }
+
+        e.CanTrust = true;
     }
 
     private static void EnsureRemoteDirectory(SftpClient client, string remoteDir)

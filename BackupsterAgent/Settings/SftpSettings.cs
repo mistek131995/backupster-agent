@@ -20,4 +20,6 @@ public sealed class SftpSettings
 
     /// <summary>Remote base directory. Files are placed under {RemotePath}/{database}/{yyyy-MM-dd}/.</summary>
     public string RemotePath { get; set; } = "/backups";
+
+    public string? HostKeyFingerprint { get; set; }
 }

@@ -68,12 +68,33 @@ public sealed class RestoreTaskPollingService : BackgroundService
                     continue;
                 }
 
+                bool cancelled = false;
                 using (await _activityLock.AcquireAsync($"restore:{task.TaskId}", stoppingToken))
                 {
-                    var patch = await ExecuteTaskAsync(task, stoppingToken);
+                    PatchRestoreTaskDto patch;
                     try
                     {
-                        await _client.PatchTaskAsync(task.TaskId, patch, stoppingToken);
+                        patch = await ExecuteTaskAsync(task, stoppingToken);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        _logger.LogWarning(
+                            "RestoreTaskPollingService: task {TaskId} cancelled mid-pipeline", task.TaskId);
+                        cancelled = true;
+                        patch = new PatchRestoreTaskDto
+                        {
+                            Status = RestoreTaskStatus.Failed,
+                            DatabaseStatus = RestoreDatabaseStatus.Failed,
+                            ErrorMessage = "Восстановление прервано: агент остановлен.",
+                        };
+                    }
+
+                    using var finalizeCts = cancelled ? new CancellationTokenSource(TimeSpan.FromSeconds(10)) : null;
+                    var patchCt = cancelled ? finalizeCts!.Token : stoppingToken;
+
+                    try
+                    {
+                        await _client.PatchTaskAsync(task.TaskId, patch, patchCt);
                     }
                     catch (Exception ex)
                     {
@@ -82,6 +103,8 @@ public sealed class RestoreTaskPollingService : BackgroundService
                             "Task will be marked in_progress until sweeper picks it up.", task.TaskId);
                     }
                 }
+
+                if (cancelled) break;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

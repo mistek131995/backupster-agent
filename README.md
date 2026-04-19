@@ -304,12 +304,23 @@ openssl rand -base64 32
     "Password": "",
     "PrivateKeyPath": "/root/.ssh/id_rsa",
     "PrivateKeyPassphrase": "",
-    "RemotePath": "/var/backups"
+    "RemotePath": "/var/backups",
+    "HostKeyFingerprint": "SHA256:abcDEF123..."
   }
 }
 ```
 
 Поддерживается аутентификация по паролю и по приватному ключу. Удалённые директории создаются автоматически.
+
+> **`HostKeyFingerprint`** — опциональный отпечаток публичного ключа SFTP-сервера в формате `SHA256:<base64 без padding>` (совпадает с тем, что печатает `ssh-keyscan -t rsa host | ssh-keygen -lf -`).
+> - Задан → несовпадающий ключ сервера отвергается, агент пишет error «possible MITM» и соединение обрывается.
+> - Не задан → агент один раз за время жизни процесса пишет warning с актуальным отпечатком, чтобы вы могли скопировать его в конфиг. Без отпечатка защиты от MITM нет — для prod обязательно задайте.
+>
+> Как получить отпечаток:
+> ```bash
+> ssh-keyscan -t rsa backup.example.com 2>/dev/null | ssh-keygen -lf -
+> # 256 SHA256:abcDEF123...   backup.example.com (RSA)
+> ```
 
 > **Файловый бэкап (`FilePaths`) не работает на SFTP-хранилищах** — у SFTP нет дешёвого `HEAD` для дедупликации кусков. При непустом `FilePaths` для базы, смотрящей на SFTP-хранилище, дамп загрузится, файлы будут пропущены с warning.
 
