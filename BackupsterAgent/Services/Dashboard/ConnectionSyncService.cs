@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Settings;
@@ -10,6 +12,12 @@ namespace BackupsterAgent.Services.Dashboard;
 
 public sealed class ConnectionSyncService : IConnectionSyncService
 {
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        };
+
     private readonly HttpClient _http;
     private readonly ConnectionResolver _connections;
     private readonly AgentSettings _settings;
@@ -71,7 +79,7 @@ public sealed class ConnectionSyncService : IConnectionSyncService
 
                     using var request = new HttpRequestMessage(HttpMethod.Post, url);
                     request.Headers.Add("X-Agent-Token", _settings.Token);
-                    request.Content = JsonContent.Create(payload);
+                    request.Content = JsonContent.Create(payload, options: JsonOptions);
 
                     var response = await _http.SendAsync(request, innerCt);
                     response.EnsureSuccessStatusCode();
