@@ -176,9 +176,7 @@ public sealed class FileRestoreService
 
             ApplyMetadata(tmpPath, entry);
 
-            if (File.Exists(targetPath))
-                File.Delete(targetPath);
-            File.Move(tmpPath, targetPath);
+            File.Move(tmpPath, targetPath, overwrite: true);
         }
         catch
         {
