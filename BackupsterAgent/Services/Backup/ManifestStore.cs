@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Services.Common;
@@ -23,6 +24,9 @@ public sealed class ManifestStore
         _logger = logger;
     }
 
+    internal static byte[] BuildManifestAad(string objectKey) =>
+        Encoding.UTF8.GetBytes(objectKey);
+
     public async Task<string> SaveAsync(
         FileManifest manifest,
         string backupFolder,
@@ -33,10 +37,10 @@ public sealed class ManifestStore
         ArgumentException.ThrowIfNullOrWhiteSpace(backupFolder);
         ArgumentNullException.ThrowIfNull(uploader);
 
-        var json = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
-        var encrypted = _encryption.Encrypt(json);
-
         var objectKey = $"{backupFolder.TrimEnd('/')}/manifest.json.enc";
+        var json = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
+        var encrypted = _encryption.Encrypt(json, BuildManifestAad(objectKey));
+
         await uploader.UploadBytesAsync(encrypted, objectKey, ct);
 
         _logger.LogInformation(

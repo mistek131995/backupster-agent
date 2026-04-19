@@ -166,7 +166,7 @@ public sealed class EncryptionServiceTests
                     Assert.That(bytes[0], Is.EqualTo((byte)0x42));
                     Assert.That(bytes[1], Is.EqualTo((byte)0x4B));
                     Assert.That(bytes[2], Is.EqualTo((byte)0x30));
-                    Assert.That(bytes[3], Is.EqualTo((byte)0x31));
+                    Assert.That(bytes[3], Is.EqualTo((byte)0x32));
                     Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4, 4)), Is.EqualTo((uint)FrameChunkSize));
                 });
             }
@@ -424,6 +424,8 @@ public sealed class EncryptionServiceTests
 
             using var gcm = new AesGcm(_key, TagSize);
             var pos = 0;
+            uint frameIndex = 0;
+            var aad = new byte[4];
             while (pos < plaintext.Length)
             {
                 var chunk = Math.Min(customChunkSize, plaintext.Length - pos);
@@ -431,11 +433,13 @@ public sealed class EncryptionServiceTests
                 var ct = new byte[chunk];
                 var tag = new byte[TagSize];
                 RandomNumberGenerator.Fill(nonce);
-                gcm.Encrypt(nonce, plaintext.AsSpan(pos, chunk), ct, tag);
+                BinaryPrimitives.WriteUInt32BigEndian(aad, frameIndex);
+                gcm.Encrypt(nonce, plaintext.AsSpan(pos, chunk), ct, tag, aad);
                 await fs.WriteAsync(nonce);
                 await fs.WriteAsync(ct);
                 await fs.WriteAsync(tag);
                 pos += chunk;
+                frameIndex++;
             }
         }
 
@@ -539,7 +543,7 @@ public sealed class EncryptionServiceTests
         finally { SafeDelete(inputPath); }
     }
 
-    internal static byte[] DecryptBytes(byte[] input, byte[] key)
+    internal static byte[] DecryptBytes(byte[] input, byte[] key, byte[]? aad = null)
     {
         using var gcm = new AesGcm(key, TagSize);
         var plaintextLen = input.Length - NonceSize - TagSize;
@@ -547,7 +551,7 @@ public sealed class EncryptionServiceTests
         var nonce = input.AsSpan(0, NonceSize);
         var ct = input.AsSpan(NonceSize, plaintextLen);
         var tag = input.AsSpan(NonceSize + plaintextLen, TagSize);
-        gcm.Decrypt(nonce, ct, tag, plaintext);
+        gcm.Decrypt(nonce, ct, tag, plaintext, aad);
         return plaintext;
     }
 
@@ -557,7 +561,7 @@ public sealed class EncryptionServiceTests
 
         if (bytes.Length < HeaderSize)
             throw new InvalidDataException("encrypted file too short");
-        if (bytes[0] != 0x42 || bytes[1] != 0x4B || bytes[2] != 0x30 || bytes[3] != 0x31)
+        if (bytes[0] != 0x42 || bytes[1] != 0x4B || bytes[2] != 0x30 || bytes[3] != 0x32)
             throw new InvalidDataException("bad magic");
 
         var chunkSize = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4, 4));
@@ -566,6 +570,8 @@ public sealed class EncryptionServiceTests
         using var gcm = new AesGcm(key, TagSize);
         using var output = new MemoryStream();
         var offset = HeaderSize;
+        uint frameIndex = 0;
+        var aad = new byte[4];
 
         while (offset < bytes.Length)
         {
@@ -578,10 +584,12 @@ public sealed class EncryptionServiceTests
             var ct = bytes.AsSpan(offset + NonceSize, ctSize);
             var tag = bytes.AsSpan(offset + NonceSize + ctSize, TagSize);
             var plaintext = new byte[ctSize];
-            gcm.Decrypt(nonce, ct, tag, plaintext);
+            BinaryPrimitives.WriteUInt32BigEndian(aad, frameIndex);
+            gcm.Decrypt(nonce, ct, tag, plaintext, aad);
             output.Write(plaintext);
 
             offset += NonceSize + ctSize + TagSize;
+            frameIndex++;
         }
 
         return output.ToArray();

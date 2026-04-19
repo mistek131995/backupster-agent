@@ -419,7 +419,7 @@ public sealed class FileRestoreServiceTests
     public async Task RunAsync_BrokenManifestJson_FailedWithJsonMessage()
     {
         var garbage = Encoding.UTF8.GetBytes("{not a manifest");
-        var encrypted = _encryption.Encrypt(garbage);
+        var encrypted = _encryption.Encrypt(garbage, Encoding.UTF8.GetBytes(ManifestKey));
         _upload.SetBytes(ManifestKey, encrypted);
 
         var result = await _service.RunAsync(ManifestKey, _tempRoot, _upload, TestHelpers.NullReporter<RestoreStage>(), CancellationToken.None);
@@ -470,15 +470,16 @@ public sealed class FileRestoreServiceTests
 
     private string StoreChunk(byte[] plaintext)
     {
-        var sha = Convert.ToHexString(SHA256.HashData(plaintext)).ToLowerInvariant();
-        _upload.SetBytes($"chunks/{sha}", _encryption.Encrypt(plaintext));
+        var shaBytes = SHA256.HashData(plaintext);
+        var sha = Convert.ToHexString(shaBytes).ToLowerInvariant();
+        _upload.SetBytes($"chunks/{sha}", _encryption.Encrypt(plaintext, shaBytes));
         return sha;
     }
 
     private void StoreManifest(FileManifest manifest)
     {
         var json = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
-        _upload.SetBytes(ManifestKey, _encryption.Encrypt(json));
+        _upload.SetBytes(ManifestKey, _encryption.Encrypt(json, Encoding.UTF8.GetBytes(ManifestKey)));
     }
 
     private sealed class FakeUploadService : IUploadService

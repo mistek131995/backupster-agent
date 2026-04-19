@@ -93,7 +93,7 @@ public sealed class FileBackupServiceTests
 
         var uploaded = _uploader.Uploaded[objectKey];
         Assert.That(uploaded, Is.Not.EqualTo(content), "uploaded payload must be encrypted, not plaintext");
-        Assert.That(DecryptAes(uploaded, _encryptionKey), Is.EqualTo(content),
+        Assert.That(DecryptAes(uploaded, _encryptionKey, SHA256.HashData(content)), Is.EqualTo(content),
             "decrypting the uploaded payload must reproduce the original chunk");
     }
 
@@ -113,7 +113,7 @@ public sealed class FileBackupServiceTests
         foreach (var sha in entry.Chunks)
         {
             var encrypted = _uploader.Uploaded[$"chunks/{sha}"];
-            var plaintext = DecryptAes(encrypted, _encryptionKey);
+            var plaintext = DecryptAes(encrypted, _encryptionKey, Convert.FromHexString(sha));
             reassembled.Write(plaintext, 0, plaintext.Length);
         }
 
@@ -209,8 +209,8 @@ public sealed class FileBackupServiceTests
             () => _service.CaptureAsync([_tempRoot], _uploader, TestHelpers.NullReporter<BackupStage>(), cts.Token));
     }
 
-    private static byte[] DecryptAes(byte[] encrypted, byte[] key) =>
-        EncryptionServiceTests.DecryptBytes(encrypted, key);
+    private static byte[] DecryptAes(byte[] encrypted, byte[] key, byte[]? aad = null) =>
+        EncryptionServiceTests.DecryptBytes(encrypted, key, aad);
 
     private sealed class FakeUploadService : IUploadService
     {

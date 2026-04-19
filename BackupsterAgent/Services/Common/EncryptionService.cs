@@ -12,7 +12,7 @@ public sealed class EncryptionService
     internal const int TagSize = 16;
     internal const int FrameChunkSize = 1 << 20;
     internal const int MaxFrameChunkSize = 64 << 20;
-    internal static ReadOnlySpan<byte> FileMagic => [0x42, 0x4B, 0x30, 0x31];
+    internal static ReadOnlySpan<byte> FileMagic => [0x42, 0x4B, 0x30, 0x32];
     internal const int HeaderSize = 8;
 
     private readonly byte[] _key;
@@ -67,10 +67,12 @@ public sealed class EncryptionService
         var ciphertextBuffer = ArrayPool<byte>.Shared.Rent(FrameChunkSize);
         var nonce = new byte[NonceSize];
         var tag = new byte[TagSize];
+        var aad = new byte[4];
 
         try
         {
             using var gcm = new AesGcm(_key, TagSize);
+            uint frameIndex = 0;
 
             while (true)
             {
@@ -78,16 +80,19 @@ public sealed class EncryptionService
                 if (read == 0) break;
 
                 RandomNumberGenerator.Fill(nonce);
+                BinaryPrimitives.WriteUInt32BigEndian(aad, frameIndex);
                 gcm.Encrypt(
                     nonce,
                     plaintextBuffer.AsSpan(0, read),
                     ciphertextBuffer.AsSpan(0, read),
-                    tag);
+                    tag,
+                    aad);
 
                 await outputStream.WriteAsync(nonce, ct);
                 await outputStream.WriteAsync(ciphertextBuffer.AsMemory(0, read), ct);
                 await outputStream.WriteAsync(tag, ct);
 
+                frameIndex++;
                 if (read < FrameChunkSize) break;
             }
         }
@@ -102,7 +107,7 @@ public sealed class EncryptionService
         return outputPath;
     }
 
-    public byte[] Encrypt(byte[] plaintext)
+    public byte[] Encrypt(byte[] plaintext, byte[]? aad = null)
     {
         if (!IsConfigured)
             throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
@@ -117,12 +122,12 @@ public sealed class EncryptionService
         RandomNumberGenerator.Fill(nonceSpan);
 
         using var gcm = new AesGcm(_key, TagSize);
-        gcm.Encrypt(nonceSpan, plaintext, ciphertextSpan, tagSpan);
+        gcm.Encrypt(nonceSpan, plaintext, ciphertextSpan, tagSpan, aad);
 
         return output;
     }
 
-    public byte[] Decrypt(byte[] ciphertext)
+    public byte[] Decrypt(byte[] ciphertext, byte[]? aad = null)
     {
         if (!IsConfigured)
             throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
@@ -141,7 +146,8 @@ public sealed class EncryptionService
             ciphertext.AsSpan(0, NonceSize),
             ciphertext.AsSpan(NonceSize, plaintextLen),
             ciphertext.AsSpan(NonceSize + plaintextLen, TagSize),
-            plaintext);
+            plaintext,
+            aad);
 
         return plaintext;
     }
@@ -167,7 +173,7 @@ public sealed class EncryptionService
             throw new InvalidDataException("Encrypted file is truncated: header is missing or incomplete.");
 
         if (!header.AsSpan(0, 4).SequenceEqual(FileMagic))
-            throw new InvalidDataException("Bad magic: not a Backupster encrypted file (expected BK01).");
+            throw new InvalidDataException("Bad magic: not a Backupster encrypted file (expected BK02).");
 
         var frameChunkSize = (int)BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(4, 4));
         if (frameChunkSize <= 0 || frameChunkSize > MaxFrameChunkSize)
@@ -177,10 +183,12 @@ public sealed class EncryptionService
         var ctTagBuffer = ArrayPool<byte>.Shared.Rent(frameChunkSize + TagSize);
         var plaintextBuffer = ArrayPool<byte>.Shared.Rent(frameChunkSize);
         var nonce = new byte[NonceSize];
+        var aad = new byte[4];
 
         try
         {
             using var gcm = new AesGcm(_key, TagSize);
+            uint frameIndex = 0;
 
             while (true)
             {
@@ -195,14 +203,17 @@ public sealed class EncryptionService
 
                 var ctLen = ctTagRead - TagSize;
 
+                BinaryPrimitives.WriteUInt32BigEndian(aad, frameIndex);
                 gcm.Decrypt(
                     nonce,
                     ctTagBuffer.AsSpan(0, ctLen),
                     ctTagBuffer.AsSpan(ctLen, TagSize),
-                    plaintextBuffer.AsSpan(0, ctLen));
+                    plaintextBuffer.AsSpan(0, ctLen),
+                    aad);
 
                 await outputStream.WriteAsync(plaintextBuffer.AsMemory(0, ctLen), ct);
 
+                frameIndex++;
                 if (ctLen < frameChunkSize) break;
             }
         }

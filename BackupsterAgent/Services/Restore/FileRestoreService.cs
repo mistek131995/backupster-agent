@@ -47,7 +47,8 @@ public sealed class FileRestoreService
         try
         {
             var encrypted = await uploader.DownloadBytesAsync(manifestKey, ct);
-            var json = _encryption.Decrypt(encrypted);
+            var aad = Encoding.UTF8.GetBytes(manifestKey);
+            var json = _encryption.Decrypt(encrypted, aad);
             manifest = JsonSerializer.Deserialize<FileManifest>(json, JsonOptions)
                 ?? throw new InvalidDataException("Manifest JSON deserialized to null.");
         }
@@ -193,8 +194,9 @@ public sealed class FileRestoreService
                 {
                     if (ct.IsCancellationRequested) throw new OperationCanceledException(ct);
 
+                    var shaBytes = Convert.FromHexString(chunkSha);
                     var encrypted = await uploader.DownloadBytesAsync($"chunks/{chunkSha}", ct);
-                    var plaintext = _encryption.Decrypt(encrypted);
+                    var plaintext = _encryption.Decrypt(encrypted, shaBytes);
                     await stream.WriteAsync(plaintext, ct);
                 }
             }

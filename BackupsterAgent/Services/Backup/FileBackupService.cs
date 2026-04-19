@@ -114,7 +114,7 @@ public sealed class FileBackupService
 
             if (!await uploader.ExistsAsync(objectKey, ct))
             {
-                var encrypted = _encryption.Encrypt(chunk);
+                var encrypted = _encryption.Encrypt(chunk, shaBytes);
                 await uploader.UploadBytesAsync(encrypted, objectKey, ct);
                 newChunks++;
             }
