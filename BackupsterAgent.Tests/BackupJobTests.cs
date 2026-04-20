@@ -98,8 +98,8 @@ public sealed class BackupJobTests
             Assert.That(metrics!.FilesCount, Is.EqualTo(1));
             Assert.That(metrics.FilesTotalBytes, Is.EqualTo(content.Length));
             Assert.That(metrics.NewChunksCount, Is.EqualTo(1));
-            Assert.That(metrics.ManifestKey, Is.EqualTo($"{backupFolder}/manifest.json.enc"));
-            Assert.That(_uploader.Uploaded, Contains.Key(metrics.ManifestKey));
+            Assert.That(metrics.ManifestKey, Is.EqualTo($"{backupFolder}/manifest.json.gz.enc"));
+            Assert.That(_uploader.UploadedFromFile, Contains.Key(metrics.ManifestKey));
         });
     }
 
@@ -162,7 +162,11 @@ public sealed class BackupJobTests
 
         var chunker = new ContentDefinedChunker();
         var fileBackup = new FileBackupService(chunker, encryption, NullLogger<FileBackupService>.Instance);
-        var manifestStore = new ManifestStore(encryption, NullLogger<ManifestStore>.Instance);
+        var manifestStore = new ManifestStore(
+            encryption,
+            Options.Create(new RestoreSettings { TempPath = Path.Combine(Path.GetTempPath(), "dbbackup-job-tests-" + Path.GetRandomFileName()) }),
+            NullLoggerFactory.Instance,
+            NullLogger<ManifestStore>.Instance);
 
         return new BackupJob(
             new StubBackupProviderFactory(),
@@ -182,12 +186,18 @@ public sealed class BackupJobTests
     private sealed class FakeUploadService : IUploadService
     {
         public Dictionary<string, byte[]> Uploaded { get; } = [];
+        public Dictionary<string, byte[]> UploadedFromFile { get; } = [];
         public int ExistsCalls { get; private set; }
         public int UploadCalls { get; private set; }
         public Exception? ThrowOnUpload { get; set; }
 
-        public Task<string> UploadAsync(string filePath, string folder, IProgress<long>? progress, CancellationToken ct) =>
-            throw new NotSupportedException("BackupJob file-backup path must not call UploadAsync");
+        public async Task<string> UploadAsync(string filePath, string folder, IProgress<long>? progress, CancellationToken ct)
+        {
+            var fileName = Path.GetFileName(filePath);
+            var objectKey = $"{folder.TrimEnd('/')}/{fileName}";
+            UploadedFromFile[objectKey] = await File.ReadAllBytesAsync(filePath, ct);
+            return $"fake://{objectKey}";
+        }
 
         public Task UploadBytesAsync(byte[] content, string objectKey, CancellationToken ct)
         {

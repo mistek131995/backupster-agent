@@ -1,8 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Upload;
 using BackupsterAgent.Settings;
@@ -15,21 +15,19 @@ public sealed class FileRestoreService
     private const int MaxErrorMessageLength = 2000;
     private const int MaxReportedPerFileErrors = 20;
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
     private readonly EncryptionService _encryption;
+    private readonly ManifestStore _manifestStore;
     private readonly RestoreSettings _restoreSettings;
     private readonly ILogger<FileRestoreService> _logger;
 
     public FileRestoreService(
         EncryptionService encryption,
+        ManifestStore manifestStore,
         IOptions<RestoreSettings> restoreSettings,
         ILogger<FileRestoreService> logger)
     {
         _encryption = encryption;
+        _manifestStore = manifestStore;
         _restoreSettings = restoreSettings.Value;
         _logger = logger;
     }
@@ -43,14 +41,10 @@ public sealed class FileRestoreService
     {
         reporter.Report(RestoreStage.DownloadingManifest);
 
-        FileManifest manifest;
+        IManifestReader reader;
         try
         {
-            var encrypted = await uploader.DownloadBytesAsync(manifestKey, ct);
-            var aad = Encoding.UTF8.GetBytes(manifestKey);
-            var json = _encryption.Decrypt(encrypted, aad);
-            manifest = JsonSerializer.Deserialize<FileManifest>(json, JsonOptions)
-                ?? throw new InvalidDataException("Manifest JSON deserialized to null.");
+            reader = await _manifestStore.OpenReaderAsync(manifestKey, uploader, ct);
         }
         catch (OperationCanceledException)
         {
@@ -77,7 +71,7 @@ public sealed class FileRestoreService
             return FileRestoreResult.Failed(
                 $"Манифест файлов '{manifestKey}' повреждён или имеет неподдерживаемый формат.");
         }
-        catch (JsonException ex)
+        catch (System.Text.Json.JsonException ex)
         {
             _logger.LogError(ex, "FileRestoreService: manifest JSON parse failed ({ManifestKey})", manifestKey);
             return FileRestoreResult.Failed(
@@ -90,11 +84,7 @@ public sealed class FileRestoreService
                 $"Не удалось получить манифест файлов '{manifestKey}': {ex.Message}");
         }
 
-        if (manifest.Files.Count == 0)
-        {
-            _logger.LogInformation("FileRestoreService: manifest {ManifestKey} contains no files", manifestKey);
-            return FileRestoreResult.Success(0);
-        }
+        await using var _ = reader;
 
         string baseDir;
         bool isAgentLandingZone;
@@ -124,40 +114,69 @@ public sealed class FileRestoreService
         }
 
         _logger.LogInformation(
-            "FileRestoreService: restoring {Count} file(s) from manifest '{ManifestKey}' into '{Base}' (landingZone={Landing})",
-            manifest.Files.Count, manifestKey, baseDir, isAgentLandingZone);
+            "FileRestoreService: restoring files from manifest '{ManifestKey}' into '{Base}' (landingZone={Landing})",
+            manifestKey, baseDir, isAgentLandingZone);
 
         var restored = 0;
         var failed = new List<(string Path, string Reason)>();
-        var totalFiles = manifest.Files.Count;
-        var index = 0;
+        var processed = 0L;
 
-        foreach (var entry in manifest.Files)
+        try
         {
-            if (ct.IsCancellationRequested) throw new OperationCanceledException(ct);
+            await foreach (var entry in reader.ReadFilesAsync(ct))
+            {
+                if (ct.IsCancellationRequested) throw new OperationCanceledException(ct);
 
-            reporter.Report(
-                RestoreStage.RestoringFiles,
-                processed: index,
-                total: totalFiles,
-                unit: "files",
-                currentItem: entry.Path);
-            index++;
+                reporter.Report(
+                    RestoreStage.RestoringFiles,
+                    processed: processed,
+                    unit: "files",
+                    currentItem: entry.Path);
+                processed++;
 
-            try
-            {
-                await RestoreFileAsync(entry, baseDir, uploader, ct);
-                restored++;
+                try
+                {
+                    await RestoreFileAsync(entry, baseDir, uploader, ct);
+                    restored++;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "FileRestoreService: failed to restore file '{Path}'", entry.Path);
+                    failed.Add((entry.Path, ClassifyFileError(ex)));
+                }
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "FileRestoreService: failed to restore file '{Path}'", entry.Path);
-                failed.Add((entry.Path, ClassifyFileError(ex)));
-            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (AuthenticationTagMismatchException ex)
+        {
+            _logger.LogError(ex, "FileRestoreService: manifest auth tag mismatch mid-stream ({ManifestKey})", manifestKey);
+            return FileRestoreResult.Failed(
+                $"Ошибка расшифровки манифеста '{manifestKey}' в процессе чтения.");
+        }
+        catch (InvalidDataException ex)
+        {
+            _logger.LogError(ex, "FileRestoreService: invalid manifest data mid-stream ({ManifestKey})", manifestKey);
+            return FileRestoreResult.Failed(
+                $"Манифест '{manifestKey}' повреждён: {ex.Message}");
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            _logger.LogError(ex, "FileRestoreService: manifest JSON parse failed mid-stream ({ManifestKey})", manifestKey);
+            return FileRestoreResult.Failed(
+                $"Манифест '{manifestKey}' не удалось разобрать как JSON.");
+        }
+
+        if (processed == 0)
+        {
+            _logger.LogInformation("FileRestoreService: manifest {ManifestKey} contains no files", manifestKey);
+            return FileRestoreResult.Success(0);
         }
 
         if (failed.Count == 0)

@@ -1,6 +1,3 @@
-using System.Text;
-using System.Text.Json;
-using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Upload;
@@ -9,28 +6,25 @@ namespace BackupsterAgent.Services.Backup;
 
 public sealed class ChunkGcService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
-    private const string ManifestSuffix = "/manifest.json.enc";
     private const string ChunksPrefix = "chunks/";
 
     private readonly StorageResolver _storages;
     private readonly IUploadServiceFactory _factory;
     private readonly EncryptionService _encryption;
+    private readonly ManifestStore _manifestStore;
     private readonly ILogger<ChunkGcService> _logger;
 
     public ChunkGcService(
         StorageResolver storages,
         IUploadServiceFactory factory,
         EncryptionService encryption,
+        ManifestStore manifestStore,
         ILogger<ChunkGcService> logger)
     {
         _storages = storages;
         _factory = factory;
         _encryption = encryption;
+        _manifestStore = manifestStore;
         _logger = logger;
     }
 
@@ -89,12 +83,19 @@ public sealed class ChunkGcService
 
         await foreach (var obj in uploader.ListAsync(string.Empty, ct))
         {
-            if (!obj.Key.EndsWith(ManifestSuffix, StringComparison.Ordinal)) continue;
+            if (!IsManifestKey(obj.Key)) continue;
 
-            byte[] encrypted;
             try
             {
-                encrypted = await uploader.DownloadBytesAsync(obj.Key, ct);
+                await using var reader = await _manifestStore.OpenReaderAsync(obj.Key, uploader, ct);
+
+                await foreach (var entry in reader.ReadFilesAsync(ct))
+                {
+                    foreach (var chunk in entry.Chunks)
+                        referenced.Add(chunk);
+                }
+
+                manifestCount++;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -103,32 +104,10 @@ public sealed class ChunkGcService
             catch (Exception ex)
             {
                 _logger.LogError(ex,
-                    "ChunkGc: failed to download manifest '{Key}' in storage '{Storage}'. Aborting sweep.",
+                    "ChunkGc: failed to read manifest '{Key}' in storage '{Storage}'. Aborting sweep.",
                     obj.Key, storageName);
                 return;
             }
-
-            FileManifest? manifest;
-            try
-            {
-                var aad = Encoding.UTF8.GetBytes(obj.Key);
-                var json = _encryption.Decrypt(encrypted, aad);
-                manifest = JsonSerializer.Deserialize<FileManifest>(json, JsonOptions);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "ChunkGc: failed to decrypt/parse manifest '{Key}' in storage '{Storage}'. Aborting sweep.",
-                    obj.Key, storageName);
-                return;
-            }
-
-            if (manifest is null) continue;
-            manifestCount++;
-
-            foreach (var entry in manifest.Files)
-                foreach (var chunk in entry.Chunks)
-                    referenced.Add(chunk);
         }
 
         var cutoff = DateTime.UtcNow - graceWindow;
@@ -174,4 +153,8 @@ public sealed class ChunkGcService
             "ChunkGc: storage '{Storage}' — manifests: {Manifests}, referenced: {Refs}, total chunks: {Total}, deleted: {Deleted} ({FreedMb:F1} MB), skipped (grace): {Grace}.",
             storageName, manifestCount, referenced.Count, totalChunks, deleted, freedBytes / 1024.0 / 1024.0, skippedGrace);
     }
+
+    private static bool IsManifestKey(string key) =>
+        key.EndsWith(ManifestStore.NewSuffix, StringComparison.Ordinal) ||
+        key.EndsWith(ManifestStore.LegacySuffix, StringComparison.Ordinal);
 }

@@ -34,6 +34,14 @@
     "Password": "secret"
   },
   {
+    "Name": "app-mysql",
+    "DatabaseType": "Mysql",
+    "Host": "localhost",
+    "Port": 3306,
+    "Username": "backup",
+    "Password": "secret"
+  },
+  {
     "Name": "reporting-mssql",
     "DatabaseType": "Mssql",
     "Host": "localhost",
@@ -202,9 +210,12 @@ AgentSettings__DashboardUrl=http://your-server:8080
 
 ```
 {database}/{yyyy-MM-dd_HH-mm-ss}/
-  {database}_{yyyyMMdd_HHmmss}.sql.gz.enc    ← PostgreSQL дамп
+  {database}_{yyyyMMdd_HHmmss}.sql.gz.enc    ← PostgreSQL / MySQL дамп
   {database}_{yyyyMMdd_HHmmss}.bak.enc       ← MSSQL дамп
-  manifest.json.enc                          ← манифест файлового бэкапа (если FilePaths непуст)
+  manifest.json.gz.enc                       ← манифест файлового бэкапа (если FilePaths непуст)
+  manifest.json.enc                          ← легаси-формат старых бэкапов (читается новым агентом)
 
 chunks/{sha256}                              ← общий пул дедуплицированных чанков (S3 only)
 ```
+
+Манифест нового формата — gzip-сжатый JSON, зашифрованный framed-GCM; reader стримит его через `PipeReader` + `Utf8JsonReader` без полного разворачивания в RAM. Это позволяет бэкапить и восстанавливать файловые хранилища с миллионами мелких файлов без всплеска памяти.

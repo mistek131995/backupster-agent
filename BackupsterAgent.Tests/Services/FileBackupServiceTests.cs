@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
@@ -43,14 +44,21 @@ public sealed class FileBackupServiceTests
         catch { }
     }
 
+    private async Task<(FileBackupResult Result, List<FileEntry> Entries)> RunAsync(List<string> paths, CancellationToken ct)
+    {
+        await using var writer = new CollectingManifestWriter();
+        var result = await _service.CaptureAsync(paths, _uploader, writer, TestHelpers.NullReporter<BackupStage>(), ct);
+        return (result, writer.Entries);
+    }
+
     [Test]
     public async Task CaptureAsync_EmptyFilePaths_ReturnsEmptyManifest()
     {
-        var result = await _service.CaptureAsync([], _uploader, TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
+        var (result, entries) = await RunAsync([], CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.Manifest.Files, Is.Empty);
+            Assert.That(entries, Is.Empty);
             Assert.That(result.NewChunksCount, Is.Zero);
             Assert.That(_uploader.UploadCalls, Is.Zero);
         });
@@ -65,10 +73,10 @@ public sealed class FileBackupServiceTests
 
         var missing = Path.Combine(_tempRoot, "does-not-exist");
 
-        var result = await _service.CaptureAsync([missing, existing], _uploader, TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
+        var (_, entries) = await RunAsync([missing, existing], CancellationToken.None);
 
-        Assert.That(result.Manifest.Files, Has.Count.EqualTo(1));
-        Assert.That(result.Manifest.Files[0].Path, Is.EqualTo("a.bin"));
+        Assert.That(entries, Has.Count.EqualTo(1));
+        Assert.That(entries[0].Path, Is.EqualTo("a.bin"));
     }
 
     [Test]
@@ -78,10 +86,10 @@ public sealed class FileBackupServiceTests
         var filePath = Path.Combine(_tempRoot, "data.bin");
         await File.WriteAllBytesAsync(filePath, content);
 
-        var result = await _service.CaptureAsync([_tempRoot], _uploader, TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
+        var (result, entries) = await RunAsync([_tempRoot], CancellationToken.None);
 
-        Assert.That(result.Manifest.Files, Has.Count.EqualTo(1));
-        var entry = result.Manifest.Files[0];
+        Assert.That(entries, Has.Count.EqualTo(1));
+        var entry = entries[0];
         Assert.That(entry.Chunks, Has.Count.EqualTo(1));
         Assert.That(result.NewChunksCount, Is.EqualTo(1));
 
@@ -104,9 +112,9 @@ public sealed class FileBackupServiceTests
         var filePath = Path.Combine(_tempRoot, "large.bin");
         await File.WriteAllBytesAsync(filePath, original);
 
-        var result = await _service.CaptureAsync([_tempRoot], _uploader, TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
+        var (_, entries) = await RunAsync([_tempRoot], CancellationToken.None);
 
-        var entry = result.Manifest.Files.Single();
+        var entry = entries.Single();
         Assert.That(entry.Chunks.Count, Is.GreaterThan(1));
 
         using var reassembled = new MemoryStream();
@@ -126,9 +134,9 @@ public sealed class FileBackupServiceTests
         var zeros = new byte[ContentDefinedChunker.MaxSize * 3];
         await File.WriteAllBytesAsync(Path.Combine(_tempRoot, "zeros.bin"), zeros);
 
-        var result = await _service.CaptureAsync([_tempRoot], _uploader, TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
+        var (result, entries) = await RunAsync([_tempRoot], CancellationToken.None);
 
-        var entry = result.Manifest.Files.Single();
+        var entry = entries.Single();
         Assert.Multiple(() =>
         {
             Assert.That(entry.Chunks.Count, Is.GreaterThan(1),
@@ -151,15 +159,15 @@ public sealed class FileBackupServiceTests
         await File.WriteAllBytesAsync(Path.Combine(_tempRoot, "first.bin"), content);
         await File.WriteAllBytesAsync(Path.Combine(_tempRoot, "second.bin"), content);
 
-        var result = await _service.CaptureAsync([_tempRoot], _uploader, TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
+        var (result, entries) = await RunAsync([_tempRoot], CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.Manifest.Files, Has.Count.EqualTo(2));
+            Assert.That(entries, Has.Count.EqualTo(2));
             Assert.That(result.NewChunksCount, Is.EqualTo(1), "second file should reuse the first file's chunk");
             Assert.That(_uploader.UploadCalls, Is.EqualTo(1));
             Assert.That(_uploader.ExistsCalls, Is.EqualTo(2), "ExistsAsync should be consulted once per chunk");
-            Assert.That(result.Manifest.Files[0].Chunks[0], Is.EqualTo(result.Manifest.Files[1].Chunks[0]));
+            Assert.That(entries[0].Chunks[0], Is.EqualTo(entries[1].Chunks[0]));
         });
     }
 
@@ -170,10 +178,10 @@ public sealed class FileBackupServiceTests
         Directory.CreateDirectory(nested);
         await File.WriteAllBytesAsync(Path.Combine(nested, "leaf.bin"), new byte[] { 9 });
 
-        var result = await _service.CaptureAsync([_tempRoot], _uploader, TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
+        var (_, entries) = await RunAsync([_tempRoot], CancellationToken.None);
 
-        Assert.That(result.Manifest.Files, Has.Count.EqualTo(1));
-        Assert.That(result.Manifest.Files[0].Path, Is.EqualTo("sub/deep/leaf.bin"));
+        Assert.That(entries, Has.Count.EqualTo(1));
+        Assert.That(entries[0].Path, Is.EqualTo("sub/deep/leaf.bin"));
     }
 
     [Test]
@@ -184,9 +192,9 @@ public sealed class FileBackupServiceTests
         await File.WriteAllBytesAsync(filePath, content);
         var expectedMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(filePath)).ToUnixTimeSeconds();
 
-        var result = await _service.CaptureAsync([_tempRoot], _uploader, TestHelpers.NullReporter<BackupStage>(), CancellationToken.None);
+        var (_, entries) = await RunAsync([_tempRoot], CancellationToken.None);
 
-        var entry = result.Manifest.Files.Single();
+        var entry = entries.Single();
         Assert.Multiple(() =>
         {
             Assert.That(entry.Path, Is.EqualTo("meta.bin"));
@@ -206,11 +214,30 @@ public sealed class FileBackupServiceTests
         cts.Cancel();
 
         Assert.ThrowsAsync<OperationCanceledException>(
-            () => _service.CaptureAsync([_tempRoot], _uploader, TestHelpers.NullReporter<BackupStage>(), cts.Token));
+            () => RunAsync([_tempRoot], cts.Token));
     }
 
     private static byte[] DecryptAes(byte[] encrypted, byte[] key, byte[]? aad = null) =>
         EncryptionServiceTests.DecryptBytes(encrypted, key, aad);
+
+    private sealed class CollectingManifestWriter : IManifestWriter
+    {
+        public List<FileEntry> Entries { get; } = [];
+
+        public long FilesCount => Entries.Count;
+        public long FilesTotalBytes => Entries.Sum(e => e.Size);
+
+        public Task AppendAsync(FileEntry entry, CancellationToken ct)
+        {
+            Entries.Add(entry);
+            return Task.CompletedTask;
+        }
+
+        public Task<string> CompleteAsync(IUploadService uploader, string backupFolder, CancellationToken ct) =>
+            Task.FromResult($"{backupFolder.TrimEnd('/')}/manifest.json.gz.enc");
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 
     private sealed class FakeUploadService : IUploadService
     {

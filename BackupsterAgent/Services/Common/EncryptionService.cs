@@ -58,10 +58,25 @@ public sealed class EncryptionService
             outputPath, FileMode.Create, FileAccess.Write, FileShare.None,
             bufferSize: 65536, useAsync: true);
 
+        await EncryptStreamAsync(inputStream, outputStream, ct);
+
+        _logger.LogInformation("Encryption completed. Output: '{OutputPath}'", outputPath);
+
+        return outputPath;
+    }
+
+    public async Task EncryptStreamAsync(Stream input, Stream output, CancellationToken ct)
+    {
+        if (!IsConfigured)
+            throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
+
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(output);
+
         var header = new byte[HeaderSize];
         FileMagic.CopyTo(header);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4), FrameChunkSize);
-        await outputStream.WriteAsync(header, ct);
+        await output.WriteAsync(header, ct);
 
         var plaintextBuffer = ArrayPool<byte>.Shared.Rent(FrameChunkSize);
         var ciphertextBuffer = ArrayPool<byte>.Shared.Rent(FrameChunkSize);
@@ -76,7 +91,7 @@ public sealed class EncryptionService
 
             while (true)
             {
-                var read = await ReadFullAsync(inputStream, plaintextBuffer, FrameChunkSize, ct);
+                var read = await ReadFullAsync(input, plaintextBuffer, FrameChunkSize, ct);
                 if (read == 0) break;
 
                 RandomNumberGenerator.Fill(nonce);
@@ -88,9 +103,9 @@ public sealed class EncryptionService
                     tag,
                     aad);
 
-                await outputStream.WriteAsync(nonce, ct);
-                await outputStream.WriteAsync(ciphertextBuffer.AsMemory(0, read), ct);
-                await outputStream.WriteAsync(tag, ct);
+                await output.WriteAsync(nonce, ct);
+                await output.WriteAsync(ciphertextBuffer.AsMemory(0, read), ct);
+                await output.WriteAsync(tag, ct);
 
                 frameIndex++;
                 if (read < FrameChunkSize) break;
@@ -101,10 +116,6 @@ public sealed class EncryptionService
             ArrayPool<byte>.Shared.Return(plaintextBuffer);
             ArrayPool<byte>.Shared.Return(ciphertextBuffer);
         }
-
-        _logger.LogInformation("Encryption completed. Output: '{OutputPath}'", outputPath);
-
-        return outputPath;
     }
 
     public byte[] Encrypt(byte[] plaintext, byte[]? aad = null)
@@ -167,8 +178,21 @@ public sealed class EncryptionService
             outputPath, FileMode.Create, FileAccess.Write, FileShare.None,
             bufferSize: 65536, useAsync: true);
 
+        await DecryptStreamAsync(inputStream, outputStream, ct);
+
+        _logger.LogInformation("Decryption completed. Output: '{OutputPath}'", outputPath);
+    }
+
+    public async Task DecryptStreamAsync(Stream input, Stream output, CancellationToken ct)
+    {
+        if (!IsConfigured)
+            throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
+
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(output);
+
         var header = new byte[HeaderSize];
-        var headerRead = await ReadFullAsync(inputStream, header, HeaderSize, ct);
+        var headerRead = await ReadFullAsync(input, header, HeaderSize, ct);
         if (headerRead < HeaderSize)
             throw new InvalidDataException("Encrypted file is truncated: header is missing or incomplete.");
 
@@ -192,12 +216,12 @@ public sealed class EncryptionService
 
             while (true)
             {
-                var nonceRead = await ReadFullAsync(inputStream, nonce, NonceSize, ct);
+                var nonceRead = await ReadFullAsync(input, nonce, NonceSize, ct);
                 if (nonceRead == 0) break;
                 if (nonceRead < NonceSize)
                     throw new InvalidDataException("Encrypted file is truncated: incomplete frame nonce.");
 
-                var ctTagRead = await ReadFullAsync(inputStream, ctTagBuffer, frameChunkSize + TagSize, ct);
+                var ctTagRead = await ReadFullAsync(input, ctTagBuffer, frameChunkSize + TagSize, ct);
                 if (ctTagRead < TagSize)
                     throw new InvalidDataException("Encrypted file is truncated: incomplete frame ciphertext or tag.");
 
@@ -211,7 +235,7 @@ public sealed class EncryptionService
                     plaintextBuffer.AsSpan(0, ctLen),
                     aad);
 
-                await outputStream.WriteAsync(plaintextBuffer.AsMemory(0, ctLen), ct);
+                await output.WriteAsync(plaintextBuffer.AsMemory(0, ctLen), ct);
 
                 frameIndex++;
                 if (ctLen < frameChunkSize) break;
@@ -222,8 +246,6 @@ public sealed class EncryptionService
             ArrayPool<byte>.Shared.Return(ctTagBuffer);
             ArrayPool<byte>.Shared.Return(plaintextBuffer);
         }
-
-        _logger.LogInformation("Decryption completed. Output: '{OutputPath}'", outputPath);
     }
 
     private static async Task<int> ReadFullAsync(Stream stream, byte[] buffer, int count, CancellationToken ct)

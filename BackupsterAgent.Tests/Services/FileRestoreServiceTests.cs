@@ -4,6 +4,7 @@ using System.Text.Json;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services;
+using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Restore;
 using BackupsterAgent.Services.Upload;
@@ -44,9 +45,20 @@ public sealed class FileRestoreServiceTests
             NullLogger<EncryptionService>.Instance);
 
         _upload = new FakeUploadService();
+        var restoreSettings = Options.Create(new RestoreSettings
+        {
+            FileRestoreBasePath = _landingDir,
+            TempPath = _tempRoot,
+        });
+        var manifestStore = new ManifestStore(
+            _encryption,
+            restoreSettings,
+            NullLoggerFactory.Instance,
+            NullLogger<ManifestStore>.Instance);
         _service = new FileRestoreService(
             _encryption,
-            Options.Create(new RestoreSettings { FileRestoreBasePath = _landingDir }),
+            manifestStore,
+            restoreSettings,
             NullLogger<FileRestoreService>.Instance);
     }
 

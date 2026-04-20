@@ -6,7 +6,7 @@ using BackupsterAgent.Services.Upload;
 
 namespace BackupsterAgent.Services.Backup;
 
-public sealed record FileBackupResult(FileManifest Manifest, int NewChunksCount);
+public sealed record FileBackupResult(int NewChunksCount);
 
 public sealed class FileBackupService
 {
@@ -28,13 +28,14 @@ public sealed class FileBackupService
     public async Task<FileBackupResult> CaptureAsync(
         List<string> filePaths,
         IUploadService uploader,
+        IManifestWriter writer,
         IProgressReporter<BackupStage> reporter,
         CancellationToken ct)
     {
         LogConsistencyWarningOnce();
 
-        var files = new List<FileEntry>();
         int newChunksTotal = 0;
+        long processedFiles = 0;
 
         var enumOptions = new EnumerationOptions
         {
@@ -57,15 +58,16 @@ public sealed class FileBackupService
 
                 reporter.Report(
                     BackupStage.CapturingFiles,
-                    processed: files.Count,
+                    processed: processedFiles,
                     unit: "files",
                     currentItem: filePath);
 
                 try
                 {
                     var (entry, newChunks) = await CaptureFileAsync(root, filePath, uploader, ct);
-                    files.Add(entry);
+                    await writer.AppendAsync(entry, ct);
                     newChunksTotal += newChunks;
+                    processedFiles++;
                 }
                 catch (OperationCanceledException)
                 {
@@ -78,17 +80,11 @@ public sealed class FileBackupService
             }
         }
 
-        var manifest = new FileManifest(
-            CreatedAtUtc: DateTime.UtcNow,
-            Database: string.Empty,
-            DumpObjectKey: string.Empty,
-            Files: files);
-
         _logger.LogInformation(
             "File backup captured. Files: {FilesCount}, new chunks uploaded: {NewChunks}",
-            files.Count, newChunksTotal);
+            processedFiles, newChunksTotal);
 
-        return new FileBackupResult(manifest, newChunksTotal);
+        return new FileBackupResult(newChunksTotal);
     }
 
     private async Task<(FileEntry Entry, int NewChunks)> CaptureFileAsync(

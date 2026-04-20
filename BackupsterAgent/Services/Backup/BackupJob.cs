@@ -236,19 +236,19 @@ public sealed class BackupJob
                 config.Database, config.FilePaths.Count);
 
             reporter.Report(BackupStage.CapturingFiles);
-            var capture = await _fileBackup.CaptureAsync(config.FilePaths, uploader, reporter, ct);
-            var manifest = capture.Manifest with
-            {
-                Database = config.Database,
-                DumpObjectKey = dumpObjectKey ?? string.Empty,
-            };
-            var manifestKey = await _manifestStore.SaveAsync(manifest, backupFolder, uploader, ct);
+
+            await using var writer = _manifestStore.OpenWriter(
+                config.Database,
+                dumpObjectKey ?? string.Empty);
+
+            var capture = await _fileBackup.CaptureAsync(config.FilePaths, uploader, writer, reporter, ct);
+            var manifestKey = await writer.CompleteAsync(uploader, backupFolder, ct);
 
             var metrics = new FileBackupMetrics
             {
                 ManifestKey = manifestKey,
-                FilesCount = manifest.Files.Count,
-                FilesTotalBytes = manifest.Files.Sum(f => f.Size),
+                FilesCount = checked((int)writer.FilesCount),
+                FilesTotalBytes = writer.FilesTotalBytes,
                 NewChunksCount = capture.NewChunksCount,
             };
             return (metrics, null);
