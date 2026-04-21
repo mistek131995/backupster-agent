@@ -129,8 +129,8 @@ public sealed class AgentTaskPollingService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
-                    "AgentTaskPollingService: polling error, backing off {BackoffSec}s",
+                _logger.LogWarning(
+                    "AgentTaskPollingService: dashboard unavailable, backing off {BackoffSec}s",
                     backoff.TotalSeconds);
 
                 if (!await DelayOrCancel(backoff, stoppingToken)) break;

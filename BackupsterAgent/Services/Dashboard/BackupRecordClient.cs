@@ -74,8 +74,8 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         catch (Exception ex)
         {
             var availability = DashboardAvailabilityPolicy.ClassifyException(ex);
-            _logger.LogWarning(ex,
-                "BackupRecordClient: open failed for '{Database}' — classified as {Availability}",
+            _logger.LogWarning(
+                "BackupRecordClient: dashboard unavailable, open skipped for '{Database}' — {Availability}",
                 dto.DatabaseName, availability);
             return new OpenRecordResult(availability);
         }
@@ -145,8 +145,8 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         catch (Exception ex)
         {
             var availability = DashboardAvailabilityPolicy.ClassifyException(ex);
-            _logger.LogWarning(ex,
-                "BackupRecordClient: finalize failed for record {Id} — classified as {Availability}",
+            _logger.LogWarning(
+                "BackupRecordClient: dashboard unavailable, finalize skipped for record {Id} — {Availability}",
                 backupRecordId, availability);
             return new FinalizeRecordResult(availability);
         }

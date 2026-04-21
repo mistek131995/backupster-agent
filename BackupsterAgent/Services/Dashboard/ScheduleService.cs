@@ -88,8 +88,7 @@ public sealed class ScheduleService : DashboardClientBase
         catch (Exception ex)
         {
             _lastFetchAt = DateTime.UtcNow;
-            _logger.LogWarning(ex,
-                "ScheduleService: failed to fetch schedule from server. Using last known schedule.");
+            _logger.LogWarning("ScheduleService: dashboard unavailable, using last known schedule.");
         }
     }
 
