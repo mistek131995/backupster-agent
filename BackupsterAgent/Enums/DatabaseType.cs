@@ -5,4 +5,5 @@ public enum DatabaseType
     Postgres,
     Mssql,
     Mysql,
+    FileSet,
 }

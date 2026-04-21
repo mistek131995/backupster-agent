@@ -36,6 +36,7 @@ public static class ConfigBootstrapper
               "FilePaths": []
             }
           ],
+          "FileSets": [],
           "EncryptionSettings": {
             "Key": ""
           }

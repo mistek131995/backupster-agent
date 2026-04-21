@@ -180,6 +180,8 @@ public sealed class OutboxReplayWorker : BackgroundService
         ConnectionName = entry.ConnectionName,
         StorageName = entry.StorageName,
         StartedAt = entry.StartedAt,
+        DatabaseType = entry.DatabaseType,
+        FileSetName = entry.FileSetName,
     };
 
     private static FinalizeBackupRecordDto BuildFinalizeDto(OutboxEntry entry) => new()

@@ -27,8 +27,23 @@ public abstract class DashboardClientBase
 
     protected DashboardClientBase(AgentSettings settings, IDashboardAuthGuard authGuard)
     {
-        Settings = settings;
+        Settings = NormalizeUrl(settings);
         AuthGuard = authGuard;
+    }
+
+    private static AgentSettings NormalizeUrl(AgentSettings settings)
+    {
+        var url = settings.DashboardUrl;
+        if (!string.IsNullOrWhiteSpace(url) &&
+            !url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            url = "https://" + url;
+        }
+
+        return url == settings.DashboardUrl
+            ? settings
+            : new AgentSettings { Token = settings.Token, DashboardUrl = url };
     }
 
     protected bool IsConfigured(ILogger logger, string clientName)

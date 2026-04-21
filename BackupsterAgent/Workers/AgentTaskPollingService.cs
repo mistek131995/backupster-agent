@@ -24,11 +24,13 @@ public sealed class AgentTaskPollingService : BackgroundService
     private readonly FileRestoreService _fileRestore;
     private readonly BackupDeleteService _backupDelete;
     private readonly BackupJob _backupJob;
+    private readonly FileSetBackupJob _fileSetBackupJob;
     private readonly IBackupRunTracker _runTracker;
     private readonly IAgentActivityLock _activityLock;
     private readonly IProgressReporterFactory _reporterFactory;
     private readonly IUploadServiceFactory _uploadFactory;
     private readonly List<DatabaseConfig> _databases;
+    private readonly List<FileSetConfig> _fileSets;
     private readonly RestoreSettings _restoreSettings;
     private readonly ILogger<AgentTaskPollingService> _logger;
 
@@ -38,11 +40,13 @@ public sealed class AgentTaskPollingService : BackgroundService
         FileRestoreService fileRestore,
         BackupDeleteService backupDelete,
         BackupJob backupJob,
+        FileSetBackupJob fileSetBackupJob,
         IBackupRunTracker runTracker,
         IAgentActivityLock activityLock,
         IProgressReporterFactory reporterFactory,
         IUploadServiceFactory uploadFactory,
         IOptions<List<DatabaseConfig>> databases,
+        IOptions<List<FileSetConfig>> fileSets,
         IOptions<RestoreSettings> restoreSettings,
         ILogger<AgentTaskPollingService> logger)
     {
@@ -51,11 +55,13 @@ public sealed class AgentTaskPollingService : BackgroundService
         _fileRestore = fileRestore;
         _backupDelete = backupDelete;
         _backupJob = backupJob;
+        _fileSetBackupJob = fileSetBackupJob;
         _runTracker = runTracker;
         _activityLock = activityLock;
         _reporterFactory = reporterFactory;
         _uploadFactory = uploadFactory;
         _databases = databases.Value;
+        _fileSets = fileSets.Value;
         _restoreSettings = restoreSettings.Value;
         _logger = logger;
     }
@@ -256,14 +262,28 @@ public sealed class AgentTaskPollingService : BackgroundService
 
     private async Task<PatchAgentTaskDto> ExecuteBackupAsync(AgentTaskForAgentDto task, CancellationToken ct)
     {
-        if (task.Backup is null || string.IsNullOrWhiteSpace(task.Backup.DatabaseName))
+        if (task.Backup is null)
         {
             _logger.LogWarning(
                 "AgentTaskPollingService: backup task {TaskId} has empty payload.", task.Id);
             return new PatchAgentTaskDto
             {
                 Status = AgentTaskStatus.Failed,
-                ErrorMessage = "Сервер не передал имя БД для backup-задачи.",
+                ErrorMessage = "Сервер не передал тело backup-задачи.",
+            };
+        }
+
+        if (!string.IsNullOrWhiteSpace(task.Backup.FileSetName))
+            return await ExecuteFileSetBackupAsync(task, task.Backup.FileSetName, ct);
+
+        if (string.IsNullOrWhiteSpace(task.Backup.DatabaseName))
+        {
+            _logger.LogWarning(
+                "AgentTaskPollingService: backup task {TaskId} has no DatabaseName or FileSetName.", task.Id);
+            return new PatchAgentTaskDto
+            {
+                Status = AgentTaskStatus.Failed,
+                ErrorMessage = "Сервер не передал имя БД или набора файлов для backup-задачи.",
             };
         }
 
@@ -309,6 +329,64 @@ public sealed class AgentTaskPollingService : BackgroundService
         }
 
         _runTracker.RecordRun(databaseName, DateTime.UtcNow);
+
+        return result.Success
+            ? new PatchAgentTaskDto
+            {
+                Status = AgentTaskStatus.Success,
+                Backup = new BackupTaskResult { BackupRecordId = result.BackupRecordId },
+            }
+            : new PatchAgentTaskDto
+            {
+                Status = AgentTaskStatus.Failed,
+                ErrorMessage = result.ErrorMessage,
+                Backup = new BackupTaskResult { BackupRecordId = result.BackupRecordId },
+            };
+    }
+
+    private async Task<PatchAgentTaskDto> ExecuteFileSetBackupAsync(
+        AgentTaskForAgentDto task, string fileSetName, CancellationToken ct)
+    {
+        var config = _fileSets.FirstOrDefault(
+            f => string.Equals(f.Name, fileSetName, StringComparison.Ordinal));
+
+        if (config is null)
+        {
+            _logger.LogWarning(
+                "AgentTaskPollingService: backup task {TaskId} references unknown file set '{Name}'",
+                task.Id, fileSetName);
+            return new PatchAgentTaskDto
+            {
+                Status = AgentTaskStatus.Failed,
+                ErrorMessage = $"Набор файлов '{fileSetName}' не найден в конфиге агента.",
+            };
+        }
+
+        _logger.LogInformation(
+            "AgentTaskPollingService: executing file-set backup task {TaskId} for '{Name}'",
+            task.Id, fileSetName);
+
+        BackupResult result;
+        try
+        {
+            result = await _fileSetBackupJob.RunAsync(config, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "AgentTaskPollingService: file-set backup task {TaskId} threw", task.Id);
+            return new PatchAgentTaskDto
+            {
+                Status = AgentTaskStatus.Failed,
+                ErrorMessage = $"Неожиданная ошибка бэкапа файлов: {ex.Message}",
+            };
+        }
+
+        _runTracker.RecordRun(IBackupRunTracker.FileSetKey(fileSetName), DateTime.UtcNow);
 
         return result.Success
             ? new PatchAgentTaskDto

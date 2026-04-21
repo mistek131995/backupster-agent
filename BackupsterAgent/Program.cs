@@ -37,6 +37,9 @@ builder.Services.Configure<List<StorageConfig>>(
 builder.Services.Configure<List<DatabaseConfig>>(
     builder.Configuration.GetSection("Databases"));
 
+builder.Services.Configure<List<FileSetConfig>>(
+    builder.Configuration.GetSection("FileSets"));
+
 builder.Services.Configure<EncryptionSettings>(
     builder.Configuration.GetSection("EncryptionSettings"));
 
@@ -104,6 +107,10 @@ builder.Services.AddHttpClient<ScheduleService>(
     c => c.Timeout = TimeSpan.FromSeconds(20));
 builder.Services.AddHttpClient<IConnectionSyncService, ConnectionSyncService>(
     c => c.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddHttpClient<IFileSetSyncService, FileSetSyncService>(
+    c => c.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddHttpClient<IDatabaseSyncService, DatabaseSyncService>(
+    c => c.Timeout = TimeSpan.FromSeconds(20));
 builder.Services.AddHttpClient<IAgentTaskClient, AgentTaskClient>(
     c => c.Timeout = TimeSpan.FromSeconds(60));
 builder.Services.AddHttpClient<IRetentionClient, RetentionClient>(
@@ -115,8 +122,12 @@ builder.Services.AddSingleton<BackupDeleteService>();
 builder.Services.AddSingleton<ChunkGcService>();
 builder.Services.AddSingleton<RetentionSweepService>();
 builder.Services.AddSingleton<BackupJob>();
+builder.Services.AddSingleton<FileSetBackupJob>();
 builder.Services.AddHostedService<BackupWorker>();
+builder.Services.AddHostedService<FileSetWorker>();
 builder.Services.AddHostedService<ConnectionSyncWorker>();
+builder.Services.AddHostedService<FileSetSyncWorker>();
+builder.Services.AddHostedService<DatabaseSyncWorker>();
 builder.Services.AddHostedService<AgentTaskPollingService>();
 builder.Services.AddHostedService<ChunkGcWorker>();
 builder.Services.AddHostedService<RetentionWorker>();

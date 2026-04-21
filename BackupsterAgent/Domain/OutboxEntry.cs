@@ -1,3 +1,5 @@
+using BackupsterAgent.Enums;
+
 namespace BackupsterAgent.Domain;
 
 public sealed record OutboxEntry
@@ -22,4 +24,6 @@ public sealed record OutboxEntry
     public DateTime QueuedAt { get; init; }
     public int AttemptCount { get; init; }
     public Guid? ServerRecordId { get; init; }
+    public DatabaseType? DatabaseType { get; init; }
+    public string? FileSetName { get; init; }
 }
