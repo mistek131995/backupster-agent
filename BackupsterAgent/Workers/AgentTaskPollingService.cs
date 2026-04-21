@@ -1,14 +1,10 @@
-using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
-using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
-using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Dashboard;
-using BackupsterAgent.Services.Delete;
 using BackupsterAgent.Services.Restore;
-using BackupsterAgent.Services.Upload;
 using BackupsterAgent.Settings;
+using BackupsterAgent.Workers.Handlers;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Workers;
@@ -20,48 +16,21 @@ public sealed class AgentTaskPollingService : BackgroundService
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(5);
 
     private readonly IAgentTaskClient _client;
-    private readonly DatabaseRestoreService _databaseRestore;
-    private readonly FileRestoreService _fileRestore;
-    private readonly BackupDeleteService _backupDelete;
-    private readonly BackupJob _backupJob;
-    private readonly FileSetBackupJob _fileSetBackupJob;
-    private readonly IBackupRunTracker _runTracker;
+    private readonly IReadOnlyList<IAgentTaskHandler> _handlers;
     private readonly IAgentActivityLock _activityLock;
-    private readonly IProgressReporterFactory _reporterFactory;
-    private readonly IUploadServiceFactory _uploadFactory;
-    private readonly List<DatabaseConfig> _databases;
-    private readonly List<FileSetConfig> _fileSets;
     private readonly RestoreSettings _restoreSettings;
     private readonly ILogger<AgentTaskPollingService> _logger;
 
     public AgentTaskPollingService(
         IAgentTaskClient client,
-        DatabaseRestoreService databaseRestore,
-        FileRestoreService fileRestore,
-        BackupDeleteService backupDelete,
-        BackupJob backupJob,
-        FileSetBackupJob fileSetBackupJob,
-        IBackupRunTracker runTracker,
+        IEnumerable<IAgentTaskHandler> handlers,
         IAgentActivityLock activityLock,
-        IProgressReporterFactory reporterFactory,
-        IUploadServiceFactory uploadFactory,
-        IOptions<List<DatabaseConfig>> databases,
-        IOptions<List<FileSetConfig>> fileSets,
         IOptions<RestoreSettings> restoreSettings,
         ILogger<AgentTaskPollingService> logger)
     {
         _client = client;
-        _databaseRestore = databaseRestore;
-        _fileRestore = fileRestore;
-        _backupDelete = backupDelete;
-        _backupJob = backupJob;
-        _fileSetBackupJob = fileSetBackupJob;
-        _runTracker = runTracker;
+        _handlers = handlers.ToArray();
         _activityLock = activityLock;
-        _reporterFactory = reporterFactory;
-        _uploadFactory = uploadFactory;
-        _databases = databases.Value;
-        _fileSets = fileSets.Value;
         _restoreSettings = restoreSettings.Value;
         _logger = logger;
     }
@@ -95,7 +64,7 @@ public sealed class AgentTaskPollingService : BackgroundService
                     PatchAgentTaskDto patch;
                     try
                     {
-                        patch = await ExecuteTaskAsync(task, stoppingToken);
+                        patch = await DispatchAsync(task, stoppingToken);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
@@ -149,14 +118,16 @@ public sealed class AgentTaskPollingService : BackgroundService
         _logger.LogInformation("AgentTaskPollingService stopped");
     }
 
-    private Task<PatchAgentTaskDto> ExecuteTaskAsync(AgentTaskForAgentDto task, CancellationToken ct) =>
-        task.Type switch
+    private Task<PatchAgentTaskDto> DispatchAsync(AgentTaskForAgentDto task, CancellationToken ct)
+    {
+        foreach (var handler in _handlers)
         {
-            AgentTaskType.Restore => ExecuteRestoreAsync(task, ct),
-            AgentTaskType.Delete => ExecuteDeleteAsync(task, ct),
-            AgentTaskType.Backup => ExecuteBackupAsync(task, ct),
-            _ => Task.FromResult(RejectUnsupported(task, task.Type.ToString())),
-        };
+            if (handler.CanHandle(task))
+                return handler.HandleAsync(task, ct);
+        }
+
+        return Task.FromResult(RejectUnsupported(task, task.Type.ToString()));
+    }
 
     private PatchAgentTaskDto RejectUnsupported(AgentTaskForAgentDto task, string typeName)
     {
@@ -171,250 +142,6 @@ public sealed class AgentTaskPollingService : BackgroundService
                 $"Тип задачи '{typeName}' не поддерживается этой версией агента. " +
                 "Обновите агента до актуальной версии.",
         };
-    }
-
-    private async Task<PatchAgentTaskDto> ExecuteRestoreAsync(AgentTaskForAgentDto task, CancellationToken ct)
-    {
-        if (task.Restore is null)
-        {
-            _logger.LogWarning(
-                "AgentTaskPollingService: restore task {TaskId} has empty payload.", task.Id);
-            return new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = "Сервер не передал тело restore-задачи.",
-                Restore = new RestoreTaskResult { DatabaseStatus = RestoreDatabaseStatus.Failed },
-            };
-        }
-
-        var payload = task.Restore;
-        var isFileSet = string.IsNullOrWhiteSpace(payload.DumpObjectKey);
-
-        _logger.LogInformation(
-            "AgentTaskPollingService: executing restore task {TaskId} (source '{Source}', target '{Target}', fileSet={IsFileSet})",
-            task.Id, payload.SourceDatabaseName,
-            payload.TargetDatabaseName ?? payload.SourceDatabaseName, isFileSet);
-
-        if (isFileSet && string.IsNullOrWhiteSpace(payload.ManifestKey))
-        {
-            _logger.LogWarning(
-                "AgentTaskPollingService: restore task {TaskId} has neither DumpObjectKey nor ManifestKey",
-                task.Id);
-            return FailRestore("В задаче восстановления нет ни дампа, ни манифеста файлов.");
-        }
-
-        if (ValidateTaskNames(payload) is { } validationError)
-        {
-            _logger.LogWarning(
-                "AgentTaskPollingService: restore task {TaskId} rejected by name validation: {Reason}",
-                task.Id, validationError);
-            return FailRestore(validationError);
-        }
-
-        await using var reporter = _reporterFactory.CreateForRestore(task.Id);
-
-        IUploadService uploader;
-        try
-        {
-            uploader = ResolveUploader(payload);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "AgentTaskPollingService: failed to resolve storage for task {TaskId}", task.Id);
-            return FailRestore(ex.Message);
-        }
-
-        var dbResult = isFileSet
-            ? DatabaseRestoreResult.Success()
-            : await _databaseRestore.RunAsync(task.Id, payload, uploader, reporter, ct);
-
-        var fileResult = payload.ManifestKey is null
-            ? FileRestoreResult.Skipped()
-            : await _fileRestore.RunAsync(payload.ManifestKey, payload.TargetFileRoot, uploader, reporter, ct);
-
-        return CombineResults(dbResult, fileResult);
-    }
-
-    private static PatchAgentTaskDto FailRestore(string message) => new()
-    {
-        Status = AgentTaskStatus.Failed,
-        ErrorMessage = message,
-        Restore = new RestoreTaskResult { DatabaseStatus = RestoreDatabaseStatus.Failed },
-    };
-
-    private async Task<PatchAgentTaskDto> ExecuteDeleteAsync(AgentTaskForAgentDto task, CancellationToken ct)
-    {
-        if (task.Delete is null)
-        {
-            _logger.LogWarning(
-                "AgentTaskPollingService: delete task {TaskId} has empty payload.", task.Id);
-            return new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = "Сервер не передал тело delete-задачи.",
-            };
-        }
-
-        var payload = task.Delete;
-
-        _logger.LogInformation(
-            "AgentTaskPollingService: executing delete task {TaskId} (storage '{Storage}')",
-            task.Id, payload.StorageName);
-
-        await using var reporter = _reporterFactory.CreateForDelete(task.Id);
-
-        var result = await _backupDelete.RunAsync(task.Id, payload, reporter, ct);
-
-        return result.IsSuccess
-            ? new PatchAgentTaskDto { Status = AgentTaskStatus.Success }
-            : new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = result.ErrorMessage,
-            };
-    }
-
-    private async Task<PatchAgentTaskDto> ExecuteBackupAsync(AgentTaskForAgentDto task, CancellationToken ct)
-    {
-        if (task.Backup is null)
-        {
-            _logger.LogWarning(
-                "AgentTaskPollingService: backup task {TaskId} has empty payload.", task.Id);
-            return new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = "Сервер не передал тело backup-задачи.",
-            };
-        }
-
-        if (!string.IsNullOrWhiteSpace(task.Backup.FileSetName))
-            return await ExecuteFileSetBackupAsync(task, task.Backup.FileSetName, ct);
-
-        if (string.IsNullOrWhiteSpace(task.Backup.DatabaseName))
-        {
-            _logger.LogWarning(
-                "AgentTaskPollingService: backup task {TaskId} has no DatabaseName or FileSetName.", task.Id);
-            return new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = "Сервер не передал имя БД или набора файлов для backup-задачи.",
-            };
-        }
-
-        var databaseName = task.Backup.DatabaseName;
-
-        var config = _databases.FirstOrDefault(
-            d => string.Equals(d.Database, databaseName, StringComparison.Ordinal));
-
-        if (config is null)
-        {
-            _logger.LogWarning(
-                "AgentTaskPollingService: backup task {TaskId} references unknown database '{Database}'",
-                task.Id, databaseName);
-            return new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = $"БД '{databaseName}' не найдена в конфиге агента.",
-            };
-        }
-
-        _logger.LogInformation(
-            "AgentTaskPollingService: executing backup task {TaskId} for database '{Database}'",
-            task.Id, databaseName);
-
-        BackupResult result;
-        try
-        {
-            result = await _backupJob.RunAsync(config, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "AgentTaskPollingService: backup task {TaskId} threw", task.Id);
-            return new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = $"Неожиданная ошибка бэкапа: {ex.Message}",
-            };
-        }
-
-        _runTracker.RecordRun(databaseName, DateTime.UtcNow);
-
-        return result.Success
-            ? new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Success,
-                Backup = new BackupTaskResult { BackupRecordId = result.BackupRecordId },
-            }
-            : new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = result.ErrorMessage,
-                Backup = new BackupTaskResult { BackupRecordId = result.BackupRecordId },
-            };
-    }
-
-    private async Task<PatchAgentTaskDto> ExecuteFileSetBackupAsync(
-        AgentTaskForAgentDto task, string fileSetName, CancellationToken ct)
-    {
-        var config = _fileSets.FirstOrDefault(
-            f => string.Equals(f.Name, fileSetName, StringComparison.Ordinal));
-
-        if (config is null)
-        {
-            _logger.LogWarning(
-                "AgentTaskPollingService: backup task {TaskId} references unknown file set '{Name}'",
-                task.Id, fileSetName);
-            return new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = $"Набор файлов '{fileSetName}' не найден в конфиге агента.",
-            };
-        }
-
-        _logger.LogInformation(
-            "AgentTaskPollingService: executing file-set backup task {TaskId} for '{Name}'",
-            task.Id, fileSetName);
-
-        BackupResult result;
-        try
-        {
-            result = await _fileSetBackupJob.RunAsync(config, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "AgentTaskPollingService: file-set backup task {TaskId} threw", task.Id);
-            return new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = $"Неожиданная ошибка бэкапа файлов: {ex.Message}",
-            };
-        }
-
-        _runTracker.RecordRun(IBackupRunTracker.FileSetKey(fileSetName), DateTime.UtcNow);
-
-        return result.Success
-            ? new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Success,
-                Backup = new BackupTaskResult { BackupRecordId = result.BackupRecordId },
-            }
-            : new PatchAgentTaskDto
-            {
-                Status = AgentTaskStatus.Failed,
-                ErrorMessage = result.ErrorMessage,
-                Backup = new BackupTaskResult { BackupRecordId = result.BackupRecordId },
-            };
     }
 
     private void CleanupOrphanTemp()
@@ -458,75 +185,6 @@ public sealed class AgentTaskPollingService : BackgroundService
         {
             _logger.LogWarning(ex, "Failed to clean restore temp root '{TempRoot}'", tempRoot);
         }
-    }
-
-    internal static string? ValidateTaskNames(RestoreTaskPayload payload)
-    {
-        if (!DatabaseNameValidator.IsValid(payload.SourceDatabaseName, out var sourceReason))
-            return $"Имя исходной БД не прошло валидацию: {sourceReason}.";
-
-        if (!string.IsNullOrEmpty(payload.TargetDatabaseName)
-            && !DatabaseNameValidator.IsValid(payload.TargetDatabaseName, out var targetReason))
-        {
-            return $"Имя целевой БД не прошло валидацию: {targetReason}.";
-        }
-
-        return null;
-    }
-
-    internal IUploadService ResolveUploader(RestoreTaskPayload payload)
-    {
-        var storageName = payload.StorageName;
-
-        if (string.IsNullOrWhiteSpace(storageName))
-        {
-            var dbConfig = _databases.FirstOrDefault(
-                d => string.Equals(d.Database, payload.SourceDatabaseName, StringComparison.Ordinal));
-
-            if (dbConfig is null)
-            {
-                throw new InvalidOperationException(
-                    $"БД '{payload.SourceDatabaseName}' не найдена в конфиге агента, а дашборд не передал StorageName. " +
-                    "Добавьте БД в конфиг либо обновите дашборд, чтобы он передавал имя хранилища.");
-            }
-
-            storageName = dbConfig.StorageName;
-        }
-
-        return _uploadFactory.GetService(storageName);
-    }
-
-    internal static PatchAgentTaskDto CombineResults(DatabaseRestoreResult db, FileRestoreResult files)
-    {
-        var databaseStatus = db.IsSuccess ? RestoreDatabaseStatus.Success : RestoreDatabaseStatus.Failed;
-        var filesStatus = files.Status;
-
-        AgentTaskStatus overallStatus;
-        if (!db.IsSuccess)
-            overallStatus = AgentTaskStatus.Failed;
-        else if (filesStatus is RestoreFilesStatus.Failed or RestoreFilesStatus.Partial)
-            overallStatus = AgentTaskStatus.Partial;
-        else
-            overallStatus = AgentTaskStatus.Success;
-
-        string? errorMessage;
-        if (db.ErrorMessage is not null && files.ErrorMessage is not null)
-            errorMessage = $"{db.ErrorMessage}\n\n{files.ErrorMessage}";
-        else
-            errorMessage = db.ErrorMessage ?? files.ErrorMessage;
-
-        return new PatchAgentTaskDto
-        {
-            Status = overallStatus,
-            ErrorMessage = errorMessage,
-            Restore = new RestoreTaskResult
-            {
-                DatabaseStatus = databaseStatus,
-                FilesStatus = filesStatus,
-                FilesRestoredCount = files.FilesRestoredCount > 0 ? files.FilesRestoredCount : null,
-                FilesFailedCount = files.FilesFailedCount > 0 ? files.FilesFailedCount : null,
-            },
-        };
     }
 
     private static async Task<bool> DelayOrCancel(TimeSpan delay, CancellationToken ct)

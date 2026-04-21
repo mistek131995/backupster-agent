@@ -10,6 +10,7 @@ using BackupsterAgent.Services.Restore;
 using BackupsterAgent.Services.Upload;
 using BackupsterAgent.Settings;
 using BackupsterAgent.Workers;
+using BackupsterAgent.Workers.Handlers;
 using Microsoft.Extensions.Options;
 
 var defaultConfigDir = OperatingSystem.IsWindows()
@@ -123,6 +124,10 @@ builder.Services.AddSingleton<ChunkGcService>();
 builder.Services.AddSingleton<RetentionSweepService>();
 builder.Services.AddSingleton<BackupJob>();
 builder.Services.AddSingleton<FileSetBackupJob>();
+builder.Services.AddSingleton<IAgentTaskHandler, RestoreTaskHandler>();
+builder.Services.AddSingleton<IAgentTaskHandler, DeleteTaskHandler>();
+builder.Services.AddSingleton<IAgentTaskHandler, BackupTaskHandler>();
+builder.Services.AddSingleton<IAgentTaskHandler, FileSetBackupTaskHandler>();
 builder.Services.AddHostedService<BackupWorker>();
 builder.Services.AddHostedService<FileSetWorker>();
 builder.Services.AddHostedService<ConnectionSyncWorker>();

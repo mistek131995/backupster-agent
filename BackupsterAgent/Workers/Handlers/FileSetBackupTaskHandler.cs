@@ -1,0 +1,92 @@
+using BackupsterAgent.Configuration;
+using BackupsterAgent.Contracts;
+using BackupsterAgent.Domain;
+using BackupsterAgent.Enums;
+using BackupsterAgent.Services.Backup;
+using BackupsterAgent.Services.Common;
+using Microsoft.Extensions.Options;
+
+namespace BackupsterAgent.Workers.Handlers;
+
+public sealed class FileSetBackupTaskHandler : IAgentTaskHandler
+{
+    private readonly FileSetBackupJob _fileSetBackupJob;
+    private readonly IBackupRunTracker _runTracker;
+    private readonly List<FileSetConfig> _fileSets;
+    private readonly ILogger<FileSetBackupTaskHandler> _logger;
+
+    public FileSetBackupTaskHandler(
+        FileSetBackupJob fileSetBackupJob,
+        IBackupRunTracker runTracker,
+        IOptions<List<FileSetConfig>> fileSets,
+        ILogger<FileSetBackupTaskHandler> logger)
+    {
+        _fileSetBackupJob = fileSetBackupJob;
+        _runTracker = runTracker;
+        _fileSets = fileSets.Value;
+        _logger = logger;
+    }
+
+    public bool CanHandle(AgentTaskForAgentDto task) =>
+        task.Type == AgentTaskType.Backup
+        && !string.IsNullOrWhiteSpace(task.Backup?.FileSetName);
+
+    public async Task<PatchAgentTaskDto> HandleAsync(AgentTaskForAgentDto task, CancellationToken ct)
+    {
+        var fileSetName = task.Backup!.FileSetName!;
+
+        var config = _fileSets.FirstOrDefault(
+            f => string.Equals(f.Name, fileSetName, StringComparison.Ordinal));
+
+        if (config is null)
+        {
+            _logger.LogWarning(
+                "FileSetBackupTaskHandler: backup task {TaskId} references unknown file set '{Name}'",
+                task.Id, fileSetName);
+            return new PatchAgentTaskDto
+            {
+                Status = AgentTaskStatus.Failed,
+                ErrorMessage = $"Набор файлов '{fileSetName}' не найден в конфиге агента.",
+            };
+        }
+
+        _logger.LogInformation(
+            "FileSetBackupTaskHandler: executing file-set backup task {TaskId} for '{Name}'",
+            task.Id, fileSetName);
+
+        BackupResult result;
+        try
+        {
+            result = await _fileSetBackupJob.RunAsync(config, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "FileSetBackupTaskHandler: file-set backup task {TaskId} threw", task.Id);
+            return new PatchAgentTaskDto
+            {
+                Status = AgentTaskStatus.Failed,
+                ErrorMessage = $"Неожиданная ошибка бэкапа файлов: {ex.Message}",
+            };
+        }
+
+        _runTracker.RecordRun(IBackupRunTracker.FileSetKey(fileSetName), DateTime.UtcNow);
+
+        return result.Success
+            ? new PatchAgentTaskDto
+            {
+                Status = AgentTaskStatus.Success,
+                Backup = new BackupTaskResult { BackupRecordId = result.BackupRecordId },
+            }
+            : new PatchAgentTaskDto
+            {
+                Status = AgentTaskStatus.Failed,
+                ErrorMessage = result.ErrorMessage,
+                Backup = new BackupTaskResult { BackupRecordId = result.BackupRecordId },
+            };
+    }
+}
