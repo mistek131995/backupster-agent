@@ -50,6 +50,9 @@ public sealed class DatabaseRestoreService
         IProgressReporter<RestoreStage> reporter,
         CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(payload.DumpObjectKey))
+            return DatabaseRestoreResult.Failed("Задача восстановления БД без DumpObjectKey.");
+
         var tempDir = ResolveTempDir(taskId);
         var targetDatabase = string.IsNullOrWhiteSpace(payload.TargetDatabaseName)
             ? payload.SourceDatabaseName
@@ -74,7 +77,7 @@ public sealed class DatabaseRestoreService
             reporter.Report(RestoreStage.DownloadingDump, processed: 0, unit: "bytes");
             var downloadProgress = new Progress<long>(bytes =>
                 reporter.Report(RestoreStage.DownloadingDump, processed: bytes, unit: "bytes"));
-            await uploader.DownloadAsync(payload.DumpObjectKey, encryptedPath, downloadProgress, ct);
+            await uploader.DownloadAsync(payload.DumpObjectKey!, encryptedPath, downloadProgress, ct);
 
             var decryptedPath = Path.Combine(tempDir, "dump.bin");
             reporter.Report(RestoreStage.DecryptingDump);

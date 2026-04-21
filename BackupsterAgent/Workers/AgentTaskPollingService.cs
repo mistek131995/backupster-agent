@@ -185,10 +185,20 @@ public sealed class AgentTaskPollingService : BackgroundService
         }
 
         var payload = task.Restore;
+        var isFileSet = string.IsNullOrWhiteSpace(payload.DumpObjectKey);
 
         _logger.LogInformation(
-            "AgentTaskPollingService: executing restore task {TaskId} (source '{Source}', target '{Target}')",
-            task.Id, payload.SourceDatabaseName, payload.TargetDatabaseName ?? payload.SourceDatabaseName);
+            "AgentTaskPollingService: executing restore task {TaskId} (source '{Source}', target '{Target}', fileSet={IsFileSet})",
+            task.Id, payload.SourceDatabaseName,
+            payload.TargetDatabaseName ?? payload.SourceDatabaseName, isFileSet);
+
+        if (isFileSet && string.IsNullOrWhiteSpace(payload.ManifestKey))
+        {
+            _logger.LogWarning(
+                "AgentTaskPollingService: restore task {TaskId} has neither DumpObjectKey nor ManifestKey",
+                task.Id);
+            return FailRestore("В задаче восстановления нет ни дампа, ни манифеста файлов.");
+        }
 
         if (ValidateTaskNames(payload) is { } validationError)
         {
@@ -212,7 +222,9 @@ public sealed class AgentTaskPollingService : BackgroundService
             return FailRestore(ex.Message);
         }
 
-        var dbResult = await _databaseRestore.RunAsync(task.Id, payload, uploader, reporter, ct);
+        var dbResult = isFileSet
+            ? DatabaseRestoreResult.Success()
+            : await _databaseRestore.RunAsync(task.Id, payload, uploader, reporter, ct);
 
         var fileResult = payload.ManifestKey is null
             ? FileRestoreResult.Skipped()
