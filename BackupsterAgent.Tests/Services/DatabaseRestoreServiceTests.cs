@@ -5,11 +5,12 @@ using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers;
 using BackupsterAgent.Providers.Restore;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Common.Security;
 using BackupsterAgent.Services.Restore;
-using BackupsterAgent.Services.Upload;
-using BackupsterAgent.Settings;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -22,7 +23,7 @@ public sealed class DatabaseRestoreServiceTests
     private string _tempRoot = null!;
     private byte[] _key = null!;
     private EncryptionService _encryption = null!;
-    private FakeUploadService _upload = null!;
+    private FakeUploadProvider _upload = null!;
     private StubRestoreProvider _provider = null!;
     private StubRestoreProviderFactory _factory = null!;
 
@@ -40,7 +41,7 @@ public sealed class DatabaseRestoreServiceTests
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_key) }),
             NullLogger<EncryptionService>.Instance);
 
-        _upload = new FakeUploadService();
+        _upload = new FakeUploadProvider();
         _provider = new StubRestoreProvider();
         _factory = new StubRestoreProviderFactory(_provider);
     }
@@ -487,7 +488,7 @@ public sealed class DatabaseRestoreServiceTests
         public IRestoreProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) => provider;
     }
 
-    private sealed class FakeUploadService : IUploadService
+    private sealed class FakeUploadProvider : IUploadProvider
     {
         public Dictionary<string, byte[]> FileBytes { get; } = [];
 

@@ -3,16 +3,20 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Outbox;
+using BackupsterAgent.Services.Common.Progress;
+using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Dashboard;
-using BackupsterAgent.Services.Upload;
+using BackupsterAgent.Services.Dashboard.Clients;
 
 namespace BackupsterAgent.Services.Backup;
 
 public sealed class FileSetBackupJob
 {
     private readonly StorageResolver _storages;
-    private readonly IUploadServiceFactory _uploadFactory;
+    private readonly IUploadProviderFactory _uploadFactory;
     private readonly FileBackupService _fileBackup;
     private readonly ManifestStore _manifestStore;
     private readonly IBackupRecordClient _recordClient;
@@ -23,7 +27,7 @@ public sealed class FileSetBackupJob
 
     public FileSetBackupJob(
         StorageResolver storages,
-        IUploadServiceFactory uploadFactory,
+        IUploadProviderFactory uploadFactory,
         FileBackupService fileBackup,
         ManifestStore manifestStore,
         IBackupRecordClient recordClient,
@@ -104,7 +108,7 @@ public sealed class FileSetBackupJob
             }
             else
             {
-                var uploader = _uploadFactory.GetService(config.StorageName);
+                var uploader = _uploadFactory.GetProvider(config.StorageName);
                 var backupFolder = $"{config.Name}/{startedAt:yyyy-MM-dd_HH-mm-ss}";
 
                 _logger.LogInformation("FileSetBackupJob resolved. Folder: '{Folder}'", backupFolder);

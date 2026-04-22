@@ -1,4 +1,5 @@
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.State;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackupsterAgent.Tests.Services;

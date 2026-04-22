@@ -4,6 +4,7 @@ using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.State;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Workers.Handlers;

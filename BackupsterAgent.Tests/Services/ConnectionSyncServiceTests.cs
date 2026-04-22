@@ -5,8 +5,9 @@ using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Dashboard;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Services.Dashboard.Sync;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 

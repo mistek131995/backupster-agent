@@ -1,8 +1,9 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using BackupsterAgent.Configuration;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Services.Common.Security;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 

@@ -1,5 +1,5 @@
 using BackupsterAgent.Configuration;
-using BackupsterAgent.Services.Dashboard;
+using BackupsterAgent.Services.Dashboard.Sync;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Workers;

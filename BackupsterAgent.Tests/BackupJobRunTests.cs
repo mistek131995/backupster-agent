@@ -5,12 +5,16 @@ using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Providers;
 using BackupsterAgent.Providers.Backup;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Outbox;
+using BackupsterAgent.Services.Common.Progress;
+using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Common.Security;
 using BackupsterAgent.Services.Dashboard;
-using BackupsterAgent.Services.Upload;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Services.Dashboard.Clients;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -21,7 +25,7 @@ public sealed class BackupJobRunTests
 {
     private string _tempRoot = null!;
     private string _outboxRoot = null!;
-    private FakeRecordingUploadService _uploader = null!;
+    private FakeRecordingUploadProvider _uploader = null!;
     private FakeBackupRecordClient _recordClient = null!;
     private OutboxStore _outboxStore = null!;
     private StubBackupProvider _provider = null!;
@@ -35,7 +39,7 @@ public sealed class BackupJobRunTests
         _outboxRoot = Path.Combine(_tempRoot, "outbox");
         _outboxStore = new OutboxStore(_outboxRoot, NullLogger<OutboxStore>.Instance);
 
-        _uploader = new FakeRecordingUploadService();
+        _uploader = new FakeRecordingUploadProvider();
         _recordClient = new FakeBackupRecordClient();
         _provider = new StubBackupProvider(_tempRoot);
     }
@@ -210,12 +214,12 @@ public sealed class BackupJobRunTests
         public IBackupProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) => provider;
     }
 
-    private sealed class StubUploadFactory(IUploadService service) : IUploadServiceFactory
+    private sealed class StubUploadFactory(IUploadProvider service) : IUploadProviderFactory
     {
-        public IUploadService GetService(string storageName) => service;
+        public IUploadProvider GetProvider(string storageName) => service;
     }
 
-    private sealed class FakeRecordingUploadService : IUploadService
+    private sealed class FakeRecordingUploadProvider : IUploadProvider
     {
         public Task<string> UploadAsync(string filePath, string folder, IProgress<long>? progress, CancellationToken ct) =>
             Task.FromResult($"fake://{folder}/{Path.GetFileName(filePath)}");

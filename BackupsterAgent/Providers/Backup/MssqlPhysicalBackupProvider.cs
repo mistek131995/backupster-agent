@@ -3,6 +3,7 @@ using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Resolvers;
 
 namespace BackupsterAgent.Providers.Backup;
 

@@ -1,8 +1,9 @@
 using System.IO.Compression;
 using System.Text.Json;
 using BackupsterAgent.Domain;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Upload;
+using BackupsterAgent.Services.Common.Security;
 
 namespace BackupsterAgent.Services.Backup;
 
@@ -76,7 +77,7 @@ public sealed class JsonManifestWriter : IManifestWriter
     }
 
     public async Task<string> CompleteAsync(
-        IUploadService uploader,
+        IUploadProvider uploader,
         string backupFolder,
         CancellationToken ct)
     {

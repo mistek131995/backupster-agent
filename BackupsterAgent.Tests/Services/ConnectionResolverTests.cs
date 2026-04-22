@@ -2,6 +2,7 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Resolvers;
 
 namespace BackupsterAgent.Tests.Services;
 

@@ -1,14 +1,15 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Security;
 using BackupsterAgent.Services.Restore;
-using BackupsterAgent.Services.Upload;
-using BackupsterAgent.Settings;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -29,7 +30,7 @@ public sealed class FileRestoreServiceTests
     private string _landingDir = null!;
     private byte[] _key = null!;
     private EncryptionService _encryption = null!;
-    private FakeUploadService _upload = null!;
+    private FakeUploadProvider _upload = null!;
     private FileRestoreService _service = null!;
 
     [SetUp]
@@ -44,7 +45,7 @@ public sealed class FileRestoreServiceTests
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_key) }),
             NullLogger<EncryptionService>.Instance);
 
-        _upload = new FakeUploadService();
+        _upload = new FakeUploadProvider();
         var restoreSettings = Options.Create(new RestoreSettings
         {
             FileRestoreBasePath = _landingDir,
@@ -494,7 +495,7 @@ public sealed class FileRestoreServiceTests
         _upload.SetBytes(ManifestKey, _encryption.Encrypt(json, Encoding.UTF8.GetBytes(ManifestKey)));
     }
 
-    private sealed class FakeUploadService : IUploadService
+    private sealed class FakeUploadProvider : IUploadProvider
     {
         private readonly Dictionary<string, byte[]> _bytes = [];
 

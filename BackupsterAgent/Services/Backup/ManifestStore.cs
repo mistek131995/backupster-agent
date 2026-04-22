@@ -1,6 +1,8 @@
+using BackupsterAgent.Configuration;
+using BackupsterAgent.Domain;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Upload;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Services.Common.Security;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Services.Backup;
@@ -45,7 +47,7 @@ public sealed class ManifestStore
 
     public Task<IManifestReader> OpenReaderAsync(
         string manifestKey,
-        IUploadService uploader,
+        IUploadProvider uploader,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(manifestKey);
@@ -61,7 +63,7 @@ public sealed class ManifestStore
     }
 
     private async Task<IManifestReader> OpenNewAsync(
-        string manifestKey, IUploadService uploader, CancellationToken ct)
+        string manifestKey, IUploadProvider uploader, CancellationToken ct)
     {
         var tempDir = BuildReaderTempDir();
         return await JsonManifestReader.OpenAsync(
@@ -74,7 +76,7 @@ public sealed class ManifestStore
     }
 
     private async Task<IManifestReader> OpenLegacyAsync(
-        string manifestKey, IUploadService uploader, CancellationToken ct)
+        string manifestKey, IUploadProvider uploader, CancellationToken ct)
     {
         return await LegacyJsonManifestReader.OpenAsync(manifestKey, uploader, _encryption, ct);
     }

@@ -1,5 +1,6 @@
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Dashboard;
+using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Dashboard.Sync;
 
 namespace BackupsterAgent.Workers;
 

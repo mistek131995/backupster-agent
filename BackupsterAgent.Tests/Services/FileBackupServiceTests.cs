@@ -1,11 +1,12 @@
 using System.Security.Cryptography;
+using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Upload;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Services.Common.Security;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -18,7 +19,7 @@ public sealed class FileBackupServiceTests
     private byte[] _encryptionKey = null!;
     private EncryptionService _encryption = null!;
     private ContentDefinedChunker _chunker = null!;
-    private FakeUploadService _uploader = null!;
+    private FakeUploadProvider _uploader = null!;
     private FileBackupService _service = null!;
 
     [SetUp]
@@ -32,7 +33,7 @@ public sealed class FileBackupServiceTests
         _encryption = new EncryptionService(encSettings, NullLogger<EncryptionService>.Instance);
 
         _chunker = new ContentDefinedChunker();
-        _uploader = new FakeUploadService();
+        _uploader = new FakeUploadProvider();
 
         _service = new FileBackupService(_chunker, _encryption, NullLogger<FileBackupService>.Instance);
     }
@@ -233,13 +234,13 @@ public sealed class FileBackupServiceTests
             return Task.CompletedTask;
         }
 
-        public Task<string> CompleteAsync(IUploadService uploader, string backupFolder, CancellationToken ct) =>
+        public Task<string> CompleteAsync(IUploadProvider uploader, string backupFolder, CancellationToken ct) =>
             Task.FromResult($"{backupFolder.TrimEnd('/')}/manifest.json.gz.enc");
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class FakeUploadService : IUploadService
+    private sealed class FakeUploadProvider : IUploadProvider
     {
         public Dictionary<string, byte[]> Uploaded { get; } = [];
         public int ExistsCalls { get; private set; }

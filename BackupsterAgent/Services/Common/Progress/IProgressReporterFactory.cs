@@ -1,0 +1,12 @@
+using BackupsterAgent.Enums;
+
+namespace BackupsterAgent.Services.Common.Progress;
+
+public interface IProgressReporterFactory
+{
+    IProgressReporter<RestoreStage> CreateForRestore(Guid taskId);
+
+    IProgressReporter<DeleteStage> CreateForDelete(Guid taskId);
+
+    IProgressReporter<BackupStage> CreateForBackup(Guid backupRecordId, bool offline = false);
+}

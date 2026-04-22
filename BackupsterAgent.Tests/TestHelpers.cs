@@ -2,7 +2,9 @@ using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Dashboard;
+using BackupsterAgent.Services.Dashboard.Clients;
 
 namespace BackupsterAgent.Tests;
 

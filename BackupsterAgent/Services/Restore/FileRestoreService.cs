@@ -1,11 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
+using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Upload;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Services.Common.Progress;
+using BackupsterAgent.Services.Common.Security;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Services.Restore;
@@ -35,7 +37,7 @@ public sealed class FileRestoreService
     public async Task<FileRestoreResult> RunAsync(
         string manifestKey,
         string? targetFileRoot,
-        IUploadService uploader,
+        IUploadProvider uploader,
         IProgressReporter<RestoreStage> reporter,
         CancellationToken ct)
     {
@@ -194,7 +196,7 @@ public sealed class FileRestoreService
         return FileRestoreResult.Partial(restored, failed.Count, message);
     }
 
-    private async Task RestoreFileAsync(FileEntry entry, string baseDir, IUploadService uploader, CancellationToken ct)
+    private async Task RestoreFileAsync(FileEntry entry, string baseDir, IUploadProvider uploader, CancellationToken ct)
     {
         var targetPath = ResolveTargetPathSafe(baseDir, entry.Path);
         var targetDir = Path.GetDirectoryName(targetPath);

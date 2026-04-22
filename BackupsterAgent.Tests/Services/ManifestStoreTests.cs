@@ -2,11 +2,12 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Upload;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Services.Common.Security;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -24,7 +25,7 @@ public sealed class ManifestStoreTests
     private byte[] _key = null!;
     private EncryptionService _encryption = null!;
     private ManifestStore _store = null!;
-    private FakeUploadService _uploader = null!;
+    private FakeUploadProvider _uploader = null!;
 
     [SetUp]
     public void SetUp()
@@ -43,7 +44,7 @@ public sealed class ManifestStoreTests
             NullLoggerFactory.Instance,
             NullLogger<ManifestStore>.Instance);
 
-        _uploader = new FakeUploadService();
+        _uploader = new FakeUploadProvider();
     }
 
     [TearDown]
@@ -201,7 +202,7 @@ public sealed class ManifestStoreTests
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
-    private sealed class FakeUploadService : IUploadService
+    private sealed class FakeUploadProvider : IUploadProvider
     {
         public Dictionary<string, byte[]> StoredBytes { get; } = new(StringComparer.Ordinal);
 

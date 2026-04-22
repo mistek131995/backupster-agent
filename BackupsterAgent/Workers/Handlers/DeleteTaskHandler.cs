@@ -1,7 +1,8 @@
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Delete;
+using BackupsterAgent.Services.Common.Progress;
 
 namespace BackupsterAgent.Workers.Handlers;
 

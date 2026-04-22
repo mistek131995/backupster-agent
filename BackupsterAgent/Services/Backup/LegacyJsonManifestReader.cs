@@ -2,8 +2,9 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using BackupsterAgent.Domain;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Upload;
+using BackupsterAgent.Services.Common.Security;
 
 namespace BackupsterAgent.Services.Backup;
 
@@ -31,7 +32,7 @@ public sealed class LegacyJsonManifestReader : IManifestReader
 
     public static async Task<LegacyJsonManifestReader> OpenAsync(
         string manifestKey,
-        IUploadService uploader,
+        IUploadProvider uploader,
         EncryptionService encryption,
         CancellationToken ct)
     {

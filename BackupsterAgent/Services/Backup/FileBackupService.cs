@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Upload;
+using BackupsterAgent.Services.Common.Progress;
+using BackupsterAgent.Services.Common.Security;
 
 namespace BackupsterAgent.Services.Backup;
 
@@ -27,7 +29,7 @@ public sealed class FileBackupService
 
     public async Task<FileBackupResult> CaptureAsync(
         List<string> filePaths,
-        IUploadService uploader,
+        IUploadProvider uploader,
         IManifestWriter writer,
         IProgressReporter<BackupStage> reporter,
         CancellationToken ct)
@@ -88,7 +90,7 @@ public sealed class FileBackupService
     }
 
     private async Task<(FileEntry Entry, int NewChunks)> CaptureFileAsync(
-        string root, string filePath, IUploadService uploader, CancellationToken ct)
+        string root, string filePath, IUploadProvider uploader, CancellationToken ct)
     {
         var info = new FileInfo(filePath);
         var relPath = Path.GetRelativePath(root, filePath).Replace('\\', '/');

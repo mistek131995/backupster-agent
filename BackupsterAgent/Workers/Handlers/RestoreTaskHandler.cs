@@ -2,9 +2,11 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Progress;
+using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Restore;
-using BackupsterAgent.Services.Upload;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Workers.Handlers;
@@ -13,7 +15,7 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
 {
     private readonly DatabaseRestoreService _databaseRestore;
     private readonly FileRestoreService _fileRestore;
-    private readonly IUploadServiceFactory _uploadFactory;
+    private readonly IUploadProviderFactory _uploadFactory;
     private readonly IProgressReporterFactory _reporterFactory;
     private readonly List<DatabaseConfig> _databases;
     private readonly ILogger<RestoreTaskHandler> _logger;
@@ -21,7 +23,7 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
     public RestoreTaskHandler(
         DatabaseRestoreService databaseRestore,
         FileRestoreService fileRestore,
-        IUploadServiceFactory uploadFactory,
+        IUploadProviderFactory uploadFactory,
         IProgressReporterFactory reporterFactory,
         IOptions<List<DatabaseConfig>> databases,
         ILogger<RestoreTaskHandler> logger)
@@ -76,7 +78,7 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
 
         await using var reporter = _reporterFactory.CreateForRestore(task.Id);
 
-        IUploadService uploader;
+        IUploadProvider uploader;
         try
         {
             uploader = ResolveUploader(payload);
@@ -120,7 +122,7 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
         return null;
     }
 
-    internal IUploadService ResolveUploader(RestoreTaskPayload payload)
+    internal IUploadProvider ResolveUploader(RestoreTaskPayload payload)
     {
         var storageName = payload.StorageName;
 
@@ -139,7 +141,7 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
             storageName = dbConfig.StorageName;
         }
 
-        return _uploadFactory.GetService(storageName);
+        return _uploadFactory.GetProvider(storageName);
     }
 
     internal static PatchAgentTaskDto CombineResults(DatabaseRestoreResult db, FileRestoreResult files)

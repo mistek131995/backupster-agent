@@ -7,9 +7,11 @@ using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers;
 using BackupsterAgent.Providers.Restore;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Upload;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Services.Common.Progress;
+using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Common.Security;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
 using MySqlConnector;
@@ -47,7 +49,7 @@ public sealed class DatabaseRestoreService
     public async Task<DatabaseRestoreResult> RunAsync(
         Guid taskId,
         RestoreTaskPayload payload,
-        IUploadService uploader,
+        IUploadProvider uploader,
         IProgressReporter<RestoreStage> reporter,
         CancellationToken ct)
     {

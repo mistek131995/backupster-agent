@@ -1,5 +1,6 @@
 using BackupsterAgent.Domain;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Outbox;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackupsterAgent.Tests.Services;

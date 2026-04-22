@@ -1,7 +1,7 @@
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Dashboard;
+using BackupsterAgent.Services.Dashboard.Clients;
 using BackupsterAgent.Workers.Handlers;
 
 namespace BackupsterAgent.Workers;

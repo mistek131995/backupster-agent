@@ -1,7 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Configuration;
 using Polly;
 using Polly.Retry;
 

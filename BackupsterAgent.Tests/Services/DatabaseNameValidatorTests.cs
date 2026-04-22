@@ -1,4 +1,5 @@
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Resolvers;
 
 namespace BackupsterAgent.Tests.Services;
 

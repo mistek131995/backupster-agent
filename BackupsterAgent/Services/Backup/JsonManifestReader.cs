@@ -4,8 +4,9 @@ using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using BackupsterAgent.Domain;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Upload;
+using BackupsterAgent.Services.Common.Security;
 
 namespace BackupsterAgent.Services.Backup;
 
@@ -51,7 +52,7 @@ public sealed class JsonManifestReader : IManifestReader
     public static async Task<JsonManifestReader> OpenAsync(
         string manifestKey,
         string tempDir,
-        IUploadService uploader,
+        IUploadProvider uploader,
         EncryptionService encryption,
         ILogger logger,
         CancellationToken ct)

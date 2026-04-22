@@ -4,11 +4,14 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Providers;
 using BackupsterAgent.Providers.Backup;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Upload;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Services.Common.Outbox;
+using BackupsterAgent.Services.Common.Progress;
+using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Common.Security;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -18,14 +21,14 @@ namespace BackupsterAgent.Tests;
 public sealed class BackupJobTests
 {
     private string _tempRoot = null!;
-    private FakeUploadService _uploader = null!;
+    private FakeUploadProvider _uploader = null!;
 
     [SetUp]
     public void SetUp()
     {
         _tempRoot = Path.Combine(Path.GetTempPath(), "dbbackup-job-tests-" + Path.GetRandomFileName());
         Directory.CreateDirectory(_tempRoot);
-        _uploader = new FakeUploadService();
+        _uploader = new FakeUploadProvider();
     }
 
     [TearDown]
@@ -177,7 +180,7 @@ public sealed class BackupJobTests
             new ConnectionResolver([]),
             new StorageResolver([]),
             encryption,
-            new StubUploadServiceFactory(_uploader),
+            new StubUploadProviderFactory(_uploader),
             fileBackup,
             manifestStore,
             new FakeBackupRecordClient(),
@@ -188,7 +191,7 @@ public sealed class BackupJobTests
             NullLogger<BackupJob>.Instance);
     }
 
-    private sealed class FakeUploadService : IUploadService
+    private sealed class FakeUploadProvider : IUploadProvider
     {
         public Dictionary<string, byte[]> Uploaded { get; } = [];
         public Dictionary<string, byte[]> UploadedFromFile { get; } = [];
@@ -231,9 +234,9 @@ public sealed class BackupJobTests
             throw new NotSupportedException("BackupJob must not call DeleteAsync");
     }
 
-    private sealed class StubUploadServiceFactory(IUploadService service) : IUploadServiceFactory
+    private sealed class StubUploadProviderFactory(IUploadProvider service) : IUploadProviderFactory
     {
-        public IUploadService GetService(string storageName) => service;
+        public IUploadProvider GetProvider(string storageName) => service;
     }
 
     private sealed class StubBackupProviderFactory : IBackupProviderFactory

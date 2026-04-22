@@ -1,5 +1,5 @@
+using BackupsterAgent.Configuration;
 using BackupsterAgent.Services.Restore;
-using BackupsterAgent.Settings;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Workers;

@@ -5,10 +5,14 @@ using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Providers;
 using BackupsterAgent.Providers.Backup;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Outbox;
+using BackupsterAgent.Services.Common.Progress;
+using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Common.Security;
 using BackupsterAgent.Services.Dashboard;
-using BackupsterAgent.Services.Upload;
-using BackupsterAgent.Settings;
+using BackupsterAgent.Services.Dashboard.Clients;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Services.Backup;
@@ -19,7 +23,7 @@ public sealed class BackupJob
     private readonly ConnectionResolver _connections;
     private readonly StorageResolver _storages;
     private readonly EncryptionService _encryption;
-    private readonly IUploadServiceFactory _uploadFactory;
+    private readonly IUploadProviderFactory _uploadFactory;
     private readonly FileBackupService _fileBackup;
     private readonly ManifestStore _manifestStore;
     private readonly IBackupRecordClient _recordClient;
@@ -34,7 +38,7 @@ public sealed class BackupJob
         ConnectionResolver connections,
         StorageResolver storages,
         EncryptionService encryption,
-        IUploadServiceFactory uploadFactory,
+        IUploadProviderFactory uploadFactory,
         FileBackupService fileBackup,
         ManifestStore manifestStore,
         IBackupRecordClient recordClient,
@@ -102,7 +106,7 @@ public sealed class BackupJob
         string? dumpObjectKey = null;
         string? backupFolder = null;
         StorageConfig? storage = null;
-        IUploadService? uploader = null;
+        IUploadProvider? uploader = null;
         BackupResult result = new() { Success = false, ErrorMessage = "Unknown error" };
         bool cancelled = false;
 
@@ -111,7 +115,7 @@ public sealed class BackupJob
             var connection = _connections.Resolve(config.ConnectionName);
             storage = _storages.Resolve(config.StorageName);
             var provider = _factory.GetProvider(connection.DatabaseType, mode);
-            uploader = _uploadFactory.GetService(config.StorageName);
+            uploader = _uploadFactory.GetProvider(config.StorageName);
             backupFolder = $"{config.Database}/{startedAt:yyyy-MM-dd_HH-mm-ss}";
 
             _logger.LogInformation(
@@ -320,7 +324,7 @@ public sealed class BackupJob
     internal async Task<(FileBackupMetrics? Metrics, string? Error)> CaptureFilesSafelyAsync(
         DatabaseConfig config,
         StorageConfig storage,
-        IUploadService uploader,
+        IUploadProvider uploader,
         string backupFolder,
         string? dumpObjectKey,
         IProgressReporter<BackupStage> reporter,

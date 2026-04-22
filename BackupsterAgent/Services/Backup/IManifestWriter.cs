@@ -1,5 +1,5 @@
 using BackupsterAgent.Domain;
-using BackupsterAgent.Services.Upload;
+using BackupsterAgent.Providers.Upload;
 
 namespace BackupsterAgent.Services.Backup;
 
@@ -11,7 +11,7 @@ public interface IManifestWriter : IAsyncDisposable
     Task AppendAsync(FileEntry entry, CancellationToken ct);
 
     Task<string> CompleteAsync(
-        IUploadService uploader,
+        IUploadProvider uploader,
         string backupFolder,
         CancellationToken ct);
 }

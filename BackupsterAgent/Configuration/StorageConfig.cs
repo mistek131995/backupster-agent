@@ -1,5 +1,4 @@
 using BackupsterAgent.Enums;
-using BackupsterAgent.Settings;
 
 namespace BackupsterAgent.Configuration;
 
