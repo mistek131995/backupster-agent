@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Providers;
+using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
@@ -237,7 +238,7 @@ public sealed class BackupJobTests
 
     private sealed class StubBackupProviderFactory : IBackupProviderFactory
     {
-        public IBackupProvider GetProvider(DatabaseType databaseType) =>
+        public IBackupProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) =>
             throw new NotSupportedException("CaptureFilesSafelyAsync must not touch the backup provider");
     }
 }

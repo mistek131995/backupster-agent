@@ -182,6 +182,7 @@ public sealed class OutboxReplayWorker : BackgroundService
         StartedAt = entry.StartedAt,
         DatabaseType = entry.DatabaseType,
         FileSetName = entry.FileSetName,
+        BackupMode = entry.BackupMode,
     };
 
     private static FinalizeBackupRecordDto BuildFinalizeDto(OutboxEntry entry) => new()

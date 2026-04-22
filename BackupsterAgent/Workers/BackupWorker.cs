@@ -199,10 +199,12 @@ public sealed class BackupWorker : BackgroundService
 
             try
             {
+                var mode = _schedule.GetBackupMode(config.Database);
+
                 BackupResult result;
                 using (await _activityLock.AcquireAsync($"backup:{config.Database}", stoppingToken))
                 {
-                    result = await _job.RunAsync(config, stoppingToken);
+                    result = await _job.RunAsync(config, mode, stoppingToken);
                 }
 
                 if (result.Success)

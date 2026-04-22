@@ -4,6 +4,7 @@ using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Providers;
+using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Services.Upload;
@@ -58,20 +59,21 @@ public sealed class BackupJob
         _logger = logger;
     }
 
-    public async Task<BackupResult> RunAsync(DatabaseConfig config, CancellationToken ct)
+    public async Task<BackupResult> RunAsync(DatabaseConfig config, BackupMode mode, CancellationToken ct)
     {
         using var activity = _activitySource.StartActivity("backup.run");
         activity?.SetTag("database", config.Database);
         activity?.SetTag("connection", config.ConnectionName);
         activity?.SetTag("storage", config.StorageName);
+        activity?.SetTag("backupMode", mode.ToString());
 
         _logger.LogInformation(
-            "BackupJob starting. Database: '{Database}', Connection: '{Connection}', Storage: '{Storage}', TraceId: {TraceId}",
-            config.Database, config.ConnectionName, config.StorageName, activity?.TraceId.ToString() ?? "-");
+            "BackupJob starting. Database: '{Database}', Connection: '{Connection}', Storage: '{Storage}', BackupMode: {BackupMode}, TraceId: {TraceId}",
+            config.Database, config.ConnectionName, config.StorageName, mode, activity?.TraceId.ToString() ?? "-");
 
         var startedAt = DateTime.UtcNow;
 
-        var openResult = await OpenRecordAsync(config, startedAt, ct);
+        var openResult = await OpenRecordAsync(config, mode, startedAt, ct);
 
         if (openResult.Status == DashboardAvailability.PermanentSkip)
         {
@@ -108,7 +110,7 @@ public sealed class BackupJob
         {
             var connection = _connections.Resolve(config.ConnectionName);
             storage = _storages.Resolve(config.StorageName);
-            var provider = _factory.GetProvider(connection.DatabaseType);
+            var provider = _factory.GetProvider(connection.DatabaseType, mode);
             uploader = _uploadFactory.GetService(config.StorageName);
             backupFolder = $"{config.Database}/{startedAt:yyyy-MM-dd_HH-mm-ss}";
 
@@ -198,7 +200,7 @@ public sealed class BackupJob
         if (offline)
         {
             await EnqueueOutboxAsync(
-                clientTaskId!, config, startedAt, finalizeDto, serverRecordId: null, ct);
+                clientTaskId!, config, mode, startedAt, finalizeDto, serverRecordId: null, ct);
         }
         else
         {
@@ -212,7 +214,7 @@ public sealed class BackupJob
                     "BackupJob: dashboard offline at finalize for '{Database}' — entry queued (clientTaskId={ClientTaskId}, serverRecordId={RecordId})",
                     config.Database, clientTaskId, recordId);
                 await EnqueueOutboxAsync(
-                    clientTaskId, config, startedAt, finalizeDto, serverRecordId: recordId, ct);
+                    clientTaskId, config, mode, startedAt, finalizeDto, serverRecordId: recordId, ct);
             }
         }
 
@@ -222,7 +224,7 @@ public sealed class BackupJob
     }
 
     private async Task<OpenRecordResult> OpenRecordAsync(
-        DatabaseConfig config, DateTime startedAt, CancellationToken ct)
+        DatabaseConfig config, BackupMode mode, DateTime startedAt, CancellationToken ct)
     {
         var result = await _recordClient.OpenAsync(
             new OpenBackupRecordDto
@@ -231,6 +233,7 @@ public sealed class BackupJob
                 ConnectionName = config.ConnectionName,
                 StorageName = config.StorageName,
                 StartedAt = startedAt,
+                BackupMode = mode,
             }, ct);
 
         if (result.Status == DashboardAvailability.PermanentSkip)
@@ -269,6 +272,7 @@ public sealed class BackupJob
     private async Task EnqueueOutboxAsync(
         string clientTaskId,
         DatabaseConfig config,
+        BackupMode mode,
         DateTime startedAt,
         FinalizeBackupRecordDto finalizeDto,
         Guid? serverRecordId,
@@ -295,6 +299,7 @@ public sealed class BackupJob
             QueuedAt = DateTime.UtcNow,
             AttemptCount = 0,
             ServerRecordId = serverRecordId,
+            BackupMode = mode,
         };
 
         try

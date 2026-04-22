@@ -79,7 +79,7 @@ public sealed class BackupTaskHandler : IAgentTaskHandler
         BackupResult result;
         try
         {
-            result = await _backupJob.RunAsync(config, ct);
+            result = await _backupJob.RunAsync(config, BackupMode.Logical, ct);
         }
         catch (OperationCanceledException)
         {

@@ -1,28 +1,34 @@
 using BackupsterAgent.Enums;
 
-namespace BackupsterAgent.Providers;
+namespace BackupsterAgent.Providers.Backup;
 
 public sealed class BackupProviderFactory : IBackupProviderFactory
 {
-    private readonly PostgresBackupProvider _postgres;
-    private readonly MssqlBackupProvider _mssql;
-    private readonly MysqlBackupProvider _mysql;
+    private readonly PostgresLogicalBackupProvider _postgresLogical;
+    private readonly MssqlPhysicalBackupProvider _mssqlPhysical;
+    private readonly MssqlLogicalBackupProvider _mssqlLogical;
+    private readonly MysqlLogicalBackupProvider _mysqlLogical;
 
     public BackupProviderFactory(
-        PostgresBackupProvider postgres,
-        MssqlBackupProvider mssql,
-        MysqlBackupProvider mysql)
+        PostgresLogicalBackupProvider postgresLogical,
+        MssqlPhysicalBackupProvider mssqlPhysical,
+        MssqlLogicalBackupProvider mssqlLogical,
+        MysqlLogicalBackupProvider mysqlLogical)
     {
-        _postgres = postgres;
-        _mssql = mssql;
-        _mysql = mysql;
+        _postgresLogical = postgresLogical;
+        _mssqlPhysical = mssqlPhysical;
+        _mssqlLogical = mssqlLogical;
+        _mysqlLogical = mysqlLogical;
     }
 
-    public IBackupProvider GetProvider(DatabaseType databaseType) => databaseType switch
-    {
-        DatabaseType.Postgres => _postgres,
-        DatabaseType.Mssql    => _mssql,
-        DatabaseType.Mysql    => _mysql,
-        _ => throw new InvalidOperationException($"Unknown DatabaseType: '{databaseType}'. Supported values: Postgres, Mssql, Mysql")
-    };
+    public IBackupProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) =>
+        (databaseType, backupMode) switch
+        {
+            (DatabaseType.Postgres, BackupMode.Logical)  => _postgresLogical,
+            (DatabaseType.Mysql,    BackupMode.Logical)  => _mysqlLogical,
+            (DatabaseType.Mssql,    BackupMode.Physical) => _mssqlPhysical,
+            (DatabaseType.Mssql,    BackupMode.Logical)  => _mssqlLogical,
+            _ => throw new NotSupportedException(
+                $"Backup provider is not implemented for DatabaseType='{databaseType}', BackupMode='{backupMode}'.")
+        };
 }

@@ -1,3 +1,5 @@
+using BackupsterAgent.Enums;
+
 namespace BackupsterAgent.Contracts;
 
 public sealed class RestoreTaskPayload
@@ -9,4 +11,6 @@ public sealed class RestoreTaskPayload
     public string? TargetFileRoot { get; init; }
     public string? TargetConnectionName { get; init; }
     public string? StorageName { get; init; }
+    public BackupMode? BackupMode { get; init; }
+    public bool ReplaceExisting { get; init; }
 }

@@ -2,10 +2,9 @@ using System.Diagnostics;
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
-using Microsoft.Extensions.Logging;
 using MySqlConnector;
 
-namespace BackupsterAgent.Providers;
+namespace BackupsterAgent.Providers.Restore;
 
 public sealed class MysqlRestoreProvider : IRestoreProvider
 {
@@ -48,7 +47,7 @@ WHERE TABLE_SCHEMA = @db;";
             $"Выдайте права: GRANT CREATE, DROP ON *.* TO '{connection.Username}'@'%'; FLUSH PRIVILEGES;.");
     }
 
-    public async Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
+    public async Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, bool replaceExisting, CancellationToken ct)
     {
         var quoted = QuoteIdentifier(targetDatabase);
 

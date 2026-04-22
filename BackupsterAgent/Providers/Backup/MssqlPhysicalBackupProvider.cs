@@ -2,17 +2,15 @@ using System.Diagnostics;
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
-using BackupsterAgent.Services;
 using BackupsterAgent.Services.Common;
-using Microsoft.Extensions.Logging;
 
-namespace BackupsterAgent.Providers;
+namespace BackupsterAgent.Providers.Backup;
 
-public sealed class MssqlBackupProvider : IBackupProvider
+public sealed class MssqlPhysicalBackupProvider : IBackupProvider
 {
-    private readonly ILogger<MssqlBackupProvider> _logger;
+    private readonly ILogger<MssqlPhysicalBackupProvider> _logger;
 
-    public MssqlBackupProvider(ILogger<MssqlBackupProvider> logger)
+    public MssqlPhysicalBackupProvider(ILogger<MssqlPhysicalBackupProvider> logger)
     {
         _logger = logger;
     }
@@ -31,7 +29,7 @@ public sealed class MssqlBackupProvider : IBackupProvider
         var agentFilePath = Path.Combine(agentDir, fileName);
 
         _logger.LogInformation(
-            "Starting MSSQL backup. Database: '{Database}', Host: '{Host}:{Port}', " +
+            "Starting MSSQL physical backup. Database: '{Database}', Host: '{Host}:{Port}', " +
             "SQL path: '{SqlPath}', Agent path: '{AgentPath}'",
             config.Database, connection.Host, connection.Port, sqlFilePath, agentFilePath);
 
@@ -102,7 +100,7 @@ public sealed class MssqlBackupProvider : IBackupProvider
         var sizeBytes = new FileInfo(agentFilePath).Length;
 
         _logger.LogInformation(
-            "MSSQL backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
+            "MSSQL physical backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
             agentFilePath, sizeBytes, sw.ElapsedMilliseconds);
 
         return new BackupResult

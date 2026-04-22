@@ -10,4 +10,5 @@ public sealed class OpenBackupRecordDto
     public DateTime? StartedAt { get; init; }
     public DatabaseType? DatabaseType { get; init; }
     public string? FileSetName { get; init; }
+    public BackupMode? BackupMode { get; init; }
 }

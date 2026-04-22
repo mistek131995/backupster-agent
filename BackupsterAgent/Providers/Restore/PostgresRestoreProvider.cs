@@ -2,11 +2,9 @@ using System.Diagnostics;
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
-using BackupsterAgent.Services;
-using Microsoft.Extensions.Logging;
 using Npgsql;
 
-namespace BackupsterAgent.Providers;
+namespace BackupsterAgent.Providers.Restore;
 
 public sealed class PostgresRestoreProvider : IRestoreProvider
 {
@@ -49,7 +47,7 @@ FROM pg_roles WHERE rolname = current_user;";
             $"Выдайте права: ALTER ROLE \"{connection.Username}\" WITH CREATEDB; и GRANT pg_signal_backend TO \"{connection.Username}\";.");
     }
 
-    public async Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
+    public async Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, bool replaceExisting, CancellationToken ct)
     {
         var quoted = QuoteIdentifier(targetDatabase);
 

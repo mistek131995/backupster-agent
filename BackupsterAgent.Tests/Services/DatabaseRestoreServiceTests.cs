@@ -4,6 +4,7 @@ using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers;
+using BackupsterAgent.Providers.Restore;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Restore;
@@ -464,7 +465,7 @@ public sealed class DatabaseRestoreServiceTests
             return Task.CompletedTask;
         }
 
-        public Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
+        public Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, bool replaceExisting, CancellationToken ct)
         {
             PrepareCalls++;
             ct.ThrowIfCancellationRequested();
@@ -483,7 +484,7 @@ public sealed class DatabaseRestoreServiceTests
 
     private sealed class StubRestoreProviderFactory(IRestoreProvider provider) : IRestoreProviderFactory
     {
-        public IRestoreProvider GetProvider(DatabaseType databaseType) => provider;
+        public IRestoreProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) => provider;
     }
 
     private sealed class FakeUploadService : IUploadService

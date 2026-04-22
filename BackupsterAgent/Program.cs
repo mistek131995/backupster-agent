@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Providers;
+using BackupsterAgent.Providers.Backup;
+using BackupsterAgent.Providers.Restore;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
@@ -59,13 +61,15 @@ builder.Services.Configure<RetentionSettings>(
 builder.Services.Configure<OutboxSettings>(
     builder.Configuration.GetSection("OutboxSettings"));
 
-builder.Services.AddSingleton<PostgresBackupProvider>();
-builder.Services.AddSingleton<MssqlBackupProvider>();
-builder.Services.AddSingleton<MysqlBackupProvider>();
+builder.Services.AddSingleton<PostgresLogicalBackupProvider>();
+builder.Services.AddSingleton<MssqlPhysicalBackupProvider>();
+builder.Services.AddSingleton<MssqlLogicalBackupProvider>();
+builder.Services.AddSingleton<MysqlLogicalBackupProvider>();
 builder.Services.AddSingleton<IBackupProviderFactory, BackupProviderFactory>();
 
 builder.Services.AddSingleton<PostgresRestoreProvider>();
-builder.Services.AddSingleton<MssqlRestoreProvider>();
+builder.Services.AddSingleton<MssqlPhysicalRestoreProvider>();
+builder.Services.AddSingleton<MssqlLogicalRestoreProvider>();
 builder.Services.AddSingleton<MysqlRestoreProvider>();
 builder.Services.AddSingleton<IRestoreProviderFactory, RestoreProviderFactory>();
 

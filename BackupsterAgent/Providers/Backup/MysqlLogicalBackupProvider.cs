@@ -3,15 +3,14 @@ using System.IO.Compression;
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
-using Microsoft.Extensions.Logging;
 
-namespace BackupsterAgent.Providers;
+namespace BackupsterAgent.Providers.Backup;
 
-public sealed class MysqlBackupProvider : IBackupProvider
+public sealed class MysqlLogicalBackupProvider : IBackupProvider
 {
-    private readonly ILogger<MysqlBackupProvider> _logger;
+    private readonly ILogger<MysqlLogicalBackupProvider> _logger;
 
-    public MysqlBackupProvider(ILogger<MysqlBackupProvider> logger)
+    public MysqlLogicalBackupProvider(ILogger<MysqlLogicalBackupProvider> logger)
     {
         _logger = logger;
     }
@@ -25,7 +24,7 @@ public sealed class MysqlBackupProvider : IBackupProvider
         Directory.CreateDirectory(config.OutputPath);
 
         _logger.LogInformation(
-            "Starting MySQL backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}'",
+            "Starting MySQL logical backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}'",
             config.Database, connection.Host, connection.Port, outputFile);
 
         var psi = new ProcessStartInfo
@@ -98,7 +97,7 @@ public sealed class MysqlBackupProvider : IBackupProvider
 
         var fileInfo = new FileInfo(outputFile);
         _logger.LogInformation(
-            "MySQL backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
+            "MySQL logical backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
             outputFile, fileInfo.Length, sw.ElapsedMilliseconds);
 
         return new BackupResult

@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using BackupsterAgent.Contracts;
+using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Settings;
 using Microsoft.Extensions.Options;
@@ -61,6 +62,14 @@ public sealed class ScheduleService : DashboardClientBase
         return ParseNextOccurrence(_cachedSchedule.CronExpression);
     }
 
+    public BackupMode GetBackupMode(string databaseName)
+    {
+        var match = _cachedSchedule?.Overrides?
+            .FirstOrDefault(o => string.Equals(o.DatabaseName, databaseName, StringComparison.Ordinal));
+
+        return match?.BackupMode ?? BackupMode.Logical;
+    }
+
     private async Task RefreshScheduleAsync(CancellationToken ct)
     {
         if (!IsConfigured(_logger, nameof(ScheduleService)))
@@ -83,7 +92,7 @@ public sealed class ScheduleService : DashboardClientBase
                 var response = await _http.SendAsync(request, innerCt);
                 ThrowIfUnauthorized(response, $"{nameof(ScheduleService)}.{nameof(RefreshScheduleAsync)}", _logger);
                 response.EnsureSuccessStatusCode();
-                fetched = await response.Content.ReadFromJsonAsync<ScheduleDto>(innerCt);
+                fetched = await response.Content.ReadFromJsonAsync<ScheduleDto>(JsonOptions, innerCt);
             }, ct);
 
             if (fetched is null) return;

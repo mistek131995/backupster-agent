@@ -6,6 +6,7 @@ using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers;
+using BackupsterAgent.Providers.Restore;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Upload;
 using BackupsterAgent.Settings;
@@ -63,7 +64,8 @@ public sealed class DatabaseRestoreService
         try
         {
             var connection = ResolveTargetConnection(payload);
-            var provider = _restoreFactory.GetProvider(connection.DatabaseType);
+            var backupMode = payload.BackupMode ?? InferDefaultMode(connection.DatabaseType);
+            var provider = _restoreFactory.GetProvider(connection.DatabaseType, backupMode);
 
             _logger.LogInformation(
                 "DatabaseRestoreService starting. Task: {TaskId}, Target: '{Target}' on connection '{Connection}' ({Type})",
@@ -93,7 +95,7 @@ public sealed class DatabaseRestoreService
                 SafeDelete(decryptedPath);
                 restoreFilePath = sqlPath;
             }
-            else if (connection.DatabaseType == DatabaseType.Mssql)
+            else if (connection.DatabaseType == DatabaseType.Mssql && backupMode == BackupMode.Physical)
             {
                 var fileName = $"{targetDatabase}_{taskId:N}.bak";
                 var sqlDir = MssqlSharedPathResolver.GetSqlDir(connection, tempDir);
@@ -106,6 +108,12 @@ public sealed class DatabaseRestoreService
 
                 restoreFilePath = MssqlSharedPathResolver.JoinSqlPath(sqlDir, fileName);
             }
+            else if (connection.DatabaseType == DatabaseType.Mssql && backupMode == BackupMode.Logical)
+            {
+                var bacpacPath = Path.Combine(tempDir, $"{targetDatabase}_{taskId:N}.bacpac");
+                File.Move(decryptedPath, bacpacPath);
+                restoreFilePath = bacpacPath;
+            }
             else
             {
                 throw new InvalidOperationException(
@@ -113,7 +121,7 @@ public sealed class DatabaseRestoreService
             }
 
             reporter.Report(RestoreStage.PreparingDatabase);
-            await provider.PrepareTargetDatabaseAsync(connection, targetDatabase, ct);
+            await provider.PrepareTargetDatabaseAsync(connection, targetDatabase, payload.ReplaceExisting, ct);
 
             reporter.Report(RestoreStage.RestoringDatabase);
             await provider.RestoreAsync(connection, targetDatabase, restoreFilePath, ct);
@@ -195,6 +203,9 @@ public sealed class DatabaseRestoreService
             TryDeleteDirectory(tempDir);
         }
     }
+
+    internal static BackupMode InferDefaultMode(DatabaseType databaseType) =>
+        databaseType == DatabaseType.Mssql ? BackupMode.Physical : BackupMode.Logical;
 
     internal ConnectionConfig ResolveTargetConnection(RestoreTaskPayload payload)
     {

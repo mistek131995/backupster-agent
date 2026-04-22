@@ -1,7 +1,7 @@
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 
-namespace BackupsterAgent.Providers;
+namespace BackupsterAgent.Providers.Backup;
 
 public interface IBackupProvider
 {

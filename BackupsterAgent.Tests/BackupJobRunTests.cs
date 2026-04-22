@@ -4,6 +4,7 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Providers;
+using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
@@ -53,7 +54,7 @@ public sealed class BackupJobRunTests
         _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.Ok, serverId);
         _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
 
-        var result = await BuildJob().RunAsync(Config(), CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -73,7 +74,7 @@ public sealed class BackupJobRunTests
     {
         _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.OfflineRetryable);
 
-        var result = await BuildJob().RunAsync(Config(), CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -101,7 +102,7 @@ public sealed class BackupJobRunTests
         _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.Ok, serverId);
         _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.OfflineRetryable);
 
-        var result = await BuildJob().RunAsync(Config(), CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -124,7 +125,7 @@ public sealed class BackupJobRunTests
     {
         _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.PermanentSkip);
 
-        var result = await BuildJob().RunAsync(Config(), CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -206,7 +207,7 @@ public sealed class BackupJobRunTests
 
     private sealed class StubProviderFactory(IBackupProvider provider) : IBackupProviderFactory
     {
-        public IBackupProvider GetProvider(DatabaseType databaseType) => provider;
+        public IBackupProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) => provider;
     }
 
     private sealed class StubUploadFactory(IUploadService service) : IUploadServiceFactory

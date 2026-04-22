@@ -3,15 +3,14 @@ using System.IO.Compression;
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
-using Microsoft.Extensions.Logging;
 
-namespace BackupsterAgent.Providers;
+namespace BackupsterAgent.Providers.Backup;
 
-public sealed class PostgresBackupProvider : IBackupProvider
+public sealed class PostgresLogicalBackupProvider : IBackupProvider
 {
-    private readonly ILogger<PostgresBackupProvider> _logger;
+    private readonly ILogger<PostgresLogicalBackupProvider> _logger;
 
-    public PostgresBackupProvider(ILogger<PostgresBackupProvider> logger)
+    public PostgresLogicalBackupProvider(ILogger<PostgresLogicalBackupProvider> logger)
     {
         _logger = logger;
     }
@@ -25,7 +24,7 @@ public sealed class PostgresBackupProvider : IBackupProvider
         Directory.CreateDirectory(config.OutputPath);
 
         _logger.LogInformation(
-            "Starting PostgreSQL backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}'",
+            "Starting PostgreSQL logical backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}'",
             config.Database, connection.Host, connection.Port, outputFile);
 
         var psi = new ProcessStartInfo
@@ -56,7 +55,6 @@ public sealed class PostgresBackupProvider : IBackupProvider
         process.Start();
         _logger.LogInformation("pg_dump process started (PID {Pid})", process.Id);
 
-        // Kill the process if the token is cancelled
         using var reg = ct.Register(() =>
         {
             try { process.Kill(entireProcessTree: true); }
@@ -70,15 +68,12 @@ public sealed class PostgresBackupProvider : IBackupProvider
                 FileShare.None, bufferSize: 65536, useAsync: true);
             await using var gzipStream = new GZipStream(fileStream, CompressionLevel.Optimal);
 
-            // Read stderr concurrently to prevent the pipe buffer from blocking
             var stderrTask = process.StandardError.ReadToEndAsync(ct);
             await process.StandardOutput.BaseStream.CopyToAsync(gzipStream, ct);
-            // GZip is flushed and closed when the using block exits here
             stderrContent = await stderrTask;
         }
         catch
         {
-            // Remove the incomplete output file before surfacing the exception
             TryDeleteFile(outputFile);
             throw;
         }
@@ -97,7 +92,7 @@ public sealed class PostgresBackupProvider : IBackupProvider
 
         var fileInfo = new FileInfo(outputFile);
         _logger.LogInformation(
-            "PostgreSQL backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
+            "PostgreSQL logical backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
             outputFile, fileInfo.Length, sw.ElapsedMilliseconds);
 
         return new BackupResult

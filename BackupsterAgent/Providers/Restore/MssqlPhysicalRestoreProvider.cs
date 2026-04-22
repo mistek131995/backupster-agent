@@ -1,17 +1,15 @@
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
-using BackupsterAgent.Services;
 using Microsoft.Data.SqlClient;
-using Microsoft.Extensions.Logging;
 
-namespace BackupsterAgent.Providers;
+namespace BackupsterAgent.Providers.Restore;
 
-public sealed class MssqlRestoreProvider : IRestoreProvider
+public sealed class MssqlPhysicalRestoreProvider : IRestoreProvider
 {
-    private readonly ILogger<MssqlRestoreProvider> _logger;
+    private readonly ILogger<MssqlPhysicalRestoreProvider> _logger;
 
-    public MssqlRestoreProvider(ILogger<MssqlRestoreProvider> logger)
+    public MssqlPhysicalRestoreProvider(ILogger<MssqlPhysicalRestoreProvider> logger)
     {
         _logger = logger;
     }
@@ -42,7 +40,7 @@ SELECT IS_SRVROLEMEMBER('sysadmin') AS is_sysadmin,
             $"Выдайте права: ALTER SERVER ROLE dbcreator ADD MEMBER [{connection.Username}];.");
     }
 
-    public async Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
+    public async Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, bool replaceExisting, CancellationToken ct)
     {
         var quoted = QuoteIdentifier(targetDatabase);
         var escapedName = targetDatabase.Replace("'", "''");

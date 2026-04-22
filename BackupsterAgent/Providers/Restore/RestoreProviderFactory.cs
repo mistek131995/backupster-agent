@@ -1,28 +1,34 @@
 using BackupsterAgent.Enums;
 
-namespace BackupsterAgent.Providers;
+namespace BackupsterAgent.Providers.Restore;
 
 public sealed class RestoreProviderFactory : IRestoreProviderFactory
 {
     private readonly PostgresRestoreProvider _postgres;
-    private readonly MssqlRestoreProvider _mssql;
+    private readonly MssqlPhysicalRestoreProvider _mssqlPhysical;
+    private readonly MssqlLogicalRestoreProvider _mssqlLogical;
     private readonly MysqlRestoreProvider _mysql;
 
     public RestoreProviderFactory(
         PostgresRestoreProvider postgres,
-        MssqlRestoreProvider mssql,
+        MssqlPhysicalRestoreProvider mssqlPhysical,
+        MssqlLogicalRestoreProvider mssqlLogical,
         MysqlRestoreProvider mysql)
     {
         _postgres = postgres;
-        _mssql = mssql;
+        _mssqlPhysical = mssqlPhysical;
+        _mssqlLogical = mssqlLogical;
         _mysql = mysql;
     }
 
-    public IRestoreProvider GetProvider(DatabaseType databaseType) => databaseType switch
-    {
-        DatabaseType.Postgres => _postgres,
-        DatabaseType.Mssql => _mssql,
-        DatabaseType.Mysql => _mysql,
-        _ => throw new InvalidOperationException($"Unknown DatabaseType: '{databaseType}'. Supported values: Postgres, Mssql, Mysql")
-    };
+    public IRestoreProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) =>
+        (databaseType, backupMode) switch
+        {
+            (DatabaseType.Postgres, BackupMode.Logical)  => _postgres,
+            (DatabaseType.Mysql,    BackupMode.Logical)  => _mysql,
+            (DatabaseType.Mssql,    BackupMode.Physical) => _mssqlPhysical,
+            (DatabaseType.Mssql,    BackupMode.Logical)  => _mssqlLogical,
+            _ => throw new NotSupportedException(
+                $"Restore provider is not implemented for DatabaseType='{databaseType}', BackupMode='{backupMode}'.")
+        };
 }
