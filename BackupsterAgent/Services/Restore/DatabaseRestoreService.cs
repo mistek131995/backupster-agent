@@ -89,7 +89,12 @@ public sealed class DatabaseRestoreService
             SafeDelete(encryptedPath);
 
             string restoreFilePath;
-            if (connection.DatabaseType is DatabaseType.Postgres or DatabaseType.Mysql)
+            if (connection.DatabaseType == DatabaseType.Postgres && backupMode == BackupMode.Physical)
+            {
+                // base.tar.gz from pg_basebackup -z; passed as-is to PostgresPhysicalRestoreProvider
+                restoreFilePath = decryptedPath;
+            }
+            else if (connection.DatabaseType is DatabaseType.Postgres or DatabaseType.Mysql)
             {
                 var sqlPath = Path.Combine(tempDir, "dump.sql");
                 reporter.Report(RestoreStage.DecompressingDump);

@@ -23,18 +23,11 @@ RUN apt-get update && \
       -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc && \
     echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
       > /etc/apt/sources.list.d/pgdg.list && \
-    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-      | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg && \
-    echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
-      > /etc/apt/sources.list.d/mssql-release.list && \
     apt-get update && \
-    ACCEPT_EULA=Y apt-get install -y --no-install-recommends \
+    apt-get install -y --no-install-recommends \
       postgresql-client-17 \
-      default-mysql-client \
-      mssql-tools18 && \
+      default-mysql-client && \
     rm -rf /var/lib/apt/lists/*
-
-ENV PATH="/opt/mssql-tools18/bin:${PATH}"
 
 WORKDIR /app
 COPY --from=build /app/publish .

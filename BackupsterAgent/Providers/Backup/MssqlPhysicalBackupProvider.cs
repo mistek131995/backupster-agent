@@ -1,9 +1,8 @@
 using System.Diagnostics;
-using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
-using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Resolvers;
+using Microsoft.Data.SqlClient;
 
 namespace BackupsterAgent.Providers.Backup;
 
@@ -34,62 +33,32 @@ public sealed class MssqlPhysicalBackupProvider : IBackupProvider
             "SQL path: '{SqlPath}', Agent path: '{AgentPath}'",
             config.Database, connection.Host, connection.Port, sqlFilePath, agentFilePath);
 
-        var tsql = $"BACKUP DATABASE [{config.Database}] TO DISK = N'{sqlFilePath}' WITH FORMAT, INIT, STATS = 10;";
-        var serverAddress = $"{connection.Host},{connection.Port}";
+        var escapedDb = config.Database.Replace("]", "]]");
+        var escapedPath = sqlFilePath.Replace("'", "''");
+        var tsql = $"BACKUP DATABASE [{escapedDb}] TO DISK = N'{escapedPath}' WITH FORMAT, INIT, STATS = 10;";
 
-        var psi = new ProcessStartInfo
+        var connectionString = new SqlConnectionStringBuilder
         {
-            FileName = "sqlcmd",
-            ArgumentList =
-            {
-                "-S", serverAddress,
-                "-U", connection.Username,
-                "-C",
-                "-Q", tsql
-            },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.Environment["SQLCMDPASSWORD"] = connection.Password;
+            DataSource = $"{connection.Host},{connection.Port}",
+            InitialCatalog = "master",
+            UserID = connection.Username,
+            Password = connection.Password,
+            TrustServerCertificate = true,
+            Encrypt = true,
+        }.ConnectionString;
 
         var sw = Stopwatch.StartNew();
-        using var process = new Process { StartInfo = psi };
 
-        process.Start();
-        _logger.LogInformation("sqlcmd process started (PID {Pid})", process.Id);
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
 
-        using var reg = ct.Register(() =>
-        {
-            try { process.Kill(entireProcessTree: true); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Failed to kill sqlcmd process"); }
-        });
+        await using var cmd = new SqlCommand(tsql, conn) { CommandTimeout = 0 };
+        cmd.StatementCompleted += (_, e) =>
+            _logger.LogDebug("MSSQL backup progress: {RecordsAffected} rows affected", e.RecordCount);
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
-        await Task.WhenAll(stdoutTask, stderrTask);
-        await process.WaitForExitAsync(ct);
+        await cmd.ExecuteNonQueryAsync(ct);
 
         sw.Stop();
-
-        var stdoutContent = stdoutTask.Result.Trim();
-        var stderrContent = stderrTask.Result.Trim();
-
-        if (stdoutContent.Length > 0)
-            _logger.LogDebug("sqlcmd stdout: {Stdout}", stdoutContent);
-
-        if (process.ExitCode != 0)
-        {
-            var detail = string.IsNullOrEmpty(stderrContent) ? stdoutContent : stderrContent;
-            var message = $"sqlcmd exited with code {process.ExitCode}: {detail}";
-            _logger.LogError("sqlcmd failed. ExitCode: {ExitCode}. Detail: {Detail}",
-                process.ExitCode, detail);
-            throw new InvalidOperationException(message);
-        }
 
         if (!File.Exists(agentFilePath))
         {
@@ -112,5 +81,4 @@ public sealed class MssqlPhysicalBackupProvider : IBackupProvider
             Success = true,
         };
     }
-
 }

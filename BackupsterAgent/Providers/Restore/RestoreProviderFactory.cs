@@ -4,18 +4,21 @@ namespace BackupsterAgent.Providers.Restore;
 
 public sealed class RestoreProviderFactory : IRestoreProviderFactory
 {
-    private readonly PostgresRestoreProvider _postgres;
+    private readonly PostgresRestoreProvider _postgresLogical;
+    private readonly PostgresPhysicalRestoreProvider _postgresPhysical;
     private readonly MssqlPhysicalRestoreProvider _mssqlPhysical;
     private readonly MssqlLogicalRestoreProvider _mssqlLogical;
     private readonly MysqlRestoreProvider _mysql;
 
     public RestoreProviderFactory(
-        PostgresRestoreProvider postgres,
+        PostgresRestoreProvider postgresLogical,
+        PostgresPhysicalRestoreProvider postgresPhysical,
         MssqlPhysicalRestoreProvider mssqlPhysical,
         MssqlLogicalRestoreProvider mssqlLogical,
         MysqlRestoreProvider mysql)
     {
-        _postgres = postgres;
+        _postgresLogical = postgresLogical;
+        _postgresPhysical = postgresPhysical;
         _mssqlPhysical = mssqlPhysical;
         _mssqlLogical = mssqlLogical;
         _mysql = mysql;
@@ -24,7 +27,8 @@ public sealed class RestoreProviderFactory : IRestoreProviderFactory
     public IRestoreProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) =>
         (databaseType, backupMode) switch
         {
-            (DatabaseType.Postgres, BackupMode.Logical)  => _postgres,
+            (DatabaseType.Postgres, BackupMode.Logical)  => _postgresLogical,
+            (DatabaseType.Postgres, BackupMode.Physical) => _postgresPhysical,
             (DatabaseType.Mysql,    BackupMode.Logical)  => _mysql,
             (DatabaseType.Mssql,    BackupMode.Physical) => _mssqlPhysical,
             (DatabaseType.Mssql,    BackupMode.Logical)  => _mssqlLogical,

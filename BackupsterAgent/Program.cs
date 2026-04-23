@@ -67,12 +67,14 @@ builder.Services.Configure<OutboxSettings>(
     builder.Configuration.GetSection("OutboxSettings"));
 
 builder.Services.AddSingleton<PostgresLogicalBackupProvider>();
+builder.Services.AddSingleton<PostgresPhysicalBackupProvider>();
 builder.Services.AddSingleton<MssqlPhysicalBackupProvider>();
 builder.Services.AddSingleton<MssqlLogicalBackupProvider>();
 builder.Services.AddSingleton<MysqlLogicalBackupProvider>();
 builder.Services.AddSingleton<IBackupProviderFactory, BackupProviderFactory>();
 
 builder.Services.AddSingleton<PostgresRestoreProvider>();
+builder.Services.AddSingleton<PostgresPhysicalRestoreProvider>();
 builder.Services.AddSingleton<MssqlPhysicalRestoreProvider>();
 builder.Services.AddSingleton<MssqlLogicalRestoreProvider>();
 builder.Services.AddSingleton<MysqlRestoreProvider>();

@@ -5,17 +5,20 @@ namespace BackupsterAgent.Providers.Backup;
 public sealed class BackupProviderFactory : IBackupProviderFactory
 {
     private readonly PostgresLogicalBackupProvider _postgresLogical;
+    private readonly PostgresPhysicalBackupProvider _postgresPhysical;
     private readonly MssqlPhysicalBackupProvider _mssqlPhysical;
     private readonly MssqlLogicalBackupProvider _mssqlLogical;
     private readonly MysqlLogicalBackupProvider _mysqlLogical;
 
     public BackupProviderFactory(
         PostgresLogicalBackupProvider postgresLogical,
+        PostgresPhysicalBackupProvider postgresPhysical,
         MssqlPhysicalBackupProvider mssqlPhysical,
         MssqlLogicalBackupProvider mssqlLogical,
         MysqlLogicalBackupProvider mysqlLogical)
     {
         _postgresLogical = postgresLogical;
+        _postgresPhysical = postgresPhysical;
         _mssqlPhysical = mssqlPhysical;
         _mssqlLogical = mssqlLogical;
         _mysqlLogical = mysqlLogical;
@@ -25,6 +28,7 @@ public sealed class BackupProviderFactory : IBackupProviderFactory
         (databaseType, backupMode) switch
         {
             (DatabaseType.Postgres, BackupMode.Logical)  => _postgresLogical,
+            (DatabaseType.Postgres, BackupMode.Physical) => _postgresPhysical,
             (DatabaseType.Mysql,    BackupMode.Logical)  => _mysqlLogical,
             (DatabaseType.Mssql,    BackupMode.Physical) => _mssqlPhysical,
             (DatabaseType.Mssql,    BackupMode.Logical)  => _mssqlLogical,
