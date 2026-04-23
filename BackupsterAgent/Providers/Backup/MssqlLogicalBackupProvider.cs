@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
+using BackupsterAgent.Exceptions;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Dac;
 
@@ -8,6 +9,70 @@ namespace BackupsterAgent.Providers.Backup;
 
 public sealed class MssqlLogicalBackupProvider(ILogger<MssqlLogicalBackupProvider> logger) : IBackupProvider
 {
+    public async Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
+    {
+        await ValidateBackupPermissionsAsync(connection, database, ct);
+        await ValidateRestorePermissionsAsync(connection, database, ct);
+    }
+
+    private static async Task ValidateBackupPermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT IS_MEMBER('db_owner')     AS is_owner,
+       IS_MEMBER('db_datareader') AS is_datareader,
+       HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION')      AS can_view_def,
+       HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DATABASE STATE')  AS can_view_state;";
+
+        await using var conn = new SqlConnection(BuildConnectionString(connection, database));
+        await conn.OpenAsync(ct);
+
+        await using var cmd = new SqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        if (!await reader.ReadAsync(ct))
+            throw new BackupPermissionException("Не удалось прочитать данные о правах пользователя.");
+
+        var isOwner      = reader.GetInt32(0) == 1;
+        var isDatareader = reader.GetInt32(1) == 1;
+        var canViewDef   = reader.GetInt32(2) == 1;
+        var canViewState = reader.GetInt32(3) == 1;
+
+        if (isOwner || (isDatareader && canViewDef && canViewState)) return;
+
+        throw new BackupPermissionException(
+            $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для logical бэкапа БД '{database}'. " +
+            "Требуется членство в db_owner, либо одновременно: db_datareader + VIEW DEFINITION + VIEW DATABASE STATE. " +
+            $"Пример: ALTER ROLE db_datareader ADD MEMBER [{connection.Username}]; " +
+            $"GRANT VIEW DEFINITION TO [{connection.Username}]; " +
+            $"GRANT VIEW DATABASE STATE TO [{connection.Username}];");
+    }
+
+    private static async Task ValidateRestorePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT IS_SRVROLEMEMBER('sysadmin')  AS is_sysadmin,
+       IS_SRVROLEMEMBER('dbcreator') AS is_dbcreator;";
+
+        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
+        await conn.OpenAsync(ct);
+
+        await using var cmd = new SqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        if (!await reader.ReadAsync(ct))
+            throw new BackupPermissionException("Не удалось прочитать серверные роли пользователя.");
+
+        var isSysadmin  = reader.GetInt32(0) == 1;
+        var isDbcreator = reader.GetInt32(1) == 1;
+
+        if (isSysadmin || isDbcreator) return;
+
+        throw new BackupPermissionException(
+            $"Пользователь '{connection.Username}' подключения '{connection.Name}' сможет создать бэкап БД '{database}', " +
+            "но не сможет его восстановить: отсутствуют права sysadmin или dbcreator. " +
+            $"Выдайте права: ALTER SERVER ROLE dbcreator ADD MEMBER [{connection.Username}];");
+    }
+
     public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
     {
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
@@ -109,4 +174,26 @@ public sealed class MssqlLogicalBackupProvider(ILogger<MssqlLogicalBackupProvide
         try { if (File.Exists(path)) File.Delete(path); }
         catch (Exception ex) { logger.LogWarning(ex, "Could not delete partial file '{Path}'", path); }
     }
+
+    private static string BuildConnectionString(ConnectionConfig connection, string database) =>
+        new SqlConnectionStringBuilder
+        {
+            DataSource = $"{connection.Host},{connection.Port}",
+            InitialCatalog = database,
+            UserID = connection.Username,
+            Password = connection.Password,
+            Encrypt = true,
+            TrustServerCertificate = true,
+        }.ConnectionString;
+
+    private static string BuildMasterConnectionString(ConnectionConfig connection) =>
+        new SqlConnectionStringBuilder
+        {
+            DataSource = $"{connection.Host},{connection.Port}",
+            InitialCatalog = "master",
+            UserID = connection.Username,
+            Password = connection.Password,
+            Encrypt = true,
+            TrustServerCertificate = true,
+        }.ConnectionString;
 }

@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
+using BackupsterAgent.Exceptions;
+using Npgsql;
 
 namespace BackupsterAgent.Providers.Backup;
 
@@ -14,9 +16,79 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
         _logger = logger;
     }
 
+    public async Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
+    {
+        await CheckBinaryAsync("pg_basebackup", ct);
+        await CheckBinaryAsync("pg_ctl", ct);
+        await CheckBinaryAsync("tar", ct);
+
+        var connString = new NpgsqlConnectionStringBuilder
+        {
+            Host = connection.Host,
+            Port = connection.Port,
+            Username = connection.Username,
+            Password = connection.Password,
+            Database = "postgres",
+        }.ToString();
+
+        await using var conn = new NpgsqlConnection(connString);
+        await conn.OpenAsync(ct);
+
+        await using (var cmd = new NpgsqlCommand(
+            "SELECT rolsuper, rolreplication FROM pg_roles WHERE rolname = current_user;", conn))
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            if (!await reader.ReadAsync(ct))
+                throw new BackupPermissionException(
+                    $"Пользователь '{connection.Username}' не найден в pg_roles — проверьте корректность credentials для подключения '{connection.Name}'.");
+
+            var isSuperuser    = reader.GetBoolean(0);
+            var hasReplication = reader.GetBoolean(1);
+
+            if (!isSuperuser && !hasReplication)
+                throw new BackupPermissionException(
+                    $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для physical бэкапа. " +
+                    "Требуется привилегия REPLICATION или superuser. " +
+                    $"Выдайте права: ALTER ROLE \"{connection.Username}\" WITH REPLICATION;");
+        }
+
+        string pgdata;
+        await using (var cmd = new NpgsqlCommand("SHOW data_directory;", conn))
+            pgdata = (string?)await cmd.ExecuteScalarAsync(ct) ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(pgdata))
+            throw new InvalidOperationException(
+                $"Failed to retrieve PGDATA path from cluster '{connection.Name}'.");
+
+        _logger.LogInformation("Resolved PGDATA from cluster: '{PgDataPath}'", pgdata);
+
+        if (!Directory.Exists(pgdata))
+            throw new InvalidOperationException(
+                $"PGDATA directory '{pgdata}' is not accessible on the agent host. " +
+                "Physical backup requires the agent and PostgreSQL to run on the same host. " +
+                "Use logical backup mode if the agent is remote.");
+
+        var testFile = Path.Combine(pgdata, $".backupster-preflight-{Guid.NewGuid():N}");
+        try
+        {
+            await File.WriteAllBytesAsync(testFile, [], ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch
+        {
+            throw new BackupPermissionException(
+                $"Агент не имеет прав на запись в каталог PGDATA '{pgdata}'. " +
+                "Для физического восстановления агент должен запускаться от имени пользователя с правами на запись в PGDATA. " +
+                $"Запустите агента от имени пользователя postgres.");
+        }
+        finally
+        {
+            try { if (File.Exists(testFile)) File.Delete(testFile); } catch { }
+        }
+    }
+
     public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
     {
-        await PreflightCheckAsync(ct);
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         var fileName = $"{config.Database}_{timestamp}.tar.gz";
@@ -115,11 +187,11 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
         }
     }
 
-    private async Task PreflightCheckAsync(CancellationToken ct)
+    private static async Task CheckBinaryAsync(string binary, CancellationToken ct)
     {
         var psi = new ProcessStartInfo
         {
-            FileName = "pg_basebackup",
+            FileName = binary,
             ArgumentList = { "--version" },
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -136,14 +208,14 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
         catch (Exception ex)
         {
             throw new InvalidOperationException(
-                "pg_basebackup is not available on this host. " +
-                "Install the postgresql-client package and ensure pg_basebackup is in PATH.", ex);
+                $"{binary} is not available on this host. " +
+                $"Install the postgresql package and ensure {binary} is in PATH.", ex);
         }
 
         if (process.ExitCode != 0)
             throw new InvalidOperationException(
-                $"pg_basebackup --version returned exit code {process.ExitCode}. " +
-                "Ensure the postgresql-client package is installed and the binary is in PATH.");
+                $"{binary} --version returned exit code {process.ExitCode}. " +
+                $"Ensure the postgresql package is installed and {binary} is in PATH.");
     }
 
     private void TryDeleteDirectory(string path)

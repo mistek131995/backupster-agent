@@ -19,6 +19,7 @@
 - **[docs/gc-and-retention.md](docs/gc-and-retention.md)** — сборщик мусора для чанков и очистка устаревших бэкапов с настройками.
 - **[docs/postgres.md](docs/postgres.md)** — физический бэкап и восстановление PostgreSQL: требования к совместному расположению, сценарии развёртывания, права.
 - **[docs/mssql.md](docs/mssql.md)** — общий каталог `.bak` для MSSQL: `SharedBackupPath` / `AgentBackupPath`, сценарии.
+- **[docs/mysql.md](docs/mysql.md)** — физический бэкап MySQL: почему не поддерживается и как запросить реализацию.
 - **[docs/restore.md](docs/restore.md)** — восстановление: `RestoreSettings`, требуемые права, поведение при ошибках.
 - **[NETWORK.md](NETWORK.md)** — полный перечень HTTP-запросов к дашборду и инвариант «creds не покидают хост».
 

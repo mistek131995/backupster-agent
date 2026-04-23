@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 
@@ -13,6 +14,66 @@ public sealed class MssqlPhysicalBackupProvider : IBackupProvider
     public MssqlPhysicalBackupProvider(ILogger<MssqlPhysicalBackupProvider> logger)
     {
         _logger = logger;
+    }
+
+    public async Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
+    {
+        await ValidateBackupPermissionsAsync(connection, database, ct);
+        await ValidateRestorePermissionsAsync(connection, database, ct);
+    }
+
+    private static async Task ValidateBackupPermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
+       IS_MEMBER('db_owner')             AS is_owner,
+       IS_MEMBER('db_backupoperator')    AS is_backupoperator;";
+
+        await using var conn = new SqlConnection(BuildConnectionString(connection, database));
+        await conn.OpenAsync(ct);
+
+        await using var cmd = new SqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        if (!await reader.ReadAsync(ct))
+            throw new BackupPermissionException("Не удалось прочитать данные о правах пользователя.");
+
+        var isSysadmin       = reader.GetInt32(0) == 1;
+        var isOwner          = reader.GetInt32(1) == 1;
+        var isBackupOperator = reader.GetInt32(2) == 1;
+
+        if (isSysadmin || isOwner || isBackupOperator) return;
+
+        throw new BackupPermissionException(
+            $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для physical бэкапа БД '{database}'. " +
+            "Требуется членство в server-роли sysadmin, либо в db_owner или db_backupoperator целевой БД. " +
+            $"Пример: USE [{database}]; ALTER ROLE db_backupoperator ADD MEMBER [{connection.Username}];");
+    }
+
+    private static async Task ValidateRestorePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT IS_SRVROLEMEMBER('sysadmin')  AS is_sysadmin,
+       IS_SRVROLEMEMBER('dbcreator') AS is_dbcreator;";
+
+        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
+        await conn.OpenAsync(ct);
+
+        await using var cmd = new SqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        if (!await reader.ReadAsync(ct))
+            throw new BackupPermissionException("Не удалось прочитать серверные роли пользователя.");
+
+        var isSysadmin  = reader.GetInt32(0) == 1;
+        var isDbcreator = reader.GetInt32(1) == 1;
+
+        if (isSysadmin || isDbcreator) return;
+
+        throw new BackupPermissionException(
+            $"Пользователь '{connection.Username}' подключения '{connection.Name}' сможет создать бэкап БД '{database}', " +
+            "но не сможет его восстановить: отсутствуют права sysadmin или dbcreator. " +
+            $"Выдайте права: ALTER SERVER ROLE dbcreator ADD MEMBER [{connection.Username}];");
     }
 
     public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
@@ -81,4 +142,26 @@ public sealed class MssqlPhysicalBackupProvider : IBackupProvider
             Success = true,
         };
     }
+
+    private static string BuildConnectionString(ConnectionConfig connection, string database) =>
+        new SqlConnectionStringBuilder
+        {
+            DataSource = $"{connection.Host},{connection.Port}",
+            InitialCatalog = database,
+            UserID = connection.Username,
+            Password = connection.Password,
+            TrustServerCertificate = true,
+            Encrypt = true,
+        }.ToString();
+
+    private static string BuildMasterConnectionString(ConnectionConfig connection) =>
+        new SqlConnectionStringBuilder
+        {
+            DataSource = $"{connection.Host},{connection.Port}",
+            InitialCatalog = "master",
+            UserID = connection.Username,
+            Password = connection.Password,
+            TrustServerCertificate = true,
+            Encrypt = true,
+        }.ToString();
 }

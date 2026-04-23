@@ -186,7 +186,6 @@ public sealed class BackupJobTests
             new FakeBackupRecordClient(),
             new FakeProgressReporterFactory(),
             outboxStore,
-            Options.Create(new AgentSettings { Token = "test-token", DashboardUrl = "http://localhost" }),
             new ActivitySource("BackupsterAgent.Tests"),
             NullLogger<BackupJob>.Instance);
     }

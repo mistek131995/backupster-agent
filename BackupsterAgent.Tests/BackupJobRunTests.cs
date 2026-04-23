@@ -3,14 +3,10 @@ using System.Security.Cryptography;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
-using BackupsterAgent.Providers;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Upload;
-using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
-using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Outbox;
-using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
 using BackupsterAgent.Services.Dashboard;
@@ -185,7 +181,6 @@ public sealed class BackupJobRunTests
             _recordClient,
             new FakeProgressReporterFactory(),
             _outboxStore,
-            Options.Create(new AgentSettings { Token = "test-token", DashboardUrl = "http://localhost" }),
             new ActivitySource("BackupsterAgent.Tests"),
             NullLogger<BackupJob>.Instance);
     }
@@ -193,6 +188,11 @@ public sealed class BackupJobRunTests
     private sealed class StubBackupProvider(string tempRoot) : IBackupProvider
     {
         public int BackupCalls { get; private set; }
+
+        public Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
+        {
+            return Task.CompletedTask;
+        }
 
         public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
         {

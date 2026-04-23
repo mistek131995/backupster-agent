@@ -3,6 +3,8 @@ using System.IO.Compression;
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
+using BackupsterAgent.Exceptions;
+using Npgsql;
 
 namespace BackupsterAgent.Providers.Backup;
 
@@ -13,6 +15,62 @@ public sealed class PostgresLogicalBackupProvider : IBackupProvider
     public PostgresLogicalBackupProvider(ILogger<PostgresLogicalBackupProvider> logger)
     {
         _logger = logger;
+    }
+
+    public async Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
+    {
+        await CheckBinaryAsync("pg_dump", ct);
+        await CheckBinaryAsync("psql", ct);
+
+        const string sql = @"
+SELECT rolsuper,
+       has_database_privilege(current_user, current_database(), 'CONNECT') AS can_connect,
+       has_schema_privilege(current_user, 'public', 'USAGE') AS can_use_public,
+       rolcreatedb,
+       pg_has_role(current_user, 'pg_signal_backend', 'MEMBER') AS can_signal,
+       has_database_privilege(current_user, 'postgres', 'CONNECT') AS can_connect_admin
+FROM pg_roles WHERE rolname = current_user;";
+
+        var connString = new NpgsqlConnectionStringBuilder
+        {
+            Host = connection.Host,
+            Port = connection.Port,
+            Username = connection.Username,
+            Password = connection.Password,
+            Database = database,
+        }.ToString();
+
+        await using var conn = new NpgsqlConnection(connString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        if (!await reader.ReadAsync(ct))
+            throw new BackupPermissionException(
+                $"Пользователь '{connection.Username}' не найден в pg_roles — проверьте корректность credentials для подключения '{connection.Name}'.");
+
+        var isSuperuser       = reader.GetBoolean(0);
+        var canConnect        = reader.GetBoolean(1);
+        var canUsePublic      = reader.GetBoolean(2);
+        var canCreateDb       = reader.GetBoolean(3);
+        var canSignal         = reader.GetBoolean(4);
+        var canConnectAdmin   = reader.GetBoolean(5);
+
+        if (!isSuperuser && !(canConnect && canUsePublic))
+            throw new BackupPermissionException(
+                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для бэкапа БД '{database}'. " +
+                "Требуется superuser, либо CONNECT на БД и USAGE на схему public. " +
+                $"Выдайте права: GRANT CONNECT ON DATABASE \"{database}\" TO \"{connection.Username}\"; " +
+                $"GRANT USAGE ON SCHEMA public TO \"{connection.Username}\";");
+
+        if (!isSuperuser && !(canCreateDb && canSignal && canConnectAdmin))
+            throw new BackupPermissionException(
+                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для восстановления бэкапа БД '{database}'. " +
+                "Требуются роль CREATEDB, pg_signal_backend и CONNECT на служебную БД postgres (для DROP/CREATE базы и отключения активных сессий), либо superuser. " +
+                $"Выдайте права: ALTER ROLE \"{connection.Username}\" WITH CREATEDB; " +
+                $"GRANT pg_signal_backend TO \"{connection.Username}\"; " +
+                $"GRANT CONNECT ON DATABASE postgres TO \"{connection.Username}\";");
     }
 
     public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
@@ -102,6 +160,37 @@ public sealed class PostgresLogicalBackupProvider : IBackupProvider
             DurationMs = sw.ElapsedMilliseconds,
             Success = true,
         };
+    }
+
+    private static async Task CheckBinaryAsync(string binary, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = binary,
+            ArgumentList = { "--version" },
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        using var process = new Process { StartInfo = psi };
+        try
+        {
+            process.Start();
+            await process.WaitForExitAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"{binary} is not available on this host. " +
+                $"Install the postgresql-client package and ensure {binary} is in PATH.", ex);
+        }
+
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException(
+                $"{binary} --version returned exit code {process.ExitCode}. " +
+                $"Ensure the postgresql-client package is installed and {binary} is in PATH.");
     }
 
     private void TryDeleteFile(string path)

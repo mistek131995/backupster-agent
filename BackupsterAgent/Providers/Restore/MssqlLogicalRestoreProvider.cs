@@ -35,20 +35,8 @@ SELECT IS_SRVROLEMEMBER('sysadmin') AS is_sysadmin,
 
     public async Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, bool replaceExisting, CancellationToken ct)
     {
-        if (replaceExisting)
-        {
-            await DropDatabaseAsync(connection, targetDatabase, ct);
-            logger.LogInformation("MSSQL target database '{Database}' dropped (replaceExisting=true)", targetDatabase);
-            return;
-        }
-
-        var exists = await DatabaseExistsAsync(connection, targetDatabase, ct);
-        if (exists)
-        {
-            throw new InvalidOperationException(
-                $"Целевая БД '{targetDatabase}' уже существует на SQL Server. " +
-                "Включите флаг «Заменить существующую БД» в UI, либо удалите БД вручную перед restore.");
-        }
+        await DropDatabaseAsync(connection, targetDatabase, ct);
+        logger.LogInformation("MSSQL logical target database '{Database}' dropped before restore", targetDatabase);
     }
 
     public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct)
@@ -104,18 +92,6 @@ SELECT IS_SRVROLEMEMBER('sysadmin') AS is_sysadmin,
     private void OnDacProgress(object? sender, DacProgressEventArgs e)
     {
         logger.LogDebug("DacFx Progress: Status={Status}, Message={Message}", e.Status, e.Message);
-    }
-
-    private static async Task<bool> DatabaseExistsAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
-    {
-        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
-        await conn.OpenAsync(ct);
-
-        await using var cmd = new SqlCommand("SELECT DB_ID(@name);", conn);
-        cmd.Parameters.AddWithValue("@name", targetDatabase);
-
-        var result = await cmd.ExecuteScalarAsync(ct);
-        return result is not null && result != DBNull.Value;
     }
 
     private static async Task DropDatabaseAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)

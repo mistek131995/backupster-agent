@@ -9,19 +9,22 @@ public sealed class RestoreProviderFactory : IRestoreProviderFactory
     private readonly MssqlPhysicalRestoreProvider _mssqlPhysical;
     private readonly MssqlLogicalRestoreProvider _mssqlLogical;
     private readonly MysqlRestoreProvider _mysql;
+    private readonly MysqlPhysicalRestoreProvider _mysqlPhysical;
 
     public RestoreProviderFactory(
         PostgresRestoreProvider postgresLogical,
         PostgresPhysicalRestoreProvider postgresPhysical,
         MssqlPhysicalRestoreProvider mssqlPhysical,
         MssqlLogicalRestoreProvider mssqlLogical,
-        MysqlRestoreProvider mysql)
+        MysqlRestoreProvider mysql,
+        MysqlPhysicalRestoreProvider mysqlPhysical)
     {
         _postgresLogical = postgresLogical;
         _postgresPhysical = postgresPhysical;
         _mssqlPhysical = mssqlPhysical;
         _mssqlLogical = mssqlLogical;
         _mysql = mysql;
+        _mysqlPhysical = mysqlPhysical;
     }
 
     public IRestoreProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) =>
@@ -30,6 +33,7 @@ public sealed class RestoreProviderFactory : IRestoreProviderFactory
             (DatabaseType.Postgres, BackupMode.Logical)  => _postgresLogical,
             (DatabaseType.Postgres, BackupMode.Physical) => _postgresPhysical,
             (DatabaseType.Mysql,    BackupMode.Logical)  => _mysql,
+            (DatabaseType.Mysql,    BackupMode.Physical) => _mysqlPhysical,
             (DatabaseType.Mssql,    BackupMode.Physical) => _mssqlPhysical,
             (DatabaseType.Mssql,    BackupMode.Logical)  => _mssqlLogical,
             _ => throw new NotSupportedException(

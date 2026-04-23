@@ -10,8 +10,6 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
 {
     private readonly ILogger<PostgresPhysicalRestoreProvider> _logger;
 
-    // Set by ValidatePermissionsAsync, consumed by PrepareTargetDatabaseAsync / RestoreAsync.
-    // Safe because only one restore runs at a time (AgentActivityLock).
     private string? _pgDataPath;
 
     public PostgresPhysicalRestoreProvider(ILogger<PostgresPhysicalRestoreProvider> logger)

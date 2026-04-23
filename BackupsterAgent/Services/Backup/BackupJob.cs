@@ -3,10 +3,8 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
-using BackupsterAgent.Providers;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Upload;
-using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Outbox;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
@@ -29,7 +27,6 @@ public sealed class BackupJob
     private readonly IBackupRecordClient _recordClient;
     private readonly IProgressReporterFactory _reporterFactory;
     private readonly IOutboxStore _outboxStore;
-    private readonly AgentSettings _agentSettings;
     private readonly ActivitySource _activitySource;
     private readonly ILogger<BackupJob> _logger;
 
@@ -44,7 +41,6 @@ public sealed class BackupJob
         IBackupRecordClient recordClient,
         IProgressReporterFactory reporterFactory,
         IOutboxStore outboxStore,
-        IOptions<AgentSettings> agentSettings,
         ActivitySource activitySource,
         ILogger<BackupJob> logger)
     {
@@ -58,7 +54,6 @@ public sealed class BackupJob
         _recordClient = recordClient;
         _reporterFactory = reporterFactory;
         _outboxStore = outboxStore;
-        _agentSettings = agentSettings.Value;
         _activitySource = activitySource;
         _logger = logger;
     }
@@ -121,6 +116,8 @@ public sealed class BackupJob
             _logger.LogInformation(
                 "BackupJob resolved. Provider: {ProviderType}, Folder: '{Folder}'",
                 provider.GetType().Name, backupFolder);
+
+            await provider.ValidatePermissionsAsync(connection, config.Database, ct);
 
             _logger.LogInformation("Step 1/3: dump");
             reporter.Report(BackupStage.Dumping);
