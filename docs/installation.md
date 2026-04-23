@@ -14,7 +14,7 @@
 - .NET 10 Runtime (или SDK для сборки из исходников)
 - `pg_dump` / `psql` в `PATH` — для PostgreSQL (backup + restore)
 - `mysqldump` / `mysql` в `PATH` — для MySQL/MariaDB (backup + restore)
-- `sqlcmd` в `PATH` — для MSSQL (backup + restore)
+- Для MSSQL внешние утилиты не требуются — агент работает по TDS через `Microsoft.Data.SqlClient` и `Microsoft.SqlServer.DacFx` in-process (logical `.bacpac`, physical `BACKUP DATABASE`)
 - Зарегистрированный агент на [backupster.io](https://backupster.io/) (нужен токен)
 
 ---
