@@ -209,6 +209,42 @@ public sealed class OutboxReplayWorkerTests
     }
 
     [Test]
+    public async Task TickAsync_PrunesAgedAndOverCapacityBeforeReplay()
+    {
+        var workerWithLimits = new OutboxReplayWorker(
+            _store, _client,
+            Options.Create(new OutboxSettings { MaxEntries = 1, MaxAgeDays = 7 }),
+            NullLogger<OutboxReplayWorker>.Instance);
+
+        try
+        {
+            _client.NextOpen = new OpenRecordResult(DashboardAvailability.Ok, Guid.NewGuid());
+            _client.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
+
+            await _store.EnqueueAsync(MakeEntry("aged", serverRecordId: null, queuedAt: DateTime.UtcNow.AddDays(-30)), CancellationToken.None);
+            await _store.EnqueueAsync(MakeEntry("extra", serverRecordId: null, queuedAt: DateTime.UtcNow.AddMinutes(-10)), CancellationToken.None);
+            await _store.EnqueueAsync(MakeEntry("kept", serverRecordId: null, queuedAt: DateTime.UtcNow.AddMinutes(-5)), CancellationToken.None);
+
+            await workerWithLimits.TickAsync(CancellationToken.None);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(_client.OpenCalls, Is.EqualTo(1), "only the surviving entry should reach the client");
+                Assert.That(File.Exists(Path.Combine(_root, "dead", "aged.json")), Is.True);
+                Assert.That(File.Exists(Path.Combine(_root, "dead", "extra.json")), Is.True);
+                Assert.That(File.Exists(Path.Combine(_root, "dead", "kept.json")), Is.False);
+            });
+
+            var alive = await _store.ListAsync(CancellationToken.None);
+            Assert.That(alive, Is.Empty, "kept entry succeeded and should be removed");
+        }
+        finally
+        {
+            workerWithLimits.Dispose();
+        }
+    }
+
+    [Test]
     public async Task TickAsync_EntryPassesCorrectOpenDtoFields()
     {
         var serverId = Guid.NewGuid();

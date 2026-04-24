@@ -182,6 +182,117 @@ public sealed class OutboxStoreTests
     }
 
     [Test]
+    public async Task PruneAsync_DropsEntriesOlderThanMaxAge_ToDeadLetter()
+    {
+        var now = new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc);
+        await _store.EnqueueAsync(MakeEntry("old", "db1", "c1") with { QueuedAt = now.AddDays(-20) }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("recent", "db1", "c1") with { QueuedAt = now.AddDays(-5) }, CancellationToken.None);
+
+        var result = await _store.PruneAsync(maxEntries: 0, maxAgeDays: 14, now, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AgedOut, Is.EqualTo(1));
+            Assert.That(result.OverCapacity, Is.Zero);
+        });
+
+        var alive = await _store.ListAsync(CancellationToken.None);
+        Assert.That(alive.Select(e => e.ClientTaskId), Is.EqualTo(new[] { "recent" }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(Path.Combine(_root, "dead", "old.json")), Is.True);
+            Assert.That(File.ReadAllText(Path.Combine(_root, "dead", "old.reason.txt")),
+                Is.EqualTo("exceeded max age (14 days)"));
+        });
+    }
+
+    [Test]
+    public async Task PruneAsync_DropsOldestOverMaxEntries_ToDeadLetter()
+    {
+        var baseTime = new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc);
+        await _store.EnqueueAsync(MakeEntry("a", "db1", "c1") with { QueuedAt = baseTime.AddMinutes(1) }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("b", "db1", "c1") with { QueuedAt = baseTime.AddMinutes(2) }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("c", "db1", "c1") with { QueuedAt = baseTime.AddMinutes(3) }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("d", "db1", "c1") with { QueuedAt = baseTime.AddMinutes(4) }, CancellationToken.None);
+
+        var result = await _store.PruneAsync(maxEntries: 2, maxAgeDays: 0, baseTime.AddHours(1), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AgedOut, Is.Zero);
+            Assert.That(result.OverCapacity, Is.EqualTo(2));
+        });
+
+        var alive = await _store.ListAsync(CancellationToken.None);
+        Assert.That(alive.Select(e => e.ClientTaskId), Is.EqualTo(new[] { "c", "d" }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(Path.Combine(_root, "dead", "a.json")), Is.True);
+            Assert.That(File.Exists(Path.Combine(_root, "dead", "b.json")), Is.True);
+            Assert.That(File.ReadAllText(Path.Combine(_root, "dead", "a.reason.txt")),
+                Is.EqualTo("exceeded max entries (2)"));
+        });
+    }
+
+    [Test]
+    public async Task PruneAsync_AppliesAgeBeforeCount()
+    {
+        var now = new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc);
+        await _store.EnqueueAsync(MakeEntry("old", "db1", "c1") with { QueuedAt = now.AddDays(-20) }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("a", "db1", "c1") with { QueuedAt = now.AddDays(-3) }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("b", "db1", "c1") with { QueuedAt = now.AddDays(-2) }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("c", "db1", "c1") with { QueuedAt = now.AddDays(-1) }, CancellationToken.None);
+
+        var result = await _store.PruneAsync(maxEntries: 2, maxAgeDays: 14, now, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AgedOut, Is.EqualTo(1));
+            Assert.That(result.OverCapacity, Is.EqualTo(1));
+        });
+
+        var alive = await _store.ListAsync(CancellationToken.None);
+        Assert.That(alive.Select(e => e.ClientTaskId), Is.EqualTo(new[] { "b", "c" }));
+    }
+
+    [Test]
+    public async Task PruneAsync_BothLimitsZero_NoOp()
+    {
+        await _store.EnqueueAsync(MakeEntry("a", "db1", "c1") with { QueuedAt = DateTime.UtcNow.AddYears(-1) }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("b", "db1", "c1") with { QueuedAt = DateTime.UtcNow.AddYears(-1) }, CancellationToken.None);
+
+        var result = await _store.PruneAsync(maxEntries: 0, maxAgeDays: 0, DateTime.UtcNow, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AgedOut, Is.Zero);
+            Assert.That(result.OverCapacity, Is.Zero);
+        });
+        Assert.That(await _store.ListAsync(CancellationToken.None), Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public async Task PruneAsync_UnderBothLimits_NoOp()
+    {
+        var now = new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc);
+        await _store.EnqueueAsync(MakeEntry("a", "db1", "c1") with { QueuedAt = now.AddDays(-1) }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("b", "db1", "c1") with { QueuedAt = now.AddDays(-2) }, CancellationToken.None);
+
+        var result = await _store.PruneAsync(maxEntries: 100, maxAgeDays: 14, now, CancellationToken.None);
+
+        Assert.That(result.Total, Is.Zero);
+        Assert.That(await _store.ListAsync(CancellationToken.None), Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public async Task PruneAsync_EmptyOutbox_NoOp()
+    {
+        var result = await _store.PruneAsync(maxEntries: 100, maxAgeDays: 14, DateTime.UtcNow, CancellationToken.None);
+
+        Assert.That(result.Total, Is.Zero);
+    }
+
+    [Test]
     public async Task EnqueueAsync_ConcurrentDifferentIds_AllPersisted()
     {
         var ids = Enumerable.Range(0, 20).Select(i => $"task-{i}").ToArray();

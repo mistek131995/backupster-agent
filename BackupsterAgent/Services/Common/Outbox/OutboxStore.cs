@@ -135,4 +135,54 @@ public sealed class OutboxStore : IOutboxStore
 
         return Task.CompletedTask;
     }
+
+    public async Task<PruneResult> PruneAsync(int maxEntries, int maxAgeDays, DateTime nowUtc, CancellationToken ct)
+    {
+        var ageEnabled = maxAgeDays > 0;
+        var countEnabled = maxEntries > 0;
+        if (!ageEnabled && !countEnabled) return PruneResult.Empty;
+
+        var entries = await ListAsync(ct);
+        if (entries.Count == 0) return PruneResult.Empty;
+
+        var agedOut = 0;
+        if (ageEnabled)
+        {
+            var cutoff = nowUtc - TimeSpan.FromDays(maxAgeDays);
+            var reason = $"exceeded max age ({maxAgeDays} days)";
+            foreach (var entry in entries)
+            {
+                if (entry.QueuedAt >= cutoff) continue;
+                ct.ThrowIfCancellationRequested();
+                await MoveToDeadAsync(entry.ClientTaskId, reason, ct);
+                agedOut++;
+            }
+        }
+
+        var overCapacity = 0;
+        if (countEnabled)
+        {
+            var alive = agedOut > 0 ? await ListAsync(ct) : entries;
+            if (alive.Count > maxEntries)
+            {
+                var dropCount = alive.Count - maxEntries;
+                var reason = $"exceeded max entries ({maxEntries})";
+                for (var i = 0; i < dropCount; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await MoveToDeadAsync(alive[i].ClientTaskId, reason, ct);
+                    overCapacity++;
+                }
+            }
+        }
+
+        if (agedOut > 0 || overCapacity > 0)
+        {
+            _logger.LogWarning(
+                "OutboxStore: pruned {AgedOut} aged-out and {OverCapacity} over-capacity entries to dead-letter (limits: maxEntries={MaxEntries}, maxAgeDays={MaxAgeDays}).",
+                agedOut, overCapacity, maxEntries, maxAgeDays);
+        }
+
+        return new PruneResult(agedOut, overCapacity);
+    }
 }

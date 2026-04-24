@@ -79,6 +79,8 @@ public sealed class OutboxReplayWorker : BackgroundService
 
     internal async Task TickAsync(CancellationToken ct)
     {
+        await _store.PruneAsync(_settings.MaxEntries, _settings.MaxAgeDays, DateTime.UtcNow, ct);
+
         var entries = await _store.ListAsync(ct);
         if (entries.Count == 0) return;
 
