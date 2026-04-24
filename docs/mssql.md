@@ -93,15 +93,20 @@
 - `SharedBackupPath` — путь так, как его видит **SQL Server**. Уходит в команду `BACKUP`/`RESTORE`.
 - `AgentBackupPath` — путь к **той же папке** так, как её видит **агент**. Если пути совпадают — оставить пустым.
 
+**Если `SharedBackupPath` не задан**, агент запрашивает у SQL Server `SERVERPROPERTY('InstanceDefaultBackupPath')` и использует его (на Windows по умолчанию это `C:\Program Files\Microsoft SQL Server\MSSQL<ver>.<instance>\MSSQL\Backup\`). Сценарий рассчитан на то, что агент и SQL Server работают на одном хосте и оба видят этот каталог одинаково. На remote SQL без `SharedBackupPath` бэкап упадёт с понятной ошибкой — агент физически не сможет дотянуться до локальной для SQL папки.
+
 | Сценарий | `SharedBackupPath` | `AgentBackupPath` |
 |---|---|---|
-| Агент и SQL Server на одном хосте (без Docker) | `C:\mssql-backups` | *(не задано)* |
+| Агент и SQL Server на одном хосте (без Docker) | *(не задано — возьмётся `InstanceDefaultBackupPath`)* | *(не задано)* |
+| Одинаковый хост, но другой каталог для `.bak` | `C:\mssql-backups` | *(не задано)* |
 | Docker Compose, общий named volume у обоих контейнеров | `/var/opt/mssql/backups` | *(не задано)* |
 | Агент в Docker, SQL Server на хосте; bind-mount одинакового пути | `/var/opt/mssql/backups` | *(не задано)* |
 | Windows SQL Server + Linux-контейнер агента, SMB/UNC-шара смонтирована в контейнер | `\\fs\backup` | `/mnt/backup` |
 | Оба на разных хостах, NFS-шара | `/mnt/nfs/mssql-backups` | *(не задано)* |
 
 Агент **не** настраивает volume-ы, SMB/CIFS-монтирование или NFS — он только читает и пишет по указанным путям. Проверьте права на запись/чтение с обеих сторон до попытки бэкапа.
+
+> `DatabaseConfig.OutputPath` для MSSQL physical **не используется**. Временным/общим каталогом всегда управляет пара `SharedBackupPath`/`AgentBackupPath` или `InstanceDefaultBackupPath` из SQL Server.
 
 **Требования**
 

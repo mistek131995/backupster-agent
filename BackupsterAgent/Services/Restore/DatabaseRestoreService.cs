@@ -5,10 +5,8 @@ using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
-using BackupsterAgent.Providers;
 using BackupsterAgent.Providers.Restore;
 using BackupsterAgent.Providers.Upload;
-using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
@@ -105,8 +103,8 @@ public sealed class DatabaseRestoreService
             else if (connection.DatabaseType == DatabaseType.Mssql && backupMode == BackupMode.Physical)
             {
                 var fileName = $"{targetDatabase}_{taskId:N}.bak";
-                var sqlDir = MssqlSharedPathResolver.GetSqlDir(connection, tempDir);
-                var agentDir = MssqlSharedPathResolver.GetAgentDir(connection, tempDir);
+                var sqlDir = await MssqlSharedPathResolver.GetSqlDirAsync(connection, ct);
+                var agentDir = await MssqlSharedPathResolver.GetAgentDirAsync(connection, ct);
                 Directory.CreateDirectory(agentDir);
 
                 mssqlBakAgentPath = Path.Combine(agentDir, fileName);

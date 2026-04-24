@@ -1,4 +1,5 @@
 using BackupsterAgent.Configuration;
+using Microsoft.Data.SqlClient;
 
 namespace BackupsterAgent.Services.Common.Resolvers;
 
@@ -25,18 +26,15 @@ public static class MssqlSharedPathResolver
         return trimmed + separator + fileName;
     }
 
-    public static string GetSqlDir(ConnectionConfig connection, string fallback)
+    public static async Task<string> GetSqlDirAsync(ConnectionConfig connection, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(connection.SharedBackupPath))
             return connection.SharedBackupPath!;
 
-        if (!IsLocalHost(connection.Host))
-            throw new InvalidOperationException(BuildRemoteNoSharedMessage(connection));
-
-        return fallback;
+        return await QueryInstanceDefaultBackupPathAsync(connection, ct);
     }
 
-    public static string GetAgentDir(ConnectionConfig connection, string fallback)
+    public static async Task<string> GetAgentDirAsync(ConnectionConfig connection, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(connection.AgentBackupPath))
             return connection.AgentBackupPath!;
@@ -47,10 +45,41 @@ public static class MssqlSharedPathResolver
         if (!IsLocalHost(connection.Host))
             throw new InvalidOperationException(BuildRemoteNoSharedMessage(connection));
 
-        return fallback;
+        return await QueryInstanceDefaultBackupPathAsync(connection, ct);
     }
+
+    private static async Task<string> QueryInstanceDefaultBackupPathAsync(ConnectionConfig connection, CancellationToken ct)
+    {
+        const string sql = "SELECT CAST(SERVERPROPERTY('InstanceDefaultBackupPath') AS nvarchar(4000));";
+
+        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
+        await conn.OpenAsync(ct);
+
+        await using var cmd = new SqlCommand(sql, conn);
+        var result = await cmd.ExecuteScalarAsync(ct);
+
+        if (result is null || result is DBNull || result is not string path || string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException(
+                $"SQL Server (подключение '{connection.Name}') не вернул InstanceDefaultBackupPath. " +
+                "Задайте SharedBackupPath в ConnectionConfig — путь к каталогу .bak, видимый и агенту, и SQL Server.");
+        }
+
+        return path;
+    }
+
+    private static string BuildMasterConnectionString(ConnectionConfig connection) =>
+        new SqlConnectionStringBuilder
+        {
+            DataSource = $"{connection.Host},{connection.Port}",
+            InitialCatalog = "master",
+            UserID = connection.Username,
+            Password = connection.Password,
+            TrustServerCertificate = true,
+            Encrypt = true,
+        }.ToString();
 
     private static string BuildRemoteNoSharedMessage(ConnectionConfig connection) =>
         $"Remote MSSQL ('{connection.Host}', подключение '{connection.Name}') требует SharedBackupPath " +
-        "в ConnectionConfig — путь к каталогу .bak, видимый и агенту, и SQL Server. Подробнее — в README агента.";
+        "в ConnectionConfig — путь к каталогу .bak, видимый и агенту, и SQL Server. Подробнее — в docs/mssql.md.";
 }

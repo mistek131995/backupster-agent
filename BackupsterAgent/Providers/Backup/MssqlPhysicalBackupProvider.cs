@@ -54,8 +54,8 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         var fileName = $"{config.Database}_{timestamp}.bak";
 
-        var sqlDir = MssqlSharedPathResolver.GetSqlDir(connection, config.OutputPath);
-        var agentDir = MssqlSharedPathResolver.GetAgentDir(connection, config.OutputPath);
+        var sqlDir = await MssqlSharedPathResolver.GetSqlDirAsync(connection, ct);
+        var agentDir = await MssqlSharedPathResolver.GetAgentDirAsync(connection, ct);
 
         Directory.CreateDirectory(agentDir);
 
