@@ -92,25 +92,69 @@ sudo systemctl restart backupster-agent
 
 ## Windows (служба)
 
+### 1. Установите .NET Runtime 10
+
+Скачайте установщик с [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) — **.NET Runtime** (не ASP.NET, не SDK) для Windows x64.
+
+Для бэкапа БД установите клиентские утилиты под используемые СУБД:
+
+- **PostgreSQL** — `pg_dump` / `psql` (ставятся вместе с [PostgreSQL Server](https://www.postgresql.org/download/windows/) или отдельным пакетом «Command Line Tools»).
+- **MySQL / MariaDB** — `mysqldump` / `mysql` из [MySQL Community Server](https://dev.mysql.com/downloads/mysql/) или MariaDB.
+- **MSSQL** — клиентские утилиты не требуются, агент работает по TDS in-process.
+
+Убедитесь, что каталоги с `pg_dump.exe` / `mysqldump.exe` попали в системную переменную `Path`, иначе служба их не увидит.
+
+### 2. Распакуйте агента
+
+Скопируйте опубликованные файлы в `C:\Services\BackupsterAgent` (путь может быть любым — дальше по тексту используется именно этот):
+
 ```powershell
-# Распакуйте опубликованные файлы в C:\Services\BackupsterAgent
-
-sc.exe create BackupsterAgent binPath="C:\Services\BackupsterAgent\BackupsterAgent.exe"
-
-# Задайте переменные окружения
-reg add "HKLM\SYSTEM\CurrentControlSet\Services\BackupsterAgent\Environment" ^
-  /v AgentSettings__Token /t REG_SZ /d "<токен>"
-reg add "HKLM\SYSTEM\CurrentControlSet\Services\BackupsterAgent\Environment" ^
-  /v AgentSettings__DashboardUrl /t REG_SZ /d "<url дашборда>"
-
-sc.exe start BackupsterAgent
+New-Item -ItemType Directory -Path "C:\Services\BackupsterAgent" -Force
+# распакуйте архив агента в C:\Services\BackupsterAgent
 ```
 
-При первом запуске агент создаст шаблон `C:\Services\BackupsterAgent\config\appsettings.json`. Заполните его и перезапустите службу:
+### 3. Зарегистрируйте службу Windows
+
+Запустите PowerShell от имени администратора и выполните:
 
 ```powershell
-sc.exe stop BackupsterAgent
-sc.exe start BackupsterAgent
+sc.exe create BackupsterAgent `
+  binPath= "C:\Services\BackupsterAgent\BackupsterAgent.exe" `
+  start= auto
+
+[Environment]::SetEnvironmentVariable("AgentSettings__Token","<токен>","Machine")
+[Environment]::SetEnvironmentVariable("AgentSettings__DashboardUrl","<url дашборда>","Machine")
+
+Start-Service BackupsterAgent
+```
+
+> В `sc.exe` после `binPath=` и `start=` обязателен пробел — это особенность синтаксиса `sc.exe`, не опечатка.
+>
+> Переменные уровня `Machine` подхватываются только новыми процессами, поэтому `Start-Service` после `SetEnvironmentVariable` обязателен — иначе служба стартанёт со старым окружением.
+
+### 4. Заполните конфиг и перезапустите службу
+
+При первом запуске агент создаст шаблон `C:\Services\BackupsterAgent\config\appsettings.json`. Заполните его (подключения к БД, хранилище, ключ шифрования — см. [configuration.md](configuration.md)) и перезапустите службу:
+
+```powershell
+Restart-Service BackupsterAgent
+```
+
+Проверить состояние и прочитать последние записи журнала:
+
+```powershell
+Get-Service BackupsterAgent
+Get-EventLog -LogName Application -Source BackupsterAgent -Newest 20
+```
+
+### Удаление службы
+
+```powershell
+Stop-Service BackupsterAgent
+sc.exe delete BackupsterAgent
+
+[Environment]::SetEnvironmentVariable("AgentSettings__Token",$null,"Machine")
+[Environment]::SetEnvironmentVariable("AgentSettings__DashboardUrl",$null,"Machine")
 ```
 
 ---
