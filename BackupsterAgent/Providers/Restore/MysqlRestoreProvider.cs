@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Resolvers;
 using MySqlConnector;
 
 namespace BackupsterAgent.Providers.Restore;
@@ -9,10 +10,14 @@ namespace BackupsterAgent.Providers.Restore;
 public sealed class MysqlRestoreProvider : IRestoreProvider
 {
     private readonly ILogger<MysqlRestoreProvider> _logger;
+    private readonly MysqlBinaryResolver _binaryResolver;
 
-    public MysqlRestoreProvider(ILogger<MysqlRestoreProvider> logger)
+    public MysqlRestoreProvider(
+        ILogger<MysqlRestoreProvider> logger,
+        MysqlBinaryResolver binaryResolver)
     {
         _logger = logger;
+        _binaryResolver = binaryResolver;
     }
 
     public async Task ValidatePermissionsAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
@@ -70,9 +75,11 @@ WHERE TABLE_SCHEMA = @db;";
 
     public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct)
     {
+        var mysql = _binaryResolver.Resolve(connection, "mysql");
+
         var psi = new ProcessStartInfo
         {
-            FileName = "mysql",
+            FileName = mysql,
             ArgumentList =
             {
                 "-h", connection.Host,
@@ -105,17 +112,35 @@ WHERE TABLE_SCHEMA = @db;";
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
         var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
 
+        var skipped = 0;
         try
         {
             await using var source = new FileStream(
                 restoreFilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
                 bufferSize: 65536, useAsync: true);
-            await source.CopyToAsync(process.StandardInput.BaseStream, ct);
+            using var reader = new StreamReader(source, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var writer = process.StandardInput;
+
+            while (await reader.ReadLineAsync(ct) is { } line)
+            {
+                if (IsLegacyCreateDatabase(line) || IsLegacyUseDatabase(line))
+                {
+                    skipped++;
+                    continue;
+                }
+
+                await writer.WriteLineAsync(line.AsMemory(), ct);
+            }
         }
         finally
         {
             process.StandardInput.Close();
         }
+
+        if (skipped > 0)
+            _logger.LogInformation(
+                "Filtered {Count} legacy CREATE DATABASE / USE statements from dump while restoring into '{Target}'",
+                skipped, targetDatabase);
 
         await Task.WhenAll(stderrTask, stdoutTask);
         await process.WaitForExitAsync(ct);
@@ -145,6 +170,36 @@ WHERE TABLE_SCHEMA = @db;";
         var hasCreate = !reader.IsDBNull(0) && Convert.ToInt32(reader.GetValue(0)) == 1;
         var hasDrop = !reader.IsDBNull(1) && Convert.ToInt32(reader.GetValue(1)) == 1;
         return (hasCreate, hasDrop);
+    }
+
+    private static bool IsLegacyCreateDatabase(string line) =>
+        StartsWithToken(line, "CREATE") && HasFollowingToken(line, "CREATE", "DATABASE");
+
+    private static bool IsLegacyUseDatabase(string line) =>
+        StartsWithToken(line, "USE");
+
+    private static bool StartsWithToken(string line, string token)
+    {
+        var i = 0;
+        while (i < line.Length && char.IsWhiteSpace(line[i])) i++;
+        if (i + token.Length > line.Length) return false;
+        if (string.Compare(line, i, token, 0, token.Length, StringComparison.OrdinalIgnoreCase) != 0)
+            return false;
+        var after = i + token.Length;
+        return after == line.Length || !char.IsLetterOrDigit(line[after]) && line[after] != '_';
+    }
+
+    private static bool HasFollowingToken(string line, string first, string second)
+    {
+        var i = 0;
+        while (i < line.Length && char.IsWhiteSpace(line[i])) i++;
+        i += first.Length;
+        while (i < line.Length && char.IsWhiteSpace(line[i])) i++;
+        if (i + second.Length > line.Length) return false;
+        if (string.Compare(line, i, second, 0, second.Length, StringComparison.OrdinalIgnoreCase) != 0)
+            return false;
+        var after = i + second.Length;
+        return after == line.Length || !char.IsLetterOrDigit(line[after]) && line[after] != '_';
     }
 
     private static string BuildAdminConnectionString(ConnectionConfig connection) =>

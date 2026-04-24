@@ -12,5 +12,5 @@ public sealed class ConnectionConfig
     public string Password { get; init; } = string.Empty;
     public string? SharedBackupPath { get; init; }
     public string? AgentBackupPath { get; init; }
-    public string? PostgresBinPath { get; init; }
+    public string? BinPath { get; init; }
 }

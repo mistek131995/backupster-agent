@@ -103,6 +103,7 @@ var outboxDir = Path.Combine(configDir, "outbox");
 builder.Services.AddSingleton<IOutboxStore>(sp =>
     new OutboxStore(outboxDir, sp.GetRequiredService<ILogger<OutboxStore>>()));
 builder.Services.AddSingleton<PostgresBinaryResolver>();
+builder.Services.AddSingleton<MysqlBinaryResolver>();
 builder.Services.AddSingleton(sp =>
     new ConnectionResolver(sp.GetRequiredService<IOptions<List<ConnectionConfig>>>().Value));
 builder.Services.AddSingleton(sp =>

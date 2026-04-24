@@ -30,15 +30,15 @@ public sealed class PostgresBinaryResolver
 
     private async Task<string?> ResolveDirectoryAsync(ConnectionConfig connection, CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(connection.PostgresBinPath))
+        if (!string.IsNullOrWhiteSpace(connection.BinPath))
         {
-            var overridePath = connection.PostgresBinPath!;
+            var overridePath = connection.BinPath!;
             if (!Directory.Exists(overridePath))
                 throw new InvalidOperationException(
-                    $"Configured PostgresBinPath '{overridePath}' for connection '{connection.Name}' does not exist.");
+                    $"Configured BinPath '{overridePath}' for connection '{connection.Name}' does not exist.");
 
             _logger.LogInformation(
-                "Using configured PostgresBinPath '{Dir}' for connection '{Name}'",
+                "Using configured BinPath '{Dir}' for connection '{Name}'",
                 overridePath, connection.Name);
             return overridePath;
         }
@@ -161,5 +161,5 @@ public sealed class PostgresBinaryResolver
     }
 
     private static string BuildCacheKey(ConnectionConfig c) =>
-        $"{c.PostgresBinPath ?? string.Empty}|{c.Host}:{c.Port}";
+        $"{c.BinPath ?? string.Empty}|{c.Host}:{c.Port}";
 }

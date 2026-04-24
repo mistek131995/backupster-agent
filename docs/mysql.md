@@ -17,3 +17,35 @@
 ## Если вам нужен физический бэкап MySQL
 
 Напишите на [support@backupster.io](mailto:support@backupster.io) — расскажите о вашем сценарии. Функциональность может быть реализована по запросу.
+
+## Поиск бинарников `mysqldump` / `mysql`
+
+Агент вызывает утилиты MySQL-клиента (`mysqldump` для бэкапа, `mysql` для восстановления) напрямую. Порядок резолва каталога с бинарниками:
+
+1. Если в `ConnectionConfig.BinPath` указан путь — используется он.
+2. Иначе агент ищет установку на хосте:
+   - Windows: `C:\Program Files\MySQL\MySQL Server *\bin` и `C:\Program Files (x86)\MySQL\MySQL Server *\bin`. Если найдено несколько — выбирается каталог с наибольшей версией.
+   - Linux: `/usr/local/mysql/bin` (установка из tarball).
+3. Если каталог не найден — fallback на `PATH`.
+
+В отличие от PostgreSQL, агент не опрашивает сервер о версии: MySQL-клиент обратно совместим, и `mysqldump` подходящей или более свежей версии работает корректно.
+
+**Когда задавать `BinPath` явно.** На Windows инсталлятор MySQL часто добавляет `bin` только в `User PATH`, но агент работает как служба (LocalSystem / отдельный аккаунт) и этот PATH не видит. Либо авто-резолв находит не ту установку. В обоих случаях задайте каталог явно:
+
+```json
+{
+  "Connections": [
+    {
+      "Name": "mysql-main",
+      "DatabaseType": "Mysql",
+      "Host": "127.0.0.1",
+      "Port": 3306,
+      "Username": "backup_user",
+      "Password": "...",
+      "BinPath": "C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin"
+    }
+  ]
+}
+```
+
+Override бьёт всё остальное — ни скан стандартных каталогов, ни `PATH` не опрашиваются.

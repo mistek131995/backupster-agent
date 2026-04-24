@@ -86,7 +86,7 @@ Backup и restore/delete на одном агенте не идут паралл
 
 Агент сам выбирает `pg_dump`/`pg_basebackup`/`psql`/`pg_ctl` под мажорную версию сервера, к которому подключается: спрашивает `SHOW server_version_num` и ищет бинарь в стандартном месте установки (Windows-реестр + `C:\Program Files\PostgreSQL\<MAJOR>\bin`; на Linux — `/usr/lib/postgresql/<MAJOR>/bin` для Debian/Ubuntu и `/usr/pgsql-<MAJOR>/bin` для RHEL/PGDG). Если каталог не найден — fallback на `PATH`. На хосте с несколькими PG-версиями это избавляет от ошибок `incompatible server version` и от возни с `PATH` / перезагрузкой Windows для обновления кеша `services.exe`.
 
-Нестандартную установку можно задать явно — полем `PostgresBinPath` в `Connections[]` (см. [docs/postgres.md](docs/postgres.md)).
+Нестандартную установку можно задать явно — полем `BinPath` в `Connections[]` (единое поле для PG и MySQL; см. [docs/postgres.md](docs/postgres.md), [docs/mysql.md](docs/mysql.md)).
 
 ---
 

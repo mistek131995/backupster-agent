@@ -4,6 +4,7 @@ using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Resolvers;
 using MySqlConnector;
 
 namespace BackupsterAgent.Providers.Backup;
@@ -11,20 +12,25 @@ namespace BackupsterAgent.Providers.Backup;
 public sealed class MysqlLogicalBackupProvider : IBackupProvider
 {
     private readonly ILogger<MysqlLogicalBackupProvider> _logger;
+    private readonly MysqlBinaryResolver _binaryResolver;
 
-    public MysqlLogicalBackupProvider(ILogger<MysqlLogicalBackupProvider> logger)
+    public MysqlLogicalBackupProvider(
+        ILogger<MysqlLogicalBackupProvider> logger,
+        MysqlBinaryResolver binaryResolver)
     {
         _logger = logger;
+        _binaryResolver = binaryResolver;
     }
 
     public async Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
     {
-        await ValidateBackupPermissionsAsync(connection, database, ct);
+        await ValidateBackupPermissionsAsync(connection, database, _binaryResolver, ct);
     }
 
-    private static async Task ValidateBackupPermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
+    private static async Task ValidateBackupPermissionsAsync(ConnectionConfig connection, string database, MysqlBinaryResolver resolver, CancellationToken ct)
     {
-        await CheckBinaryAsync("mysqldump", ct);
+        var mysqldump = resolver.Resolve(connection, "mysqldump");
+        await CheckBinaryAsync(mysqldump, ct);
 
         const string globalSql = @"
 SELECT
@@ -74,6 +80,8 @@ WHERE TABLE_SCHEMA = @db;";
 
     public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
     {
+        var mysqldump = _binaryResolver.Resolve(connection, "mysqldump");
+
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         var fileName = $"{config.Database}_{timestamp}.sql.gz";
         var outputFile = Path.Combine(config.OutputPath, fileName);
@@ -81,12 +89,12 @@ WHERE TABLE_SCHEMA = @db;";
         Directory.CreateDirectory(config.OutputPath);
 
         _logger.LogInformation(
-            "Starting MySQL logical backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}'",
-            config.Database, connection.Host, connection.Port, outputFile);
+            "Starting MySQL logical backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}', Binary: '{Binary}'",
+            config.Database, connection.Host, connection.Port, outputFile, mysqldump);
 
         var psi = new ProcessStartInfo
         {
-            FileName = "mysqldump",
+            FileName = mysqldump,
             ArgumentList =
             {
                 "-h", connection.Host,
@@ -100,7 +108,7 @@ WHERE TABLE_SCHEMA = @db;";
                 "--hex-blob",
                 "--set-gtid-purged=OFF",
                 "--default-character-set=utf8mb4",
-                "--databases", config.Database,
+                config.Database,
             },
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -188,13 +196,15 @@ WHERE TABLE_SCHEMA = @db;";
         {
             throw new InvalidOperationException(
                 $"{binary} is not available on this host. " +
-                $"Install the mysql-client package and ensure {binary} is in PATH.", ex);
+                "Install the mysql-client package, ensure mysqldump is in PATH, " +
+                "or set ConnectionConfig.BinPath to the directory containing MySQL client binaries.", ex);
         }
 
         if (process.ExitCode != 0)
             throw new InvalidOperationException(
                 $"{binary} --version returned exit code {process.ExitCode}. " +
-                $"Ensure the mysql-client package is installed and {binary} is in PATH.");
+                "Ensure the mysql-client package is installed and mysqldump is in PATH " +
+                "(or set ConnectionConfig.BinPath).");
     }
 
     private static string BuildConnectionString(ConnectionConfig connection) =>
