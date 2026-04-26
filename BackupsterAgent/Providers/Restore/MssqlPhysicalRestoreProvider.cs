@@ -70,7 +70,7 @@ END";
         var quoted = QuoteIdentifier(targetDatabase);
         var escapedPath = restoreFilePath.Replace("'", "''");
 
-        var sql = $"RESTORE DATABASE {quoted} FROM DISK = N'{escapedPath}' WITH REPLACE, RECOVERY{moveClauses};";
+        var sql = $"RESTORE DATABASE {quoted} FROM DISK = N'{escapedPath}' WITH FILE = 1, REPLACE, RECOVERY{moveClauses};";
 
         _logger.LogInformation(
             "Executing RESTORE DATABASE '{Database}' FROM '{Path}' with {MoveCount} MOVE clause(s)",
@@ -89,7 +89,7 @@ END";
         ConnectionConfig connection, string restoreFilePath, CancellationToken ct)
     {
         var escapedPath = restoreFilePath.Replace("'", "''");
-        var sql = $"RESTORE FILELISTONLY FROM DISK = N'{escapedPath}';";
+        var sql = $"RESTORE FILELISTONLY FROM DISK = N'{escapedPath}' WITH FILE = 1;";
 
         await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
         await conn.OpenAsync(ct);
