@@ -62,74 +62,171 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         var stagingPath = Path.Combine(parent, $"{leaf}.new-{guid}");
         var oldPath = Path.Combine(parent, $"{leaf}.old-{guid}");
         var failedPath = Path.Combine(parent, $"{leaf}.failed-{guid}");
+        var startLog = Path.Combine(Path.GetTempPath(), $"backupster-pg-start-{Guid.NewGuid():N}.log");
 
         Directory.CreateDirectory(stagingPath);
-        try
-        {
-            _logger.LogInformation(
-                "Extracting base archive '{ArchivePath}' to staging '{StagingPath}'", restoreFilePath, stagingPath);
-            await ExtractTarGzAsync(restoreFilePath, stagingPath, ct);
-            await VerifyStagedClusterAsync(stagingPath, pgCtl, ct);
-            _logger.LogInformation("Staged cluster verified at '{StagingPath}'", stagingPath);
-        }
-        catch
-        {
-            TryDeleteDirectory(stagingPath);
-            throw;
-        }
-
-        _logger.LogInformation("Stopping PostgreSQL cluster at '{PgDataPath}'", pgDataPath);
-        try
-        {
-            await RunPgCtlAsync(pgCtl, ["stop", "-D", pgDataPath, "-m", "fast", "-w"], ct);
-            _logger.LogInformation("PostgreSQL cluster stopped");
-        }
-        catch
-        {
-            TryDeleteDirectory(stagingPath);
-            throw;
-        }
 
         try
         {
-            Directory.Move(pgDataPath, oldPath);
+            try
+            {
+                _logger.LogInformation(
+                    "Extracting base archive '{ArchivePath}' to staging '{StagingPath}'", restoreFilePath, stagingPath);
+                await ExtractTarGzAsync(restoreFilePath, stagingPath, ct);
+                await VerifyStagedClusterAsync(stagingPath, pgCtl, ct);
+                _logger.LogInformation("Staged cluster verified at '{StagingPath}'", stagingPath);
+            }
+            catch
+            {
+                TryDeleteDirectory(stagingPath);
+                throw;
+            }
+
+            _logger.LogInformation("Stopping PostgreSQL cluster at '{PgDataPath}'", pgDataPath);
+            try
+            {
+                await RunPgCtlAsync(pgCtl, ["stop", "-D", pgDataPath, "-m", "fast", "-w"], ct);
+                _logger.LogInformation("PostgreSQL cluster stopped");
+            }
+            catch
+            {
+                TryDeleteDirectory(stagingPath);
+                throw;
+            }
+
+            try
+            {
+                Directory.Move(pgDataPath, oldPath);
+                Directory.Move(stagingPath, pgDataPath);
+
+                _logger.LogInformation(
+                    "Starting PostgreSQL cluster at '{PgDataPath}' (server log → '{LogFile}')", pgDataPath, startLog);
+                await StartPostgresAsync(pgCtl, pgDataPath, startLog, ct);
+
+                _logger.LogInformation("PostgreSQL cluster started");
+                TryDeleteDirectory(oldPath);
+            }
+            catch (Exception swapException)
+            {
+                await RecoverClusterAsync(pgCtl, pgDataPath, stagingPath, oldPath, failedPath, swapException);
+                throw new InvalidOperationException(
+                    $"Восстановление не удалось ({swapException.Message}). " +
+                    "Кластер возвращён в исходное состояние и запущен.",
+                    swapException);
+            }
         }
-        catch
+        finally
         {
-            TryDeleteDirectory(stagingPath);
-            throw;
+            TryDeleteFile(startLog);
+        }
+    }
+
+    private async Task RecoverClusterAsync(
+        string pgCtl, string pgDataPath, string stagingPath, string oldPath, string failedPath,
+        Exception originalException)
+    {
+        _logger.LogError(originalException,
+            "Restore swap failed at PGDATA '{PgDataPath}'. Attempting recovery.", pgDataPath);
+
+        var pgdataExists = Directory.Exists(pgDataPath);
+        var oldExists = Directory.Exists(oldPath);
+
+        string? rollbackError = null;
+
+        if (pgdataExists && oldExists)
+        {
+            _logger.LogWarning(
+                "Both PGDATA and backup copy exist. Moving new → '{FailedPath}', restoring backup.", failedPath);
+
+            if (!await TryMoveDirectoryWithRetryAsync(pgCtl, pgDataPath, failedPath))
+                rollbackError =
+                    $"новый кластер '{pgDataPath}' не удалось переместить в '{failedPath}'. " +
+                    $"Восстановите вручную: переместите '{pgDataPath}' в безопасное место, затем '{oldPath}' в '{pgDataPath}'.";
+            else if (!await TryMoveDirectoryWithRetryAsync(pgCtl, oldPath, pgDataPath))
+                rollbackError =
+                    $"исходный кластер '{oldPath}' не удалось вернуть в '{pgDataPath}'. " +
+                    $"Восстановите вручную: переместите '{oldPath}' в '{pgDataPath}'.";
+        }
+        else if (oldExists && !pgdataExists)
+        {
+            _logger.LogWarning("PGDATA missing, backup at '{OldPath}'. Restoring.", oldPath);
+            if (!await TryMoveDirectoryWithRetryAsync(pgCtl, oldPath, pgDataPath))
+                rollbackError =
+                    $"исходный кластер '{oldPath}' не удалось вернуть в '{pgDataPath}'. " +
+                    $"Восстановите вручную: переместите '{oldPath}' в '{pgDataPath}'.";
+        }
+        else if (pgdataExists && !oldExists)
+        {
+            _logger.LogInformation("PGDATA at '{PgDataPath}' intact, no swap occurred.", pgDataPath);
+        }
+        else
+        {
+            rollbackError =
+                $"PGDATA '{pgDataPath}' и резервная копия '{oldPath}' оба отсутствуют. " +
+                "Данные могут быть утеряны. Проверьте файловую систему и логи агента.";
         }
 
+        TryDeleteDirectory(stagingPath);
+
+        if (rollbackError != null)
+            throw new InvalidOperationException(
+                $"Восстановление не удалось завершить автоматически: {rollbackError} Кластер остановлен.",
+                originalException);
+
+        var recoveryLog = Path.Combine(Path.GetTempPath(), $"backupster-pg-recovery-{Guid.NewGuid():N}.log");
         try
         {
-            Directory.Move(stagingPath, pgDataPath);
+            _logger.LogInformation("Restarting cluster on original PGDATA at '{PgDataPath}'", pgDataPath);
+            await StartPostgresAsync(pgCtl, pgDataPath, recoveryLog, CancellationToken.None);
+            _logger.LogInformation("PostgreSQL cluster restarted on original PGDATA after restore failure");
         }
-        catch
+        catch (Exception startException)
         {
-            TryMoveDirectory(oldPath, pgDataPath);
-            TryDeleteDirectory(stagingPath);
-            throw;
+            _logger.LogError(startException, "Failed to start cluster after rollback");
+            throw new InvalidOperationException(
+                $"Восстановление не удалось завершить автоматически: после отката PGDATA '{pgDataPath}' к исходному состоянию " +
+                $"кластер не запускается ({startException.Message}). Запустите вручную: pg_ctl start -D \"{pgDataPath}\". " +
+                $"Лог запуска: '{recoveryLog}'.",
+                originalException);
         }
+        finally
+        {
+            TryDeleteFile(recoveryLog);
+        }
+    }
 
-        var startLog = Path.Combine(Path.GetTempPath(), $"backupster-pg-start-{Guid.NewGuid():N}.log");
-        _logger.LogInformation(
-            "Starting PostgreSQL cluster at '{PgDataPath}' (server log → '{LogFile}')", pgDataPath, startLog);
-        try
-        {
-            await StartPostgresAsync(pgCtl, pgDataPath, startLog, ct);
-        }
-        catch
-        {
-            _logger.LogError(
-                "Cluster failed to start after swap. Reverting: new PGDATA → '{FailedPath}', '{OldPath}' → PGDATA",
-                failedPath, oldPath);
-            TryMoveDirectory(pgDataPath, failedPath);
-            TryMoveDirectory(oldPath, pgDataPath);
-            throw;
-        }
+    private async Task<bool> TryMoveDirectoryWithRetryAsync(string pgCtl, string from, string to)
+    {
+        var delays = new[] { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10) };
 
-        _logger.LogInformation("PostgreSQL cluster started");
-        TryDeleteDirectory(oldPath);
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                if (!Directory.Exists(from))
+                {
+                    _logger.LogWarning("Source directory '{From}' does not exist; cannot move", from);
+                    return false;
+                }
+                Directory.Move(from, to);
+                return true;
+            }
+            catch (Exception ex) when (attempt < delays.Length)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to move '{From}' → '{To}' (attempt {Attempt}/{Total}). Retrying in {Delay}s.",
+                    from, to, attempt + 1, delays.Length + 1, delays[attempt].TotalSeconds);
+
+                await TryStopOrphanedPostmasterAsync(pgCtl, from);
+                await Task.Delay(delays[attempt]);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Failed to move '{From}' → '{To}' after {Total} attempts", from, to, delays.Length + 1);
+                return false;
+            }
+        }
     }
 
     private async Task StartPostgresAsync(string pgCtl, string pgDataPath, string startLog, CancellationToken ct)
@@ -428,19 +525,6 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         return match.Groups[1].Value;
     }
 
-    private void TryMoveDirectory(string from, string to)
-    {
-        try
-        {
-            if (Directory.Exists(from))
-                Directory.Move(from, to);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to move directory '{From}' → '{To}'", from, to);
-        }
-    }
-
     private void TryDeleteDirectory(string path)
     {
         try
@@ -451,6 +535,19 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to delete directory '{Path}'", path);
+        }
+    }
+
+    private void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete file '{Path}'", path);
         }
     }
 
