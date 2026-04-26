@@ -53,7 +53,11 @@ FROM pg_roles WHERE rolname = current_user;";
     }
 
     public Task ValidateRestoreSourceAsync(ConnectionConfig connection, string restoreFilePath, CancellationToken ct) =>
-        Task.CompletedTask;
+        PlainTextSqlValidator.ValidateAsync(
+            restoreFilePath,
+            ["-- PostgreSQL database dump"],
+            "pg_dump",
+            ct);
 
     public async Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
     {

@@ -53,7 +53,11 @@ WHERE TABLE_SCHEMA = @db;";
     }
 
     public Task ValidateRestoreSourceAsync(ConnectionConfig connection, string restoreFilePath, CancellationToken ct) =>
-        Task.CompletedTask;
+        PlainTextSqlValidator.ValidateAsync(
+            restoreFilePath,
+            ["-- MySQL dump", "-- MariaDB dump"],
+            "mysqldump",
+            ct);
 
     public async Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
     {
