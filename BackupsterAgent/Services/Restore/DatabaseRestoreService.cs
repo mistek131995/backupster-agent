@@ -96,6 +96,7 @@ public sealed class DatabaseRestoreService
             {
                 var sqlPath = Path.Combine(tempDir, "dump.sql");
                 reporter.Report(RestoreStage.DecompressingDump);
+                EnsureFreeSpace(decryptedPath, tempDir, multiplier: 3);
                 await DecompressGzipAsync(decryptedPath, sqlPath, ct);
                 SafeDelete(decryptedPath);
                 restoreFilePath = sqlPath;
@@ -107,8 +108,10 @@ public sealed class DatabaseRestoreService
                 var agentDir = await MssqlSharedPathResolver.GetAgentDirAsync(connection, ct);
                 Directory.CreateDirectory(agentDir);
 
+                EnsureFreeSpace(decryptedPath, agentDir);
+
                 mssqlBakAgentPath = Path.Combine(agentDir, fileName);
-                File.Copy(decryptedPath, mssqlBakAgentPath, overwrite: true);
+                await CopyFileAsync(decryptedPath, mssqlBakAgentPath, ct);
                 SafeDelete(decryptedPath);
 
                 restoreFilePath = MssqlSharedPathResolver.JoinSqlPath(sqlDir, fileName);
@@ -254,6 +257,35 @@ public sealed class DatabaseRestoreService
             destPath, FileMode.Create, FileAccess.Write, FileShare.None,
             bufferSize: 65536, useAsync: true);
         await gz.CopyToAsync(dest, ct);
+    }
+
+    private static async Task CopyFileAsync(string sourcePath, string destPath, CancellationToken ct)
+    {
+        const int bufferSize = 1024 * 1024;
+
+        await using var src = new FileStream(
+            sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize, useAsync: true);
+        await using var dst = new FileStream(
+            destPath, FileMode.Create, FileAccess.Write, FileShare.None,
+            bufferSize, useAsync: true);
+
+        await src.CopyToAsync(dst, bufferSize, ct);
+    }
+
+    private static void EnsureFreeSpace(string sourcePath, string targetDir, int multiplier = 1)
+    {
+        var requiredBytes = new FileInfo(sourcePath).Length * multiplier;
+        var driveRoot = Path.GetPathRoot(Path.GetFullPath(targetDir));
+        if (string.IsNullOrEmpty(driveRoot)) return;
+
+        var available = new DriveInfo(driveRoot).AvailableFreeSpace;
+        if (available >= requiredBytes) return;
+
+        const long mib = 1024L * 1024L;
+        throw new InvalidOperationException(
+            $"На томе '{driveRoot}' недостаточно свободного места для записи в каталог '{targetDir}': " +
+            $"требуется {requiredBytes / mib} МБ, доступно {available / mib} МБ.");
     }
 
     private static bool IsMssqlPermissionError(SqlException ex)
