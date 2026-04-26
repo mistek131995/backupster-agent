@@ -223,6 +223,11 @@ public sealed class ManifestStoreTests
         public Task<bool> ExistsAsync(string objectKey, CancellationToken ct) =>
             Task.FromResult(StoredBytes.ContainsKey(objectKey));
 
+        public Task<long> GetObjectSizeAsync(string objectKey, CancellationToken ct) =>
+            StoredBytes.TryGetValue(objectKey, out var data)
+                ? Task.FromResult((long)data.Length)
+                : throw new FileNotFoundException($"Fake: object '{objectKey}' not found.", objectKey);
+
         public async Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct)
         {
             if (!StoredBytes.TryGetValue(objectKey, out var data))

@@ -107,6 +107,14 @@ public sealed class S3UploadProvider : IUploadProvider, IDisposable
         }
     }
 
+    public async Task<long> GetObjectSizeAsync(string objectKey, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(objectKey);
+
+        var meta = await GetClient().GetObjectMetadataAsync(_settings.BucketName, objectKey, ct);
+        return meta.ContentLength;
+    }
+
     public async Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(objectKey);

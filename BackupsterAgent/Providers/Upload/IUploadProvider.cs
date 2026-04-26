@@ -8,6 +8,8 @@ public interface IUploadProvider
 
     Task<bool> ExistsAsync(string objectKey, CancellationToken ct);
 
+    Task<long> GetObjectSizeAsync(string objectKey, CancellationToken ct);
+
     Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct);
 
     Task<byte[]> DownloadBytesAsync(string objectKey, CancellationToken ct);

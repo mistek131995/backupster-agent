@@ -568,6 +568,9 @@ public sealed class FileRestoreServiceTests
         public Task<bool> ExistsAsync(string objectKey, CancellationToken ct) =>
             throw new NotSupportedException("FileRestoreService must not call ExistsAsync");
 
+        public Task<long> GetObjectSizeAsync(string objectKey, CancellationToken ct) =>
+            throw new NotSupportedException("FileRestoreService must not call GetObjectSizeAsync");
+
         public Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct) =>
             throw new NotSupportedException("FileRestoreService must not call DownloadAsync");
 

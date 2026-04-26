@@ -78,6 +78,36 @@ public sealed class SftpUploadProvider : IUploadProvider
     public Task<bool> ExistsAsync(string objectKey, CancellationToken ct) =>
         throw new NotSupportedException("ExistsAsync is not supported for SFTP provider. File backup with deduplication is S3-only.");
 
+    public async Task<long> GetObjectSizeAsync(string objectKey, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(objectKey);
+
+        var remotePath = $"{_settings.RemotePath.TrimEnd('/')}/{objectKey.TrimStart('/')}";
+
+        using var client = BuildClient();
+
+        return await Task.Run(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            client.Connect();
+            try
+            {
+                var attrs = client.GetAttributes(remotePath);
+                return attrs.Size;
+            }
+            catch (SftpPathNotFoundException)
+            {
+                throw new FileNotFoundException(
+                    $"SFTP-файл '{remotePath}' не найден на хосте {_settings.Host}.", remotePath);
+            }
+            finally
+            {
+                try { client.Disconnect(); }
+                catch (Exception ex) { _logger.LogDebug(ex, "SFTP disconnect failed (best-effort)"); }
+            }
+        }, ct);
+    }
+
     public async Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(objectKey);

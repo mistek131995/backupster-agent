@@ -256,6 +256,9 @@ public sealed class BackupJobRunTests
 
         public Task<bool> ExistsAsync(string objectKey, CancellationToken ct) => Task.FromResult(false);
 
+        public Task<long> GetObjectSizeAsync(string objectKey, CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct) =>
             throw new NotSupportedException();
 

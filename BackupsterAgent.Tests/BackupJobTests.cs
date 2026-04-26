@@ -209,6 +209,9 @@ public sealed class BackupJobTests
             return Task.FromResult(Uploaded.ContainsKey(objectKey));
         }
 
+        public Task<long> GetObjectSizeAsync(string objectKey, CancellationToken ct) =>
+            throw new NotSupportedException("DatabaseBackupPipeline must not call GetObjectSizeAsync");
+
         public Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct) =>
             throw new NotSupportedException("DatabaseBackupPipeline must not call DownloadAsync");
 

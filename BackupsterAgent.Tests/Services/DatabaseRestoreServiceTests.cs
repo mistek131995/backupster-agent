@@ -517,6 +517,13 @@ public sealed class DatabaseRestoreServiceTests
         public Task<bool> ExistsAsync(string objectKey, CancellationToken ct) =>
             throw new NotSupportedException();
 
+        public Task<long> GetObjectSizeAsync(string objectKey, CancellationToken ct)
+        {
+            if (!FileBytes.TryGetValue(objectKey, out var bytes))
+                throw new FileNotFoundException($"Fake S3: '{objectKey}' not found.", objectKey);
+            return Task.FromResult((long)bytes.Length);
+        }
+
         public IAsyncEnumerable<StorageObject> ListAsync(string prefix, CancellationToken ct) =>
             throw new NotSupportedException();
 

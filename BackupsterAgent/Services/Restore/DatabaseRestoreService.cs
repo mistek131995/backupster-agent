@@ -75,6 +75,9 @@ public sealed class DatabaseRestoreService
 
             await provider.ValidatePermissionsAsync(connection, targetDatabase, ct);
 
+            var encryptedSize = await uploader.GetObjectSizeAsync(payload.DumpObjectKey!, ct);
+            EnsureFreeSpace(encryptedSize * 2, tempDir);
+
             var encryptedPath = Path.Combine(tempDir, "dump.enc");
             reporter.Report(RestoreStage.DownloadingDump, processed: 0, unit: "bytes");
             var downloadProgress = new Progress<long>(bytes =>
@@ -96,7 +99,6 @@ public sealed class DatabaseRestoreService
             {
                 var sqlPath = Path.Combine(tempDir, "dump.sql");
                 reporter.Report(RestoreStage.DecompressingDump);
-                EnsureFreeSpace(decryptedPath, tempDir, multiplier: 3);
                 await DecompressGzipAsync(decryptedPath, sqlPath, ct);
                 SafeDelete(decryptedPath);
                 restoreFilePath = sqlPath;
@@ -275,9 +277,11 @@ public sealed class DatabaseRestoreService
         await src.CopyToAsync(dst, bufferSize, ct);
     }
 
-    private void EnsureFreeSpace(string sourcePath, string targetDir, int multiplier = 1)
+    private void EnsureFreeSpace(string sourcePath, string targetDir) =>
+        EnsureFreeSpace(new FileInfo(sourcePath).Length, targetDir);
+
+    private void EnsureFreeSpace(long requiredBytes, string targetDir)
     {
-        var requiredBytes = new FileInfo(sourcePath).Length * multiplier;
         var fullPath = Path.GetFullPath(targetDir);
 
         if (fullPath.StartsWith(@"\\", StringComparison.Ordinal))
