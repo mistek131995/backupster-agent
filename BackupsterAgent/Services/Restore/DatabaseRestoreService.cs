@@ -275,18 +275,50 @@ public sealed class DatabaseRestoreService
         await src.CopyToAsync(dst, bufferSize, ct);
     }
 
-    private static void EnsureFreeSpace(string sourcePath, string targetDir, int multiplier = 1)
+    private void EnsureFreeSpace(string sourcePath, string targetDir, int multiplier = 1)
     {
         var requiredBytes = new FileInfo(sourcePath).Length * multiplier;
-        var driveRoot = Path.GetPathRoot(Path.GetFullPath(targetDir));
-        if (string.IsNullOrEmpty(driveRoot)) return;
+        var fullPath = Path.GetFullPath(targetDir);
 
-        var available = new DriveInfo(driveRoot).AvailableFreeSpace;
+        if (fullPath.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "EnsureFreeSpace skipped for UNC path '{Path}': DriveInfo does not support UNC, free-space preflight is best-effort.",
+                fullPath);
+            return;
+        }
+
+        var drive = DriveInfo.GetDrives()
+            .Where(d => fullPath.StartsWith(d.RootDirectory.FullName, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(d => d.RootDirectory.FullName.Length)
+            .FirstOrDefault();
+
+        if (drive is null)
+        {
+            _logger.LogWarning(
+                "EnsureFreeSpace skipped for '{Path}': no matching mount found in DriveInfo.GetDrives().",
+                fullPath);
+            return;
+        }
+
+        long available;
+        try
+        {
+            available = drive.AvailableFreeSpace;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "EnsureFreeSpace skipped for '{Path}': failed to read AvailableFreeSpace from drive '{Drive}'.",
+                fullPath, drive.RootDirectory.FullName);
+            return;
+        }
+
         if (available >= requiredBytes) return;
 
         const long mib = 1024L * 1024L;
         throw new InvalidOperationException(
-            $"На томе '{driveRoot}' недостаточно свободного места для записи в каталог '{targetDir}': " +
+            $"На томе '{drive.RootDirectory.FullName}' недостаточно свободного места для записи в каталог '{targetDir}': " +
             $"требуется {requiredBytes / mib} МБ, доступно {available / mib} МБ.");
     }
 
