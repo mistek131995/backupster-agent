@@ -89,6 +89,7 @@ ActivitySource.AddActivityListener(new ActivityListener
     Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
 });
 
+
 builder.Services.AddSingleton(new ActivitySource("BackupsterAgent"));
 
 builder.Services.AddSingleton<IAgentActivityLock, AgentActivityLock>();
