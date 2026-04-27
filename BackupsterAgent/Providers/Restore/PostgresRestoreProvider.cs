@@ -1,7 +1,6 @@
-using System.Diagnostics;
-using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 using Npgsql;
 
@@ -11,13 +10,16 @@ public sealed class PostgresRestoreProvider : IRestoreProvider
 {
     private readonly ILogger<PostgresRestoreProvider> _logger;
     private readonly PostgresBinaryResolver _binaryResolver;
+    private readonly IExternalProcessRunner _processRunner;
 
     public PostgresRestoreProvider(
         ILogger<PostgresRestoreProvider> logger,
-        PostgresBinaryResolver binaryResolver)
+        PostgresBinaryResolver binaryResolver,
+        IExternalProcessRunner processRunner)
     {
         _logger = logger;
         _binaryResolver = binaryResolver;
+        _processRunner = processRunner;
     }
 
     public async Task ValidatePermissionsAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
@@ -90,10 +92,10 @@ FROM pg_roles WHERE rolname = current_user;";
     {
         var binary = await _binaryResolver.ResolveAsync(connection, "psql", ct);
 
-        var psi = new ProcessStartInfo
+        var request = new ExternalProcessRequest
         {
             FileName = binary,
-            ArgumentList =
+            Arguments = new[]
             {
                 "-h", connection.Host,
                 "-p", connection.Port.ToString(),
@@ -102,39 +104,22 @@ FROM pg_roles WHERE rolname = current_user;";
                 "-v", "ON_ERROR_STOP=1",
                 "-f", restoreFilePath,
             },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            EnvironmentOverrides = new Dictionary<string, string?>
+            {
+                ["PGPASSWORD"] = connection.Password,
+                ["LC_MESSAGES"] = "C",
+                ["LANG"] = "C",
+            },
         };
-        psi.EnvironmentVariables["PGPASSWORD"] = connection.Password;
-        psi.EnvironmentVariables["LC_MESSAGES"] = "C";
-        psi.EnvironmentVariables["LANG"] = "C";
 
-        using var process = new Process { StartInfo = psi };
-        process.Start();
-        _logger.LogInformation("psql process started (PID {Pid})", process.Id);
+        var result = await _processRunner.RunAsync(request, handleStdout: null, handleStdin: null, ct);
 
-        using var reg = ct.Register(() =>
+        if (result.ExitCode != 0)
         {
-            try { process.Kill(entireProcessTree: true); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Failed to kill psql process"); }
-        });
-
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-
-        await Task.WhenAll(stderrTask, stdoutTask);
-        await process.WaitForExitAsync(ct);
-
-        if (process.ExitCode != 0)
-        {
-            var stderr = stderrTask.Result.Trim();
-            var stdout = stdoutTask.Result.Trim();
+            var stderr = result.Stderr.Trim();
+            var stdout = result.Stdout.Trim();
             var detail = string.IsNullOrEmpty(stderr) ? stdout : stderr;
-            throw new InvalidOperationException($"psql завершился с ошибкой (код {process.ExitCode}): {detail}");
+            throw new InvalidOperationException($"psql завершился с ошибкой (код {result.ExitCode}): {detail}");
         }
 
         _logger.LogInformation("Postgres restore completed for database '{Database}'", targetDatabase);

@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 using MySqlConnector;
 
@@ -13,24 +13,22 @@ public sealed class MysqlLogicalBackupProvider : IBackupProvider
 {
     private readonly ILogger<MysqlLogicalBackupProvider> _logger;
     private readonly MysqlBinaryResolver _binaryResolver;
+    private readonly IExternalProcessRunner _processRunner;
 
     public MysqlLogicalBackupProvider(
         ILogger<MysqlLogicalBackupProvider> logger,
-        MysqlBinaryResolver binaryResolver)
+        MysqlBinaryResolver binaryResolver,
+        IExternalProcessRunner processRunner)
     {
         _logger = logger;
         _binaryResolver = binaryResolver;
+        _processRunner = processRunner;
     }
 
     public async Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
     {
-        await ValidateBackupPermissionsAsync(connection, database, _binaryResolver, ct);
-    }
-
-    private static async Task ValidateBackupPermissionsAsync(ConnectionConfig connection, string database, MysqlBinaryResolver resolver, CancellationToken ct)
-    {
-        var mysqldump = resolver.Resolve(connection, "mysqldump");
-        await CheckBinaryAsync(mysqldump, ct);
+        var mysqldump = _binaryResolver.Resolve(connection, "mysqldump");
+        await EnsureBinaryAvailableAsync(mysqldump, ct);
 
         const string globalSql = @"
 SELECT
@@ -92,10 +90,10 @@ WHERE TABLE_SCHEMA = @db;";
             "Starting MySQL logical backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}', Binary: '{Binary}'",
             config.Database, connection.Host, connection.Port, outputFile, mysqldump);
 
-        var psi = new ProcessStartInfo
+        var request = new ExternalProcessRequest
         {
             FileName = mysqldump,
-            ArgumentList =
+            Arguments = new[]
             {
                 "-h", connection.Host,
                 "-P", connection.Port.ToString(),
@@ -110,37 +108,28 @@ WHERE TABLE_SCHEMA = @db;";
                 "--default-character-set=utf8mb4",
                 config.Database,
             },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardErrorEncoding = Encoding.UTF8,
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            EnvironmentOverrides = new Dictionary<string, string?>
+            {
+                ["MYSQL_PWD"] = connection.Password,
+            },
         };
 
-        psi.Environment["MYSQL_PWD"] = connection.Password;
-
         var sw = Stopwatch.StartNew();
-        using var process = new Process { StartInfo = psi };
 
-        process.Start();
-        _logger.LogInformation("mysqldump process started (PID {Pid})", process.Id);
-
-        using var reg = ct.Register(() =>
-        {
-            try { process.Kill(entireProcessTree: true); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Failed to kill mysqldump process"); }
-        });
-
-        string stderrContent;
+        ExternalProcessResult result;
         try
         {
-            await using var fileStream = new FileStream(outputFile, FileMode.Create, FileAccess.Write,
-                FileShare.None, bufferSize: 65536, useAsync: true);
-            await using var gzipStream = new GZipStream(fileStream, CompressionLevel.Optimal);
-
-            var stderrTask = process.StandardError.ReadToEndAsync(ct);
-            await process.StandardOutput.BaseStream.CopyToAsync(gzipStream, ct);
-            stderrContent = await stderrTask;
+            result = await _processRunner.RunAsync(
+                request,
+                handleStdout: async (stdout, innerCt) =>
+                {
+                    await using var fileStream = new FileStream(outputFile, FileMode.Create, FileAccess.Write,
+                        FileShare.None, bufferSize: 65536, useAsync: true);
+                    await using var gzipStream = new GZipStream(fileStream, CompressionLevel.Optimal);
+                    await stdout.CopyToAsync(gzipStream, innerCt);
+                },
+                handleStdin: null,
+                ct);
         }
         catch
         {
@@ -148,16 +137,14 @@ WHERE TABLE_SCHEMA = @db;";
             throw;
         }
 
-        await process.WaitForExitAsync(ct);
         sw.Stop();
 
-        if (process.ExitCode != 0)
+        if (result.ExitCode != 0)
         {
             TryDeleteFile(outputFile);
-            var message = $"mysqldump завершился с кодом {process.ExitCode}: {stderrContent.Trim()}";
-            _logger.LogError("mysqldump failed. ExitCode: {ExitCode}. Stderr: {Stderr}",
-                process.ExitCode, stderrContent.Trim());
-            throw new InvalidOperationException(message);
+            var stderr = result.Stderr.Trim();
+            _logger.LogError("mysqldump failed. ExitCode: {ExitCode}. Stderr: {Stderr}", result.ExitCode, stderr);
+            throw new InvalidOperationException($"mysqldump завершился с кодом {result.ExitCode}: {stderr}");
         }
 
         var fileInfo = new FileInfo(outputFile);
@@ -174,23 +161,18 @@ WHERE TABLE_SCHEMA = @db;";
         };
     }
 
-    private static async Task CheckBinaryAsync(string binary, CancellationToken ct)
+    private async Task EnsureBinaryAvailableAsync(string binary, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo
+        var request = new ExternalProcessRequest
         {
             FileName = binary,
-            ArgumentList = { "--version" },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            Arguments = new[] { "--version" },
         };
 
-        using var process = new Process { StartInfo = psi };
+        ExternalProcessResult result;
         try
         {
-            process.Start();
-            await process.WaitForExitAsync(ct);
+            result = await _processRunner.RunAsync(request, handleStdout: null, handleStdin: null, ct);
         }
         catch (Exception ex)
         {
@@ -200,9 +182,9 @@ WHERE TABLE_SCHEMA = @db;";
                 "(или задайте ConnectionConfig.BinPath с каталогом клиентских бинарников MySQL).", ex);
         }
 
-        if (process.ExitCode != 0)
+        if (result.ExitCode != 0)
             throw new InvalidOperationException(
-                $"{binary} --version вернул код {process.ExitCode}. " +
+                $"{binary} --version вернул код {result.ExitCode}. " +
                 "Убедитесь, что пакет mysql-client установлен и mysqldump находится в PATH " +
                 "(или задайте ConnectionConfig.BinPath).");
     }

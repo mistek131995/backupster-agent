@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 using Npgsql;
 
@@ -13,19 +13,22 @@ public sealed class PostgresLogicalBackupProvider : IBackupProvider
 {
     private readonly ILogger<PostgresLogicalBackupProvider> _logger;
     private readonly PostgresBinaryResolver _binaryResolver;
+    private readonly IExternalProcessRunner _processRunner;
 
     public PostgresLogicalBackupProvider(
         ILogger<PostgresLogicalBackupProvider> logger,
-        PostgresBinaryResolver binaryResolver)
+        PostgresBinaryResolver binaryResolver,
+        IExternalProcessRunner processRunner)
     {
         _logger = logger;
         _binaryResolver = binaryResolver;
+        _processRunner = processRunner;
     }
 
     public async Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
     {
         var binary = await _binaryResolver.ResolveAsync(connection, "pg_dump", ct);
-        await CheckBinaryAsync(binary, ct);
+        await EnsureBinaryAvailableAsync(binary, ct);
 
         const string sql = @"
 SELECT rolsuper,
@@ -78,10 +81,10 @@ FROM pg_roles WHERE rolname = current_user;";
             "Starting PostgreSQL logical backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}', Binary: '{Binary}'",
             config.Database, connection.Host, connection.Port, outputFile, binary);
 
-        var psi = new ProcessStartInfo
+        var request = new ExternalProcessRequest
         {
             FileName = binary,
-            ArgumentList =
+            Arguments = new[]
             {
                 "-h", connection.Host,
                 "-p", connection.Port.ToString(),
@@ -89,41 +92,32 @@ FROM pg_roles WHERE rolname = current_user;";
                 "-F", "p",
                 "--clean",
                 "--if-exists",
-                config.Database
+                config.Database,
             },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardErrorEncoding = Encoding.UTF8,
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            EnvironmentOverrides = new Dictionary<string, string?>
+            {
+                ["PGPASSWORD"] = connection.Password,
+                ["LC_MESSAGES"] = "C",
+                ["LANG"] = "C",
+            },
         };
 
-        psi.Environment["PGPASSWORD"] = connection.Password;
-        psi.Environment["LC_MESSAGES"] = "C";
-        psi.Environment["LANG"] = "C";
-
         var sw = Stopwatch.StartNew();
-        using var process = new Process { StartInfo = psi };
 
-        process.Start();
-        _logger.LogInformation("pg_dump process started (PID {Pid})", process.Id);
-
-        using var reg = ct.Register(() =>
-        {
-            try { process.Kill(entireProcessTree: true); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Failed to kill pg_dump process"); }
-        });
-
-        string stderrContent;
+        ExternalProcessResult result;
         try
         {
-            await using var fileStream = new FileStream(outputFile, FileMode.Create, FileAccess.Write,
-                FileShare.None, bufferSize: 65536, useAsync: true);
-            await using var gzipStream = new GZipStream(fileStream, CompressionLevel.Optimal);
-
-            var stderrTask = process.StandardError.ReadToEndAsync(ct);
-            await process.StandardOutput.BaseStream.CopyToAsync(gzipStream, ct);
-            stderrContent = await stderrTask;
+            result = await _processRunner.RunAsync(
+                request,
+                handleStdout: async (stdout, innerCt) =>
+                {
+                    await using var fileStream = new FileStream(outputFile, FileMode.Create, FileAccess.Write,
+                        FileShare.None, bufferSize: 65536, useAsync: true);
+                    await using var gzipStream = new GZipStream(fileStream, CompressionLevel.Optimal);
+                    await stdout.CopyToAsync(gzipStream, innerCt);
+                },
+                handleStdin: null,
+                ct);
         }
         catch
         {
@@ -131,16 +125,14 @@ FROM pg_roles WHERE rolname = current_user;";
             throw;
         }
 
-        await process.WaitForExitAsync(ct);
         sw.Stop();
 
-        if (process.ExitCode != 0)
+        if (result.ExitCode != 0)
         {
             TryDeleteFile(outputFile);
-            var message = $"pg_dump завершился с кодом {process.ExitCode}: {stderrContent.Trim()}";
-            _logger.LogError("pg_dump failed. ExitCode: {ExitCode}. Stderr: {Stderr}",
-                process.ExitCode, stderrContent.Trim());
-            throw new InvalidOperationException(message);
+            var stderr = result.Stderr.Trim();
+            _logger.LogError("pg_dump failed. ExitCode: {ExitCode}. Stderr: {Stderr}", result.ExitCode, stderr);
+            throw new InvalidOperationException($"pg_dump завершился с кодом {result.ExitCode}: {stderr}");
         }
 
         var fileInfo = new FileInfo(outputFile);
@@ -157,26 +149,23 @@ FROM pg_roles WHERE rolname = current_user;";
         };
     }
 
-    private static async Task CheckBinaryAsync(string binary, CancellationToken ct)
+    private async Task EnsureBinaryAvailableAsync(string binary, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo
+        var request = new ExternalProcessRequest
         {
             FileName = binary,
-            ArgumentList = { "--version" },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            Arguments = new[] { "--version" },
+            EnvironmentOverrides = new Dictionary<string, string?>
+            {
+                ["LC_MESSAGES"] = "C",
+                ["LANG"] = "C",
+            },
         };
 
-        psi.Environment["LC_MESSAGES"] = "C";
-        psi.Environment["LANG"] = "C";
-
-        using var process = new Process { StartInfo = psi };
+        ExternalProcessResult result;
         try
         {
-            process.Start();
-            await process.WaitForExitAsync(ct);
+            result = await _processRunner.RunAsync(request, handleStdout: null, handleStdin: null, ct);
         }
         catch (Exception ex)
         {
@@ -185,9 +174,9 @@ FROM pg_roles WHERE rolname = current_user;";
                 $"Установите пакет postgresql-client и убедитесь, что {binary} находится в PATH.", ex);
         }
 
-        if (process.ExitCode != 0)
+        if (result.ExitCode != 0)
             throw new InvalidOperationException(
-                $"{binary} --version вернул код {process.ExitCode}. " +
+                $"{binary} --version вернул код {result.ExitCode}. " +
                 $"Убедитесь, что пакет postgresql-client установлен и {binary} находится в PATH.");
     }
 

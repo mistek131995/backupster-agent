@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 using MySqlConnector;
 
@@ -11,13 +11,16 @@ public sealed class MysqlRestoreProvider : IRestoreProvider
 {
     private readonly ILogger<MysqlRestoreProvider> _logger;
     private readonly MysqlBinaryResolver _binaryResolver;
+    private readonly IExternalProcessRunner _processRunner;
 
     public MysqlRestoreProvider(
         ILogger<MysqlRestoreProvider> logger,
-        MysqlBinaryResolver binaryResolver)
+        MysqlBinaryResolver binaryResolver,
+        IExternalProcessRunner processRunner)
     {
         _logger = logger;
         _binaryResolver = binaryResolver;
+        _processRunner = processRunner;
     }
 
     public async Task ValidatePermissionsAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
@@ -84,10 +87,10 @@ WHERE TABLE_SCHEMA = @db;";
     {
         var mysql = _binaryResolver.Resolve(connection, "mysql");
 
-        var psi = new ProcessStartInfo
+        var request = new ExternalProcessRequest
         {
             FileName = mysql,
-            ArgumentList =
+            Arguments = new[]
             {
                 "-h", connection.Host,
                 "-P", connection.Port.ToString(),
@@ -95,69 +98,49 @@ WHERE TABLE_SCHEMA = @db;";
                 "--default-character-set=utf8mb4",
                 targetDatabase,
             },
+            EnvironmentOverrides = new Dictionary<string, string?>
+            {
+                ["MYSQL_PWD"] = connection.Password,
+            },
             RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            UseShellExecute = false,
-            CreateNoWindow = true,
         };
 
-        psi.Environment["MYSQL_PWD"] = connection.Password;
-
-        using var process = new Process { StartInfo = psi };
-        process.Start();
-        _logger.LogInformation("mysql process started (PID {Pid})", process.Id);
-
-        using var reg = ct.Register(() =>
-        {
-            try { process.Kill(entireProcessTree: true); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Failed to kill mysql process"); }
-        });
-
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-
         var skipped = 0;
-        try
-        {
-            await using var source = new FileStream(
-                restoreFilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                bufferSize: 65536, useAsync: true);
-            using var reader = new StreamReader(source, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            var writer = process.StandardInput;
 
-            while (await reader.ReadLineAsync(ct) is { } line)
+        var result = await _processRunner.RunAsync(
+            request,
+            handleStdout: null,
+            handleStdin: async (stdin, innerCt) =>
             {
-                if (IsLegacyCreateDatabase(line) || IsLegacyUseDatabase(line))
-                {
-                    skipped++;
-                    continue;
-                }
+                await using var source = new FileStream(
+                    restoreFilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    bufferSize: 65536, useAsync: true);
+                using var reader = new StreamReader(source, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
 
-                await writer.WriteLineAsync(line.AsMemory(), ct);
-            }
-        }
-        finally
-        {
-            process.StandardInput.Close();
-        }
+                while (await reader.ReadLineAsync(innerCt) is { } line)
+                {
+                    if (IsLegacyCreateDatabase(line) || IsLegacyUseDatabase(line))
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    await stdin.WriteLineAsync(line.AsMemory(), innerCt);
+                }
+            },
+            ct);
 
         if (skipped > 0)
             _logger.LogInformation(
                 "Filtered {Count} legacy CREATE DATABASE / USE statements from dump while restoring into '{Target}'",
                 skipped, targetDatabase);
 
-        await Task.WhenAll(stderrTask, stdoutTask);
-        await process.WaitForExitAsync(ct);
-
-        if (process.ExitCode != 0)
+        if (result.ExitCode != 0)
         {
-            var stderr = stderrTask.Result.Trim();
-            var stdout = stdoutTask.Result.Trim();
+            var stderr = result.Stderr.Trim();
+            var stdout = result.Stdout.Trim();
             var detail = string.IsNullOrEmpty(stderr) ? stdout : stderr;
-            throw new InvalidOperationException($"mysql завершился с ошибкой (код {process.ExitCode}): {detail}");
+            throw new InvalidOperationException($"mysql завершился с ошибкой (код {result.ExitCode}): {detail}");
         }
 
         _logger.LogInformation("MySQL restore completed for database '{Database}'", targetDatabase);

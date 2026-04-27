@@ -9,6 +9,7 @@ using BackupsterAgent.Services.Backup.Coordinator;
 using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Outbox;
+using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
@@ -105,6 +106,7 @@ builder.Services.AddSingleton<IOutboxStore>(sp =>
     new OutboxStore(outboxDir, sp.GetRequiredService<ILogger<OutboxStore>>()));
 builder.Services.AddSingleton<PostgresBinaryResolver>();
 builder.Services.AddSingleton<MysqlBinaryResolver>();
+builder.Services.AddSingleton<IExternalProcessRunner, ExternalProcessRunner>();
 builder.Services.AddSingleton(sp =>
     new ConnectionResolver(sp.GetRequiredService<IOptions<List<ConnectionConfig>>>().Value));
 builder.Services.AddSingleton(sp =>

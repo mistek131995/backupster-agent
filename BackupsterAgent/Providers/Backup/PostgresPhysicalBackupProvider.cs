@@ -1,8 +1,8 @@
 using System.Diagnostics;
-using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 using Npgsql;
 
@@ -12,19 +12,22 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
 {
     private readonly ILogger<PostgresPhysicalBackupProvider> _logger;
     private readonly PostgresBinaryResolver _binaryResolver;
+    private readonly IExternalProcessRunner _processRunner;
 
     public PostgresPhysicalBackupProvider(
         ILogger<PostgresPhysicalBackupProvider> logger,
-        PostgresBinaryResolver binaryResolver)
+        PostgresBinaryResolver binaryResolver,
+        IExternalProcessRunner processRunner)
     {
         _logger = logger;
         _binaryResolver = binaryResolver;
+        _processRunner = processRunner;
     }
 
     public async Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
     {
         var binary = await _binaryResolver.ResolveAsync(connection, "pg_basebackup", ct);
-        await CheckBinaryAsync(binary, ct);
+        await EnsureBinaryAvailableAsync(binary, ct);
 
         var connString = new NpgsqlConnectionStringBuilder
         {
@@ -101,10 +104,10 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
             "Starting PostgreSQL physical backup (pg_basebackup). Host: '{Host}:{Port}', Output: '{OutputFile}', Binary: '{Binary}'",
             connection.Host, connection.Port, outputFile, binary);
 
-        var psi = new ProcessStartInfo
+        var request = new ExternalProcessRequest
         {
             FileName = binary,
-            ArgumentList =
+            Arguments = new[]
             {
                 "-h", connection.Host,
                 "-p", connection.Port.ToString(),
@@ -115,47 +118,29 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
                 "--gzip",
                 "-D", tempDir,
             },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            EnvironmentOverrides = new Dictionary<string, string?>
+            {
+                ["PGPASSWORD"] = connection.Password,
+                ["LC_MESSAGES"] = "C",
+                ["LANG"] = "C",
+            },
         };
 
-        psi.Environment["PGPASSWORD"] = connection.Password;
-        psi.Environment["LC_MESSAGES"] = "C";
-        psi.Environment["LANG"] = "C";
-
         var sw = Stopwatch.StartNew();
-        using var process = new Process { StartInfo = psi };
 
         try
         {
-            process.Start();
-            _logger.LogInformation("pg_basebackup process started (PID {Pid})", process.Id);
-
-            using var reg = ct.Register(() =>
-            {
-                try { process.Kill(entireProcessTree: true); }
-                catch (Exception ex) { _logger.LogWarning(ex, "Failed to kill pg_basebackup process"); }
-            });
-
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
-            await Task.WhenAll(stdoutTask, stderrTask);
-            await process.WaitForExitAsync(ct);
+            var result = await _processRunner.RunAsync(request, handleStdout: null, handleStdin: null, ct);
             sw.Stop();
 
-            var stderr = stderrTask.Result.Trim();
+            var stderr = result.Stderr.Trim();
 
-            if (process.ExitCode != 0)
+            if (result.ExitCode != 0)
             {
                 _logger.LogError("pg_basebackup failed. ExitCode: {ExitCode}. Stderr: {Stderr}",
-                    process.ExitCode, stderr);
+                    result.ExitCode, stderr);
                 throw new InvalidOperationException(
-                    $"pg_basebackup завершился с кодом {process.ExitCode}: {stderr}");
+                    $"pg_basebackup завершился с кодом {result.ExitCode}: {stderr}");
             }
 
             var baseTar = Path.Combine(tempDir, "base.tar.gz");
@@ -189,26 +174,23 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
         }
     }
 
-    private static async Task CheckBinaryAsync(string binary, CancellationToken ct)
+    private async Task EnsureBinaryAvailableAsync(string binary, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo
+        var request = new ExternalProcessRequest
         {
             FileName = binary,
-            ArgumentList = { "--version" },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            Arguments = new[] { "--version" },
+            EnvironmentOverrides = new Dictionary<string, string?>
+            {
+                ["LC_MESSAGES"] = "C",
+                ["LANG"] = "C",
+            },
         };
 
-        psi.Environment["LC_MESSAGES"] = "C";
-        psi.Environment["LANG"] = "C";
-
-        using var process = new Process { StartInfo = psi };
+        ExternalProcessResult result;
         try
         {
-            process.Start();
-            await process.WaitForExitAsync(ct);
+            result = await _processRunner.RunAsync(request, handleStdout: null, handleStdin: null, ct);
         }
         catch (Exception ex)
         {
@@ -217,9 +199,9 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
                 $"Установите пакет postgresql и убедитесь, что {binary} находится в PATH.", ex);
         }
 
-        if (process.ExitCode != 0)
+        if (result.ExitCode != 0)
             throw new InvalidOperationException(
-                $"{binary} --version вернул код {process.ExitCode}. " +
+                $"{binary} --version вернул код {result.ExitCode}. " +
                 $"Убедитесь, что пакет postgresql установлен и {binary} находится в PATH.");
     }
 
