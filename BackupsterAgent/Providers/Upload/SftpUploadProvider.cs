@@ -207,7 +207,8 @@ public sealed class SftpUploadProvider : IUploadProvider
 
     public async Task DeleteAsync(string objectKey, CancellationToken ct)
     {
-        var remotePath = $"{_settings.RemotePath.TrimEnd('/')}/{objectKey.TrimStart('/')}";
+        var baseDir = _settings.RemotePath.TrimEnd('/');
+        var remotePath = $"{baseDir}/{objectKey.TrimStart('/')}";
 
         _logger.LogInformation(
             "SFTP deleting {Host}:{RemotePath}", _settings.Host, remotePath);
@@ -237,6 +238,8 @@ public sealed class SftpUploadProvider : IUploadProvider
                         "SFTP DeleteAsync: {RemotePath} not found — treating as already-deleted", remotePath);
                 }
 
+                TryRemoveEmptyParents(client, remotePath, baseDir, ct);
+
                 ct.ThrowIfCancellationRequested();
                 client.Disconnect();
             }, ct);
@@ -247,6 +250,32 @@ public sealed class SftpUploadProvider : IUploadProvider
         }
 
         _logger.LogInformation("SFTP delete completed. RemotePath: '{RemotePath}'", remotePath);
+    }
+
+    private void TryRemoveEmptyParents(SftpClient client, string fileRemotePath, string baseDir, CancellationToken ct)
+    {
+        var dir = GetParentPath(fileRemotePath);
+        while (!string.IsNullOrEmpty(dir) && !string.Equals(dir, baseDir, StringComparison.Ordinal))
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                client.DeleteDirectory(dir);
+                _logger.LogDebug("SFTP removed empty directory '{Dir}'", dir);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "SFTP keeping '{Dir}' (likely non-empty or no permission)", dir);
+                return;
+            }
+            dir = GetParentPath(dir);
+        }
+    }
+
+    private static string GetParentPath(string path)
+    {
+        var idx = path.LastIndexOf('/');
+        return idx <= 0 ? string.Empty : path[..idx];
     }
 
     private SftpClient BuildClient()
