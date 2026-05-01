@@ -10,4 +10,5 @@ public sealed class StorageConfig
     public SftpSettings? Sftp { get; init; }
     public AzureBlobSettings? AzureBlob { get; init; }
     public WebDavSettings? WebDav { get; init; }
+    public LocalFsSettings? LocalFs { get; init; }
 }

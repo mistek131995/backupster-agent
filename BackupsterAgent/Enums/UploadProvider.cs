@@ -6,4 +6,5 @@ public enum UploadProvider
     Sftp,
     AzureBlob,
     WebDav,
+    LocalFs,
 }

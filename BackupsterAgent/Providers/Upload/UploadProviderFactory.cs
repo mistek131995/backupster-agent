@@ -47,6 +47,10 @@ public sealed class UploadProviderFactory : IUploadProviderFactory
                 storage.WebDav ?? throw new InvalidOperationException(
                     $"Storage '{storageName}' has Provider=WebDav but WebDav settings are missing."),
                 _loggerFactory.CreateLogger<WebDavUploadProvider>()),
+            UploadProvider.LocalFs => new LocalFsUploadProvider(
+                storage.LocalFs ?? throw new InvalidOperationException(
+                    $"Storage '{storageName}' has Provider=LocalFs but LocalFs settings are missing."),
+                _loggerFactory.CreateLogger<LocalFsUploadProvider>()),
             _ => throw new InvalidOperationException(
                 $"Storage '{storageName}' has unknown provider: {storage.Provider}"),
         };
