@@ -18,9 +18,6 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
     private readonly PostgresBinaryResolver _binaryResolver;
     private readonly RestoreSettings _restoreSettings;
 
-    private string? _pgDataPath;
-    private string? _pgCtlPath;
-
     public PostgresPhysicalRestoreProvider(
         ILogger<PostgresPhysicalRestoreProvider> logger,
         PostgresBinaryResolver binaryResolver,
@@ -33,28 +30,28 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
 
     public async Task ValidatePermissionsAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
     {
-        _pgCtlPath = await _binaryResolver.ResolveAsync(connection, "pg_ctl", ct);
-        await CheckPgCtlAsync(_pgCtlPath, ct);
+        var pgCtl = await _binaryResolver.ResolveAsync(connection, "pg_ctl", ct);
+        await CheckPgCtlAsync(pgCtl, ct);
 
-        _pgDataPath = await QueryDataDirectoryAsync(connection, ct);
-        _logger.LogInformation("Resolved PGDATA from cluster: '{PgDataPath}'", _pgDataPath);
+        var pgDataPath = await QueryDataDirectoryAsync(connection, ct);
+        _logger.LogInformation("Resolved PGDATA from cluster: '{PgDataPath}'", pgDataPath);
 
-        if (!Directory.Exists(_pgDataPath))
+        if (!Directory.Exists(pgDataPath))
             throw new RestorePermissionException(
-                $"Каталог PGDATA '{_pgDataPath}' недоступен на хосте агента. " +
+                $"Каталог PGDATA '{pgDataPath}' недоступен на хосте агента. " +
                 "Физическое восстановление требует, чтобы агент и PostgreSQL выполнялись на одном хосте.");
 
-        var realPgDataPath = ResolveRealPath(_pgDataPath);
-        if (!string.Equals(realPgDataPath, _pgDataPath, StringComparison.Ordinal))
+        var realPgDataPath = ResolveRealPath(pgDataPath);
+        if (!string.Equals(realPgDataPath, pgDataPath, StringComparison.Ordinal))
             _logger.LogInformation(
                 "PGDATA '{PgDataPath}' resolves to real path '{RealPath}'. " +
                 "Staging/swap operations during restore will use the real parent directory.",
-                _pgDataPath, realPgDataPath);
+                pgDataPath, realPgDataPath);
 
         var (parent, _) = SplitPgDataPath(realPgDataPath);
         EnsureSameFsRename(parent, realPgDataPath);
 
-        await EnsureClusterIsNotServiceManagedAsync(_pgDataPath, ct);
+        await EnsureClusterIsNotServiceManagedAsync(pgDataPath, ct);
     }
 
     public Task ValidateRestoreSourceAsync(ConnectionConfig connection, string restoreFilePath, CancellationToken ct) =>
@@ -67,8 +64,15 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
 
     public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct)
     {
-        var pgDataPath = _pgDataPath!;
-        var pgCtl = _pgCtlPath ?? await _binaryResolver.ResolveAsync(connection, "pg_ctl", ct);
+        var pgCtl = await _binaryResolver.ResolveAsync(connection, "pg_ctl", ct);
+        var pgDataPath = await QueryDataDirectoryAsync(connection, ct);
+
+        if (!Directory.Exists(pgDataPath))
+            throw new RestorePermissionException(
+                $"Каталог PGDATA '{pgDataPath}' недоступен на хосте агента. " +
+                "Физическое восстановление требует, чтобы агент и PostgreSQL выполнялись на одном хосте.");
+
+        await EnsureClusterIsNotServiceManagedAsync(pgDataPath, ct);
 
         var realPgDataPath = ResolveRealPath(pgDataPath);
         var (parent, leaf) = SplitPgDataPath(realPgDataPath);
