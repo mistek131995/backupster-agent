@@ -92,6 +92,9 @@ FROM pg_roles WHERE rolname = current_user;";
                 "-F", "p",
                 "--clean",
                 "--if-exists",
+                "--no-owner",
+                "--no-privileges",
+                "--no-comments",
                 config.Database,
             },
             EnvironmentOverrides = new Dictionary<string, string?>
