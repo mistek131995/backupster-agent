@@ -147,12 +147,12 @@ public sealed class HandlerRoutingTests
         new(null!, null!, NullLogger<DeleteTaskHandler>.Instance);
 
     private static BackupTaskHandler CreateBackupHandler() =>
-        new(null!, null!,
+        new(null!, null!, null!,
             Options.Create(new List<DatabaseConfig>()),
             NullLogger<BackupTaskHandler>.Instance);
 
     private static FileSetBackupTaskHandler CreateFileSetHandler() =>
-        new(null!, null!,
+        new(null!, null!, null!,
             Options.Create(new List<FileSetConfig>()),
             NullLogger<FileSetBackupTaskHandler>.Instance);
 }

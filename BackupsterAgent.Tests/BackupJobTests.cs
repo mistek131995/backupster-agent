@@ -149,7 +149,6 @@ public sealed class BackupJobTests
         return new DatabaseBackupPipeline(
             new StubBackupProviderFactory(),
             new ConnectionResolver([]),
-            new StorageResolver([]),
             encryption,
             new StubUploadProviderFactory(_uploader),
             fileBackup,

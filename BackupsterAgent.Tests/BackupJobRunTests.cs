@@ -55,7 +55,7 @@ public sealed class BackupJobRunTests
         _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.Ok, serverId);
         _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
 
-        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -75,7 +75,7 @@ public sealed class BackupJobRunTests
     {
         _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.OfflineRetryable);
 
-        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -103,7 +103,7 @@ public sealed class BackupJobRunTests
         _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.Ok, serverId);
         _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.OfflineRetryable);
 
-        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -130,7 +130,7 @@ public sealed class BackupJobRunTests
         cts.Cancel();
 
         Assert.ThrowsAsync<OperationCanceledException>(
-            () => BuildJob().RunAsync(Config(), BackupMode.Logical, cts.Token));
+            () => BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, cts.Token));
 
         var outbox = _outboxStore.ListAsync(CancellationToken.None).GetAwaiter().GetResult();
 
@@ -148,7 +148,7 @@ public sealed class BackupJobRunTests
     {
         _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.PermanentSkip);
 
-        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -171,7 +171,7 @@ public sealed class BackupJobRunTests
         _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
         _provider.ThrowOnBackup = new InvalidOperationException("pg_dump failed: connection refused");
 
-        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -192,7 +192,7 @@ public sealed class BackupJobRunTests
         _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
         _uploader.ThrowOnUploadFile = new IOException("S3 network error");
 
-        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -213,7 +213,7 @@ public sealed class BackupJobRunTests
         _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
         _provider.ThrowOnValidate = new UnauthorizedAccessException("pg_dump: permission denied");
 
-        var result = await BuildJob().RunAsync(Config(), BackupMode.Logical, CancellationToken.None);
+        var result = await BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -230,6 +230,13 @@ public sealed class BackupJobRunTests
         StorageName = "s3-main",
         Database = "db1",
         FilePaths = [],
+    };
+
+    private static StorageConfig Storage() => new()
+    {
+        Name = "s3-main",
+        Provider = UploadProvider.S3,
+        S3 = new S3Settings(),
     };
 
     private BackupJob BuildJob()
@@ -250,14 +257,10 @@ public sealed class BackupJobRunTests
         var connections = new ConnectionResolver([
             new ConnectionConfig { Name = "pg-main", DatabaseType = DatabaseType.Postgres, Host = "localhost", Port = 5432 },
         ]);
-        var storages = new StorageResolver([
-            new StorageConfig { Name = "s3-main", Provider = UploadProvider.S3, S3 = new S3Settings() },
-        ]);
 
         var pipeline = new DatabaseBackupPipeline(
             new StubProviderFactory(_provider),
             connections,
-            storages,
             encryption,
             new StubUploadFactory(_uploader),
             fileBackup,

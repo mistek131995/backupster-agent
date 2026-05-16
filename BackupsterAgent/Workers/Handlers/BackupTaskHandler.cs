@@ -79,15 +79,19 @@ public sealed class BackupTaskHandler : IAgentTaskHandler
 
         var mode = task.Backup.BackupMode;
 
-        if (!_storages.TryResolve(config.StorageName, out var storage))
+        var effectiveStorageName = !string.IsNullOrWhiteSpace(task.Backup.StorageName)
+            ? task.Backup.StorageName
+            : config.StorageName;
+
+        if (!_storages.TryResolve(effectiveStorageName, out var storage))
         {
             _logger.LogWarning(
                 "BackupTaskHandler: backup task {TaskId} — storage '{Storage}' for database '{Database}' is not configured.",
-                task.Id, config.StorageName, databaseName);
+                task.Id, effectiveStorageName, databaseName);
             return new PatchAgentTaskDto
             {
                 Status = AgentTaskStatus.Failed,
-                ErrorMessage = $"Хранилище '{config.StorageName}' не настроено на агенте.",
+                ErrorMessage = $"Хранилище '{effectiveStorageName}' не настроено на агенте.",
             };
         }
 
@@ -116,7 +120,7 @@ public sealed class BackupTaskHandler : IAgentTaskHandler
         }
 
         _runTracker.RecordRun(
-            IBackupRunTracker.DatabaseKey(databaseName, mode, config.StorageName),
+            IBackupRunTracker.DatabaseKey(databaseName, mode, storage.Name),
             DateTime.UtcNow);
 
         return result.Success

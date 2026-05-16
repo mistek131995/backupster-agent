@@ -37,10 +37,14 @@ internal sealed class FakeBackupRecordClient : IBackupRecordClient
     public OpenBackupRecordDto? LastOpen { get; private set; }
     public FinalizeBackupRecordDto? LastFinalize { get; private set; }
 
+    public List<OpenBackupRecordDto> AllOpens { get; } = new();
+    public List<FinalizeBackupRecordDto> AllFinalizes { get; } = new();
+
     public Task<OpenRecordResult> OpenAsync(OpenBackupRecordDto dto, CancellationToken ct)
     {
         OpenCalls++;
         LastOpen = dto;
+        AllOpens.Add(dto);
         return Task.FromResult(NextOpen);
     }
 
@@ -54,6 +58,7 @@ internal sealed class FakeBackupRecordClient : IBackupRecordClient
     {
         FinalizeCalls++;
         LastFinalize = dto;
+        AllFinalizes.Add(dto);
         return Task.FromResult(NextFinalize);
     }
 }

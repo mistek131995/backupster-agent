@@ -228,6 +228,160 @@ public sealed class ScheduleServiceTests
     }
 
     [Test]
+    public async Task StorageNames_ThreeStorages_ReturnsThreeEntries_SameModeDifferentStorages()
+    {
+        var svc = CreateService(new ScheduleDto
+        {
+            CronExpression = string.Empty,
+            IsActive = false,
+            Overrides =
+            [
+                new ScheduleOverrideDto
+                {
+                    DatabaseName = "payments",
+                    CronExpression = "0 3 * * *",
+                    IsActive = true,
+                    BackupMode = BackupMode.Logical,
+                    StorageNames = ["s3-main", "sftp-archive", "local-nas"],
+                },
+            ],
+        });
+
+        var entries = await svc.GetDueSchedulesAsync("payments", CancellationToken.None);
+
+        Assert.That(entries, Has.Count.EqualTo(3));
+        var byStorage = entries.ToDictionary(e => e.StorageName!, e => e);
+        Assert.Multiple(() =>
+        {
+            Assert.That(byStorage.Keys, Is.EquivalentTo(new[] { "s3-main", "sftp-archive", "local-nas" }));
+            Assert.That(byStorage.Values.All(e => e.Mode == BackupMode.Logical), Is.True);
+            Assert.That(byStorage.Values.Select(e => e.NextRun).Distinct().Count(), Is.EqualTo(1),
+                "all three entries share the same cron, so NextRun must be identical");
+        });
+    }
+
+    [Test]
+    public async Task StorageNames_NullOrMissing_ReturnsOneEntryWithNullStorage()
+    {
+        var svc = CreateService(new ScheduleDto
+        {
+            CronExpression = string.Empty,
+            IsActive = false,
+            Overrides =
+            [
+                new ScheduleOverrideDto
+                {
+                    DatabaseName = "payments",
+                    CronExpression = "0 3 * * *",
+                    IsActive = true,
+                    BackupMode = BackupMode.Logical,
+                    // StorageNames not set → null
+                },
+            ],
+        });
+
+        var entries = await svc.GetDueSchedulesAsync("payments", CancellationToken.None);
+
+        Assert.That(entries, Has.Count.EqualTo(1));
+        Assert.That(entries[0].StorageName, Is.Null,
+            "null StorageNames must produce a single legacy-fallback entry with StorageName = null");
+    }
+
+    [Test]
+    public async Task StorageNames_EmptyArray_ReturnsOneEntryWithNullStorage()
+    {
+        var svc = CreateService(new ScheduleDto
+        {
+            CronExpression = string.Empty,
+            IsActive = false,
+            Overrides =
+            [
+                new ScheduleOverrideDto
+                {
+                    DatabaseName = "payments",
+                    CronExpression = "0 3 * * *",
+                    IsActive = true,
+                    BackupMode = BackupMode.Logical,
+                    StorageNames = [],
+                },
+            ],
+        });
+
+        var entries = await svc.GetDueSchedulesAsync("payments", CancellationToken.None);
+
+        Assert.That(entries, Has.Count.EqualTo(1));
+        Assert.That(entries[0].StorageName, Is.Null);
+    }
+
+    [Test]
+    public async Task StorageNames_WhitespaceElements_AreSkipped()
+    {
+        var svc = CreateService(new ScheduleDto
+        {
+            CronExpression = string.Empty,
+            IsActive = false,
+            Overrides =
+            [
+                new ScheduleOverrideDto
+                {
+                    DatabaseName = "payments",
+                    CronExpression = "0 3 * * *",
+                    IsActive = true,
+                    BackupMode = BackupMode.Logical,
+                    StorageNames = ["s3-main", "", "  ", "sftp-archive"],
+                },
+            ],
+        });
+
+        var entries = await svc.GetDueSchedulesAsync("payments", CancellationToken.None);
+
+        Assert.That(entries, Has.Count.EqualTo(2));
+        Assert.That(entries.Select(e => e.StorageName), Is.EquivalentTo(new[] { "s3-main", "sftp-archive" }));
+    }
+
+    [Test]
+    public async Task StorageNames_MixedOverridesAcrossModes_AreExpandedIndependently()
+    {
+        var svc = CreateService(new ScheduleDto
+        {
+            CronExpression = string.Empty,
+            IsActive = false,
+            Overrides =
+            [
+                new ScheduleOverrideDto
+                {
+                    DatabaseName = "payments",
+                    CronExpression = "0 3 * * *",
+                    IsActive = true,
+                    BackupMode = BackupMode.Logical,
+                    StorageNames = ["s3-main", "sftp-archive"],
+                },
+                new ScheduleOverrideDto
+                {
+                    DatabaseName = "payments",
+                    CronExpression = "0 4 * * *",
+                    IsActive = true,
+                    BackupMode = BackupMode.Physical,
+                    StorageNames = ["local-nas"],
+                },
+            ],
+        });
+
+        var entries = await svc.GetDueSchedulesAsync("payments", CancellationToken.None);
+
+        Assert.That(entries, Has.Count.EqualTo(3));
+        var logical = entries.Where(e => e.Mode == BackupMode.Logical).ToList();
+        var physical = entries.Where(e => e.Mode == BackupMode.Physical).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(logical.Select(e => e.StorageName),
+                Is.EquivalentTo(new[] { "s3-main", "sftp-archive" }));
+            Assert.That(physical, Has.Count.EqualTo(1));
+            Assert.That(physical[0].StorageName, Is.EqualTo("local-nas"));
+        });
+    }
+
+    [Test]
     public async Task TwoDatabasesIndependent_EachQueriedSeparately()
     {
         var svc = CreateService(new ScheduleDto

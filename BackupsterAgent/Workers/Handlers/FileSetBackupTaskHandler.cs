@@ -55,15 +55,19 @@ public sealed class FileSetBackupTaskHandler : IAgentTaskHandler
             };
         }
 
-        if (!_storages.TryResolve(config.StorageName, out var storage))
+        var effectiveStorageName = !string.IsNullOrWhiteSpace(task.Backup.StorageName)
+            ? task.Backup.StorageName
+            : config.StorageName;
+
+        if (!_storages.TryResolve(effectiveStorageName, out var storage))
         {
             _logger.LogWarning(
                 "FileSetBackupTaskHandler: backup task {TaskId} — storage '{Storage}' for file set '{Name}' is not configured.",
-                task.Id, config.StorageName, fileSetName);
+                task.Id, effectiveStorageName, fileSetName);
             return new PatchAgentTaskDto
             {
                 Status = AgentTaskStatus.Failed,
-                ErrorMessage = $"Хранилище '{config.StorageName}' не настроено на агенте.",
+                ErrorMessage = $"Хранилище '{effectiveStorageName}' не настроено на агенте.",
             };
         }
 
@@ -92,7 +96,7 @@ public sealed class FileSetBackupTaskHandler : IAgentTaskHandler
         }
 
         _runTracker.RecordRun(
-            IBackupRunTracker.FileSetKey(fileSetName, config.StorageName),
+            IBackupRunTracker.FileSetKey(fileSetName, storage.Name),
             DateTime.UtcNow);
 
         return result.Success

@@ -1,3 +1,4 @@
+using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.State;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -135,6 +136,105 @@ public sealed class BackupRunTrackerTests
             Assert.That(recreated.GetLastRun($"db-{i}"), Is.EqualTo(t.AddMinutes(i)),
                 $"db-{i} should be persisted");
         }
+    }
+
+    [Test]
+    public void DatabaseKey_ThreeStorages_AreIndependent()
+    {
+        var tracker = CreateTracker();
+        var baseT = new DateTime(2026, 4, 20, 0, 0, 0, DateTimeKind.Utc);
+
+        tracker.RecordRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "s3-main"), baseT);
+        tracker.RecordRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "sftp-archive"), baseT.AddMinutes(5));
+        tracker.RecordRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "local-nas"), baseT.AddMinutes(10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "s3-main")),
+                Is.EqualTo(baseT));
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "sftp-archive")),
+                Is.EqualTo(baseT.AddMinutes(5)));
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "local-nas")),
+                Is.EqualTo(baseT.AddMinutes(10)));
+        });
+    }
+
+    [Test]
+    public void DatabaseKey_SameDatabaseDifferentModes_AreIndependent()
+    {
+        var tracker = CreateTracker();
+        var logicalAt = new DateTime(2026, 4, 20, 2, 0, 0, DateTimeKind.Utc);
+        var physicalAt = logicalAt.AddHours(2);
+
+        tracker.RecordRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "s3"), logicalAt);
+        tracker.RecordRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Physical, "s3"), physicalAt);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "s3")),
+                Is.EqualTo(logicalAt));
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Physical, "s3")),
+                Is.EqualTo(physicalAt));
+        });
+    }
+
+    [Test]
+    public void DatabaseKey_MultiStorageState_SurvivesRecreation()
+    {
+        var t = new DateTime(2026, 4, 20, 2, 0, 0, DateTimeKind.Utc);
+        var first = CreateTracker();
+
+        first.RecordRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "s3-main"), t);
+        first.RecordRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "sftp-archive"), t.AddMinutes(7));
+        first.RecordRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "local-nas"), t.AddMinutes(13));
+
+        var second = CreateTracker();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.GetLastRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "s3-main")),
+                Is.EqualTo(t));
+            Assert.That(second.GetLastRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "sftp-archive")),
+                Is.EqualTo(t.AddMinutes(7)));
+            Assert.That(second.GetLastRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "local-nas")),
+                Is.EqualTo(t.AddMinutes(13)));
+        });
+    }
+
+    [Test]
+    public void FileSetKey_TwoStorages_AreIndependent()
+    {
+        var tracker = CreateTracker();
+        var t = new DateTime(2026, 4, 20, 2, 0, 0, DateTimeKind.Utc);
+
+        tracker.RecordRun(IBackupRunTracker.FileSetKey("photos", "s3-cold"), t);
+        tracker.RecordRun(IBackupRunTracker.FileSetKey("photos", "local-nas"), t.AddMinutes(3));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.FileSetKey("photos", "s3-cold")),
+                Is.EqualTo(t));
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.FileSetKey("photos", "local-nas")),
+                Is.EqualTo(t.AddMinutes(3)));
+        });
+    }
+
+    [Test]
+    public void DatabaseKey_AndFileSetKey_AreInDifferentNamespaces()
+    {
+        var tracker = CreateTracker();
+        var t = new DateTime(2026, 4, 20, 2, 0, 0, DateTimeKind.Utc);
+
+        tracker.RecordRun(IBackupRunTracker.DatabaseKey("photos", BackupMode.Logical, "s3"), t);
+        tracker.RecordRun(IBackupRunTracker.FileSetKey("photos", "s3"), t.AddMinutes(11));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.DatabaseKey("photos", BackupMode.Logical, "s3")),
+                Is.EqualTo(t));
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.FileSetKey("photos", "s3")),
+                Is.EqualTo(t.AddMinutes(11)));
+        });
     }
 
     private BackupRunTracker CreateTracker()

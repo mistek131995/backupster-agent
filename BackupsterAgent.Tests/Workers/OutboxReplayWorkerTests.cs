@@ -245,6 +245,50 @@ public sealed class OutboxReplayWorkerTests
     }
 
     [Test]
+    public async Task TickAsync_ThreeMultiStorageEntries_ReplayInOrder_WithDifferentStorageNames()
+    {
+        _client.NextOpen = new OpenRecordResult(DashboardAvailability.Ok, Guid.NewGuid());
+        _client.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
+
+        var startedAt = new DateTime(2026, 4, 20, 2, 0, 0, DateTimeKind.Utc);
+
+        await _store.EnqueueAsync(MakeEntry("t-s3", serverRecordId: null,
+            queuedAt: DateTime.UtcNow.AddMinutes(-3)) with
+            {
+                DatabaseName = "payments",
+                StorageName = "s3-main",
+                StartedAt = startedAt,
+            }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("t-sftp", serverRecordId: null,
+            queuedAt: DateTime.UtcNow.AddMinutes(-2)) with
+            {
+                DatabaseName = "payments",
+                StorageName = "sftp-archive",
+                StartedAt = startedAt,
+            }, CancellationToken.None);
+        await _store.EnqueueAsync(MakeEntry("t-nas", serverRecordId: null,
+            queuedAt: DateTime.UtcNow.AddMinutes(-1)) with
+            {
+                DatabaseName = "payments",
+                StorageName = "local-nas",
+                StartedAt = startedAt,
+            }, CancellationToken.None);
+
+        await _worker.TickAsync(CancellationToken.None);
+
+        Assert.That(_client.OpenCalls, Is.EqualTo(3),
+            "all three entries from the same cron-tick must be replayed");
+        Assert.That(_client.AllOpens.Select(o => o.StorageName),
+            Is.EqualTo(new[] { "s3-main", "sftp-archive", "local-nas" }),
+            "replay must preserve FIFO order by QueuedAt and pass the storage from each entry");
+        Assert.That(_client.AllOpens.All(o => o.DatabaseName == "payments" && o.StartedAt == startedAt), Is.True,
+            "non-storage fields must come unchanged from the entry");
+
+        var alive = await _store.ListAsync(CancellationToken.None);
+        Assert.That(alive, Is.Empty, "all three entries finalized successfully and must be removed");
+    }
+
+    [Test]
     public async Task TickAsync_EntryPassesCorrectOpenDtoFields()
     {
         var serverId = Guid.NewGuid();
