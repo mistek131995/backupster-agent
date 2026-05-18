@@ -15,7 +15,6 @@ namespace BackupsterAgent.IntegrationTests.Backup;
 [Category("Integration")]
 public sealed class S3BackupIntegrationTests
 {
-    private const string ManifestSuffix = "/manifest.json.gz.enc";
     private const string ChunksPrefix = "chunks/";
 
     private S3Settings _baseSettings = null!;
@@ -224,51 +223,14 @@ public sealed class S3BackupIntegrationTests
 
         await _provider.DeleteAsync(manifestKey, _cts.Token);
 
-        var (deleted, kept) = await RunSweepAsync(graceWindow: TimeSpan.Zero, _cts.Token);
+        var sweep = new ChunkSweepService(_manifestStore, _encryption, NullLogger<ChunkSweepService>.Instance);
+        var result = await sweep.SweepStorageAsync(_provider, "s3-itest", TimeSpan.Zero, _cts.Token);
 
         Assert.Multiple(() =>
         {
-            Assert.That(deleted, Is.EqualTo(chunksBefore), "все осиротевшие чанки должны исчезнуть");
-            Assert.That(kept, Is.Zero, "ничего активного не остаётся, поскольку единственный манифест удалён");
+            Assert.That(result.Deleted, Is.EqualTo(chunksBefore), "все осиротевшие чанки должны исчезнуть");
+            Assert.That(result.ReferencedChunks, Is.Zero, "ничего активного не остаётся, поскольку единственный манифест удалён");
         });
-    }
-
-    private async Task<(int Deleted, int Kept)> RunSweepAsync(TimeSpan graceWindow, CancellationToken ct)
-    {
-        var referenced = new HashSet<string>(StringComparer.Ordinal);
-
-        await foreach (var obj in _provider.ListAsync(string.Empty, ct))
-        {
-            if (!obj.Key.EndsWith(ManifestSuffix, StringComparison.Ordinal)) continue;
-            await using var reader = await _manifestStore.OpenReaderAsync(obj.Key, _provider, ct);
-            await foreach (var entry in reader.ReadFilesAsync(ct))
-                foreach (var c in entry.Chunks)
-                    referenced.Add(c);
-        }
-
-        var cutoff = DateTime.UtcNow - graceWindow;
-        int deleted = 0;
-        int kept = 0;
-
-        await foreach (var obj in _provider.ListAsync(ChunksPrefix, ct))
-        {
-            if (!obj.Key.StartsWith(ChunksPrefix, StringComparison.Ordinal)) continue;
-            var sha = obj.Key[ChunksPrefix.Length..];
-            if (sha.Length == 0) continue;
-
-            if (referenced.Contains(sha))
-            {
-                kept++;
-                continue;
-            }
-
-            if (obj.LastModifiedUtc > cutoff) continue;
-
-            await _provider.DeleteAsync(obj.Key, ct);
-            deleted++;
-        }
-
-        return (deleted, kept);
     }
 
     private async Task<int> CountChunksAsync()

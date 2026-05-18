@@ -12,12 +12,11 @@ namespace BackupsterAgent.Workers;
 public sealed class ChunkGcWorker : BackgroundService
 {
     private static readonly TimeSpan StartupDelay = TimeSpan.FromMinutes(10);
-    private const string ChunksPrefix = "chunks/";
 
     private readonly StorageResolver _storages;
     private readonly IUploadProviderFactory _uploadFactory;
     private readonly EncryptionService _encryption;
-    private readonly ManifestStore _manifestStore;
+    private readonly ChunkSweepService _sweep;
     private readonly GcSettings _settings;
     private readonly IAgentActivityLock _lock;
     private readonly ILogger<ChunkGcWorker> _logger;
@@ -26,7 +25,7 @@ public sealed class ChunkGcWorker : BackgroundService
         StorageResolver storages,
         IUploadProviderFactory uploadFactory,
         EncryptionService encryption,
-        ManifestStore manifestStore,
+        ChunkSweepService sweep,
         IOptions<GcSettings> settings,
         IAgentActivityLock activityLock,
         ILogger<ChunkGcWorker> logger)
@@ -34,7 +33,7 @@ public sealed class ChunkGcWorker : BackgroundService
         _storages = storages;
         _uploadFactory = uploadFactory;
         _encryption = encryption;
-        _manifestStore = manifestStore;
+        _sweep = sweep;
         _settings = settings.Value;
         _lock = activityLock;
         _logger = logger;
@@ -122,7 +121,8 @@ public sealed class ChunkGcWorker : BackgroundService
 
             try
             {
-                await SweepStorageAsync(name, graceWindow, ct);
+                var uploader = _uploadFactory.GetProvider(name);
+                await _sweep.SweepStorageAsync(uploader, name, graceWindow, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -134,92 +134,4 @@ public sealed class ChunkGcWorker : BackgroundService
             }
         }
     }
-
-    private async Task SweepStorageAsync(string storageName, TimeSpan graceWindow, CancellationToken ct)
-    {
-        var uploader = _uploadFactory.GetProvider(storageName);
-
-        _logger.LogInformation(
-            "ChunkGc: starting sweep for storage '{Storage}' (grace: {GraceH}h).",
-            storageName, graceWindow.TotalHours);
-
-        var referenced = new HashSet<string>(StringComparer.Ordinal);
-        int manifestCount = 0;
-
-        await foreach (var obj in uploader.ListAsync(string.Empty, ct))
-        {
-            if (!IsManifestKey(obj.Key)) continue;
-
-            try
-            {
-                await using var reader = await _manifestStore.OpenReaderAsync(obj.Key, uploader, ct);
-
-                await foreach (var entry in reader.ReadFilesAsync(ct))
-                {
-                    foreach (var chunk in entry.Chunks)
-                        referenced.Add(chunk);
-                }
-
-                manifestCount++;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "ChunkGc: failed to read manifest '{Key}' in storage '{Storage}'. Aborting sweep.",
-                    obj.Key, storageName);
-                return;
-            }
-        }
-
-        var cutoff = DateTime.UtcNow - graceWindow;
-        int totalChunks = 0;
-        int deleted = 0;
-        int skippedGrace = 0;
-        long freedBytes = 0;
-
-        await foreach (var obj in uploader.ListAsync(ChunksPrefix, ct))
-        {
-            totalChunks++;
-
-            if (!obj.Key.StartsWith(ChunksPrefix, StringComparison.Ordinal)) continue;
-            var sha = obj.Key[ChunksPrefix.Length..];
-            if (sha.Length == 0) continue;
-            if (referenced.Contains(sha)) continue;
-
-            if (obj.LastModifiedUtc > cutoff)
-            {
-                skippedGrace++;
-                continue;
-            }
-
-            try
-            {
-                await uploader.DeleteAsync(obj.Key, ct);
-                deleted++;
-                freedBytes += obj.Size;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "ChunkGc: failed to delete chunk '{Key}' in storage '{Storage}'.",
-                    obj.Key, storageName);
-            }
-        }
-
-        _logger.LogInformation(
-            "ChunkGc: storage '{Storage}' — manifests: {Manifests}, referenced: {Refs}, total chunks: {Total}, deleted: {Deleted} ({FreedMb:F1} MB), skipped (grace): {Grace}.",
-            storageName, manifestCount, referenced.Count, totalChunks, deleted, freedBytes / 1024.0 / 1024.0, skippedGrace);
-    }
-
-    private static bool IsManifestKey(string key) =>
-        key.EndsWith(ManifestStore.NewSuffix, StringComparison.Ordinal) ||
-        key.EndsWith(ManifestStore.LegacySuffix, StringComparison.Ordinal);
 }

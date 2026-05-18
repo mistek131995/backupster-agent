@@ -119,6 +119,7 @@ builder.Services.AddSingleton<EncryptionService>();
 builder.Services.AddSingleton<ContentDefinedChunker>();
 builder.Services.AddSingleton<FileBackupService>();
 builder.Services.AddSingleton<ManifestStore>();
+builder.Services.AddSingleton<ChunkSweepService>();
 builder.Services.AddSingleton<IUploadProviderFactory, UploadProviderFactory>();
 builder.Services.AddSingleton<IDashboardAuthGuard, DashboardAuthGuard>();
 

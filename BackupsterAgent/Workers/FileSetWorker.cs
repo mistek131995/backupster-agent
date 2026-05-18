@@ -148,8 +148,10 @@ public sealed class FileSetWorker : BackgroundService
                             ? entry.StorageName
                             : config.StorageName;
 
-                        var trackerKey = IBackupRunTracker.FileSetKey(config.Name, storageName);
-                        var last = _runTracker.GetLastRun(trackerKey);
+                        var trackerKey = IBackupRunTracker.ScheduleKey(entry.ScheduleId);
+                        var legacyKey = IBackupRunTracker.FileSetKey(config.Name, storageName);
+                        var last = _runTracker.GetLastRun(trackerKey)
+                            ?? _runTracker.GetLastRun(legacyKey);
                         if (entry.NextRun <= DateTime.UtcNow && (last is null || entry.NextRun > last))
                         {
                             due.Add((config, storageName, entry.NextRun));

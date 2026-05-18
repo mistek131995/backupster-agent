@@ -1,4 +1,5 @@
 using BackupsterAgent.Domain;
+using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Outbox;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -327,11 +328,16 @@ public sealed class OutboxStoreTests
             FilesCount = 1240,
             FilesTotalBytes = 5_123_987,
             NewChunksCount = 87,
-            FileBackupError = null,
-            ErrorMessage = null,
+            FileBackupError = "warn: 3 files skipped",
+            ErrorMessage = "transient dashboard 503",
             QueuedAt = new DateTime(2026, 4, 20, 2, 18, 44, DateTimeKind.Utc),
-            AttemptCount = 0,
+            AttemptCount = 7,
             ServerRecordId = Guid.Parse("11111111-2222-3333-4444-555555555555"),
+            DatabaseType = DatabaseType.Postgres,
+            FileSetName = "weekly-photos",
+            BackupMode = BackupMode.PhysicalDifferential,
+            BaseBackupRecordId = Guid.Parse("99999999-8888-7777-6666-555555555555"),
+            PgBaseManifestKey = "payments/2026-04-19_02-00-00/manifest.json.gz.enc",
         };
 
         await _store.EnqueueAsync(entry, CancellationToken.None);

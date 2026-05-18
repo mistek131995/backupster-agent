@@ -13,4 +13,7 @@ public interface IBackupRunTracker
 
     static string FileSetKey(string name, string storage) =>
         $"fileset:{name}|{storage}";
+
+    static string ScheduleKey(Guid scheduleId) =>
+        $"schedule:{scheduleId:N}";
 }

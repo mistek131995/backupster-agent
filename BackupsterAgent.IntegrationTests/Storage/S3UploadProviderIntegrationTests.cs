@@ -119,6 +119,41 @@ public sealed class S3UploadProviderIntegrationTests
     }
 
     [Test]
+    public async Task UploadAsync_LargeFile_ThenGetObjectSize_ReturnsSize()
+    {
+        const long sizeBytes = 64L * 1024 * 1024;
+        var fileName = $"upload-large-{Guid.NewGuid():N}.bin";
+        var localPath = Path.Combine(Path.GetTempPath(), fileName);
+
+        await using (var fs = new FileStream(
+            localPath, FileMode.Create, FileAccess.Write, FileShare.None,
+            bufferSize: 81920, useAsync: true))
+        {
+            var chunk = RandomNumberGenerator.GetBytes(81920);
+            long written = 0;
+            while (written < sizeBytes)
+            {
+                var toWrite = (int)Math.Min(chunk.Length, sizeBytes - written);
+                await fs.WriteAsync(chunk.AsMemory(0, toWrite), _cts.Token);
+                written += toWrite;
+            }
+        }
+
+        try
+        {
+            await _provider.UploadAsync(localPath, "upload-large", progress: null, _cts.Token);
+            var key = $"upload-large/{fileName}";
+            var size = await _provider.GetObjectSizeAsync(key, _cts.Token);
+
+            Assert.That(size, Is.EqualTo(sizeBytes));
+        }
+        finally
+        {
+            File.Delete(localPath);
+        }
+    }
+
+    [Test]
     public async Task DownloadAsync_File_PreservesContent()
     {
         var content = RandomNumberGenerator.GetBytes(2048);

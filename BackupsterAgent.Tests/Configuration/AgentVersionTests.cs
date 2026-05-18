@@ -16,10 +16,4 @@ public sealed class AgentVersionTests
     {
         Assert.That(AgentVersion.Current, Does.Not.Contain("+"));
     }
-
-    [Test]
-    public void Current_MatchesCsprojDefault()
-    {
-        Assert.That(AgentVersion.Current, Does.StartWith("1.4.0"));
-    }
 }

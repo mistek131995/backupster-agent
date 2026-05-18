@@ -72,52 +72,21 @@ public sealed class HandlerRoutingTests
         });
     }
 
-    [Test]
-    public void BackupTask_WithoutFileSet_RoutedToBackupHandlerOnly()
+    [TestCase(AgentTaskType.Restore, null, typeof(RestoreTaskHandler))]
+    [TestCase(AgentTaskType.Delete, null, typeof(DeleteTaskHandler))]
+    [TestCase(AgentTaskType.Backup, null, typeof(BackupTaskHandler))]
+    [TestCase(AgentTaskType.Backup, "weekly-photos", typeof(FileSetBackupTaskHandler))]
+    public void ExactlyOneHandlerAcceptsTask(AgentTaskType type, string? fileSetName, Type expectedHandler)
     {
-        var task = MakeBackupTask(fileSetName: null);
+        var task = type == AgentTaskType.Backup
+            ? MakeBackupTask(fileSetName)
+            : MakeTask(type);
         var handlers = AllHandlers();
 
         var accepting = handlers.Where(h => h.CanHandle(task)).ToList();
 
         Assert.That(accepting, Has.Count.EqualTo(1));
-        Assert.That(accepting[0], Is.InstanceOf<BackupTaskHandler>());
-    }
-
-    [Test]
-    public void BackupTask_WithFileSet_RoutedToFileSetHandlerOnly()
-    {
-        var task = MakeBackupTask(fileSetName: "weekly-photos");
-        var handlers = AllHandlers();
-
-        var accepting = handlers.Where(h => h.CanHandle(task)).ToList();
-
-        Assert.That(accepting, Has.Count.EqualTo(1));
-        Assert.That(accepting[0], Is.InstanceOf<FileSetBackupTaskHandler>());
-    }
-
-    [Test]
-    public void RestoreTask_RoutedToRestoreHandlerOnly()
-    {
-        var task = MakeTask(AgentTaskType.Restore);
-        var handlers = AllHandlers();
-
-        var accepting = handlers.Where(h => h.CanHandle(task)).ToList();
-
-        Assert.That(accepting, Has.Count.EqualTo(1));
-        Assert.That(accepting[0], Is.InstanceOf<RestoreTaskHandler>());
-    }
-
-    [Test]
-    public void DeleteTask_RoutedToDeleteHandlerOnly()
-    {
-        var task = MakeTask(AgentTaskType.Delete);
-        var handlers = AllHandlers();
-
-        var accepting = handlers.Where(h => h.CanHandle(task)).ToList();
-
-        Assert.That(accepting, Has.Count.EqualTo(1));
-        Assert.That(accepting[0], Is.InstanceOf<DeleteTaskHandler>());
+        Assert.That(accepting[0], Is.InstanceOf(expectedHandler));
     }
 
     private static IReadOnlyList<IAgentTaskHandler> AllHandlers() => new IAgentTaskHandler[]

@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
@@ -66,7 +68,8 @@ public sealed class ScheduleService : DashboardClientBase
 
             if (o.StorageNames is null || o.StorageNames.Count == 0)
             {
-                result.Add(new ScheduleEntry(o.BackupMode, next.Value, null));
+                var scheduleId = o.Id ?? ComputeFakeScheduleId(o.DatabaseName, o.BackupMode, null);
+                result.Add(new ScheduleEntry(scheduleId, o.BackupMode, next.Value, null));
                 continue;
             }
 
@@ -75,7 +78,8 @@ public sealed class ScheduleService : DashboardClientBase
                 if (string.IsNullOrWhiteSpace(storage))
                     continue;
 
-                result.Add(new ScheduleEntry(o.BackupMode, next.Value, storage));
+                var scheduleId = o.Id ?? ComputeFakeScheduleId(o.DatabaseName, o.BackupMode, storage);
+                result.Add(new ScheduleEntry(scheduleId, o.BackupMode, next.Value, storage));
             }
         }
 
@@ -174,12 +178,19 @@ public sealed class ScheduleService : DashboardClientBase
             _lastCronByName[k] = v;
     }
 
+    private static Guid ComputeFakeScheduleId(string database, BackupMode mode, string? storage)
+    {
+        var input = $"{database}|{mode}|{storage ?? string.Empty}";
+        Span<byte> hash = stackalloc byte[32];
+        SHA256.HashData(Encoding.UTF8.GetBytes(input), hash);
+        return new Guid(hash[..16]);
+    }
+
     private DateTime? ParseNextOccurrence(string cronExpression)
     {
         try
         {
-            var schedule = CrontabSchedule.Parse(cronExpression);
-            return schedule.GetNextOccurrence(DateTime.UtcNow - PollInterval);
+            return ComputeNextOccurrenceUtc(cronExpression, DateTime.Now);
         }
         catch (Exception ex)
         {
@@ -188,5 +199,12 @@ public sealed class ScheduleService : DashboardClientBase
                 cronExpression);
             return null;
         }
+    }
+
+    internal static DateTime ComputeNextOccurrenceUtc(string cronExpression, DateTime nowLocal)
+    {
+        var schedule = CrontabSchedule.Parse(cronExpression);
+        var nextLocal = schedule.GetNextOccurrence(nowLocal - PollInterval);
+        return DateTime.SpecifyKind(nextLocal, DateTimeKind.Local).ToUniversalTime();
     }
 }

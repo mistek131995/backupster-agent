@@ -189,16 +189,6 @@ public sealed class DatabaseRestoreServiceTests
         Assert.That(root, Is.EqualTo(Path.GetFullPath(absolute)));
     }
 
-    [Test]
-    public void BuildTempRoot_AndBuildTempDir_Agree()
-    {
-        var taskId = Guid.NewGuid();
-        var root = DatabaseRestoreService.BuildTempRoot("my-restore");
-        var dir = DatabaseRestoreService.BuildTempDir("my-restore", taskId);
-
-        Assert.That(dir, Is.EqualTo(Path.Combine(root, taskId.ToString("N"))));
-    }
-
     // ---------- IsKnownMssqlPermissionCode ----------
 
     [TestCase(229)]

@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Amazon.S3;
 using Amazon.S3.Model;
+using Amazon.S3.Transfer;
 using BackupsterAgent.Configuration;
 
 namespace BackupsterAgent.Providers.Upload;
@@ -48,24 +49,22 @@ public sealed class S3UploadProvider : IUploadProvider, IDisposable
             "Uploading '{FilePath}' → s3://{Bucket}/{ObjectKey}",
             filePath, _settings.BucketName, objectKey);
 
-        await using var fileStream = new FileStream(
-            filePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-            bufferSize: 65536, useAsync: true);
+        using var transferUtility = new TransferUtility(GetClient());
 
-        var request = new PutObjectRequest
+        var request = new TransferUtilityUploadRequest
         {
             BucketName = _settings.BucketName,
             Key = objectKey,
-            InputStream = fileStream,
+            FilePath = filePath,
             DisablePayloadSigning = true,
         };
 
         if (progress is not null)
         {
-            request.StreamTransferProgress += (_, args) => progress.Report(args.TransferredBytes);
+            request.UploadProgressEvent += (_, args) => progress.Report(args.TransferredBytes);
         }
 
-        await GetClient().PutObjectAsync(request, ct);
+        await transferUtility.UploadAsync(request, ct);
 
         var storagePath = $"s3://{_settings.BucketName}/{objectKey}";
         _logger.LogInformation("Upload completed. StoragePath: '{StoragePath}'", storagePath);

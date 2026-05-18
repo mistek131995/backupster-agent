@@ -237,6 +237,75 @@ public sealed class BackupRunTrackerTests
         });
     }
 
+    [Test]
+    public void ScheduleKey_DifferentGuids_AreIndependent()
+    {
+        var tracker = CreateTracker();
+        var idA = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var idB = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        var tA = new DateTime(2026, 4, 20, 6, 0, 0, DateTimeKind.Utc);
+        var tB = new DateTime(2026, 4, 20, 20, 0, 0, DateTimeKind.Utc);
+
+        tracker.RecordRun(IBackupRunTracker.ScheduleKey(idA), tA);
+        tracker.RecordRun(IBackupRunTracker.ScheduleKey(idB), tB);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.ScheduleKey(idA)), Is.EqualTo(tA));
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.ScheduleKey(idB)), Is.EqualTo(tB));
+        });
+    }
+
+    [Test]
+    public void MigrationScenario_LegacyKeyExists_NewKeyTakesOver_AfterFirstRecord()
+    {
+        var legacyKey = IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "s3-main");
+        var fakeId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var newKey = IBackupRunTracker.ScheduleKey(fakeId);
+        var legacyAt = new DateTime(2026, 4, 20, 2, 0, 0, DateTimeKind.Utc);
+        var firstTickAt = legacyAt.AddDays(1);
+
+        var first = CreateTracker();
+        first.RecordRun(legacyKey, legacyAt);
+
+        var afterUpgrade = CreateTracker();
+        var resolved = afterUpgrade.GetLastRun(newKey) ?? afterUpgrade.GetLastRun(legacyKey);
+        Assert.That(resolved, Is.EqualTo(legacyAt),
+            "first tick after upgrade must fall back to legacy key so no duplicate tick is scheduled");
+
+        afterUpgrade.RecordRun(newKey, firstTickAt);
+
+        var afterTick = CreateTracker();
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterTick.GetLastRun(newKey), Is.EqualTo(firstTickAt),
+                "subsequent ticks must hit the new key directly");
+            Assert.That(afterTick.GetLastRun(legacyKey), Is.EqualTo(legacyAt),
+                "legacy key is left as harmless leftover (cleanup is out of scope)");
+        });
+    }
+
+    [Test]
+    public void ScheduleKey_DoesNotCollideWith_DatabaseKey_OrFileSetKey()
+    {
+        var tracker = CreateTracker();
+        var id = Guid.Parse("12345678-1234-1234-1234-123456789012");
+        var t = new DateTime(2026, 4, 20, 2, 0, 0, DateTimeKind.Utc);
+
+        tracker.RecordRun(IBackupRunTracker.ScheduleKey(id), t);
+        tracker.RecordRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "s3"), t.AddMinutes(7));
+        tracker.RecordRun(IBackupRunTracker.FileSetKey("payments", "s3"), t.AddMinutes(13));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.ScheduleKey(id)), Is.EqualTo(t));
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.DatabaseKey("payments", BackupMode.Logical, "s3")),
+                Is.EqualTo(t.AddMinutes(7)));
+            Assert.That(tracker.GetLastRun(IBackupRunTracker.FileSetKey("payments", "s3")),
+                Is.EqualTo(t.AddMinutes(13)));
+        });
+    }
+
     private BackupRunTracker CreateTracker()
     {
         var store = new RunStateStore(_root, NullLogger<RunStateStore>.Instance);

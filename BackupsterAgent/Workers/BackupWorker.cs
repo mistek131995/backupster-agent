@@ -152,9 +152,11 @@ public sealed class BackupWorker : BackgroundService
                             ? entry.StorageName
                             : config.StorageName;
 
-                        var trackerKey = IBackupRunTracker.DatabaseKey(
+                        var trackerKey = IBackupRunTracker.ScheduleKey(entry.ScheduleId);
+                        var legacyKey = IBackupRunTracker.DatabaseKey(
                             config.Database, entry.Mode, storageName);
-                        var last = _runTracker.GetLastRun(trackerKey);
+                        var last = _runTracker.GetLastRun(trackerKey)
+                            ?? _runTracker.GetLastRun(legacyKey);
                         if (entry.NextRun <= DateTime.UtcNow && (last is null || entry.NextRun > last))
                         {
                             due.Add((config, entry.Mode, storageName, entry.NextRun));
