@@ -1,3 +1,8 @@
 namespace BackupsterAgent.Services.Dashboard.Clients;
 
-public sealed record OpenRecordResult(DashboardAvailability Status, Guid? Id = null);
+public sealed record OpenRecordResult(
+    DashboardAvailability Status,
+    Guid? Id = null,
+    string? BaseDumpObjectKey = null,
+    string? BasePgBaseManifestKey = null,
+    DateTime? BaseBackupAt = null);

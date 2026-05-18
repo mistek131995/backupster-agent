@@ -11,4 +11,5 @@ public sealed class OpenBackupRecordDto
     public DatabaseType? DatabaseType { get; init; }
     public string? FileSetName { get; init; }
     public BackupMode? BackupMode { get; init; }
+    public Guid? BaseBackupRecordId { get; init; }
 }

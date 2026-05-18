@@ -187,6 +187,7 @@ public sealed class OutboxReplayWorker : BackgroundService
         DatabaseType = entry.DatabaseType,
         FileSetName = entry.FileSetName,
         BackupMode = entry.BackupMode,
+        BaseBackupRecordId = entry.BaseBackupRecordId,
     };
 
     private static FinalizeBackupRecordDto BuildFinalizeDto(OutboxEntry entry) => new()
@@ -204,6 +205,7 @@ public sealed class OutboxReplayWorker : BackgroundService
         FilesTotalBytes = entry.FilesTotalBytes,
         NewChunksCount = entry.NewChunksCount,
         FileBackupError = entry.FileBackupError,
+        PgBaseManifestKey = entry.PgBaseManifestKey,
     };
 
     private enum TickDisposition

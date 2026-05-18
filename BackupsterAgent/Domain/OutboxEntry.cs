@@ -27,4 +27,6 @@ public sealed record OutboxEntry
     public DatabaseType? DatabaseType { get; init; }
     public string? FileSetName { get; init; }
     public BackupMode? BackupMode { get; init; }
+    public Guid? BaseBackupRecordId { get; init; }
+    public string? PgBaseManifestKey { get; init; }
 }

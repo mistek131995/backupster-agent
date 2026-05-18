@@ -95,8 +95,10 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         var fileName = $"{config.Database}_{timestamp}.tar.gz";
+        var manifestFileName = $"{config.Database}_{timestamp}.backup_manifest";
         var tempDir = Path.Combine(config.OutputPath, $"pgbase-{Guid.NewGuid():N}");
         var outputFile = Path.Combine(config.OutputPath, fileName);
+        var manifestOutputFile = Path.Combine(config.OutputPath, manifestFileName);
 
         Directory.CreateDirectory(config.OutputPath);
 
@@ -155,6 +157,22 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
 
             File.Move(baseTar, outputFile, overwrite: true);
 
+            var manifestSource = Path.Combine(tempDir, "backup_manifest");
+            string? manifestPath = null;
+            if (File.Exists(manifestSource))
+            {
+                File.Move(manifestSource, manifestOutputFile, overwrite: true);
+                manifestPath = manifestOutputFile;
+                _logger.LogInformation(
+                    "PostgreSQL backup_manifest captured: '{ManifestPath}'", manifestOutputFile);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "PostgreSQL backup_manifest not found in '{TempDir}' — incremental backups based on this full backup will not be possible.",
+                    tempDir);
+            }
+
             var sizeBytes = new FileInfo(outputFile).Length;
             _logger.LogInformation(
                 "PostgreSQL physical backup completed. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
@@ -166,6 +184,7 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
                 SizeBytes = sizeBytes,
                 DurationMs = sw.ElapsedMilliseconds,
                 Success = true,
+                PgBaseManifestPath = manifestPath,
             };
         }
         finally

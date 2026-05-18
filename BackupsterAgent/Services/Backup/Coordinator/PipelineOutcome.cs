@@ -12,6 +12,7 @@ public sealed record PipelineOutcome
     public string? DumpObjectKey { get; init; }
     public FileBackupMetrics? FileMetrics { get; init; }
     public string? FileBackupError { get; init; }
+    public string? PgBaseManifestKey { get; init; }
 
     public static PipelineOutcome Failed(string errorMessage) =>
         new() { Success = false, ErrorMessage = errorMessage };

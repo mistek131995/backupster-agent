@@ -7,4 +7,7 @@ public sealed record BackupRunExecution(
     Guid? RecordId,
     bool IsOffline,
     DateTime StartedAt,
-    IProgressReporter<BackupStage> Reporter);
+    IProgressReporter<BackupStage> Reporter,
+    string? BaseDumpObjectKey = null,
+    string? BasePgBaseManifestKey = null,
+    DateTime? BaseBackupAt = null);

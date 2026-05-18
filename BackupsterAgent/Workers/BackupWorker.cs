@@ -1,4 +1,5 @@
 using BackupsterAgent.Configuration;
+using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Backup;
@@ -20,6 +21,7 @@ public sealed class BackupWorker : BackgroundService
     private readonly StorageResolver _storages;
     private readonly IAgentActivityLock _activityLock;
     private readonly IBackupRunTracker _runTracker;
+    private readonly IBackupRecordClient _recordClient;
     private readonly List<DatabaseConfig> _databases;
     private readonly List<DatabaseConfig> _validDatabases;
     private readonly ILogger<BackupWorker> _logger;
@@ -32,6 +34,7 @@ public sealed class BackupWorker : BackgroundService
         StorageResolver storages,
         IAgentActivityLock activityLock,
         IBackupRunTracker runTracker,
+        IBackupRecordClient recordClient,
         IOptions<List<DatabaseConfig>> databases,
         ILogger<BackupWorker> logger)
     {
@@ -42,6 +45,7 @@ public sealed class BackupWorker : BackgroundService
         _storages = storages;
         _activityLock = activityLock;
         _runTracker = runTracker;
+        _recordClient = recordClient;
         _databases = databases.Value;
         _logger = logger;
         _validDatabases = FilterValidDatabases(_databases, _connections, _storages, _logger);
@@ -222,10 +226,40 @@ public sealed class BackupWorker : BackgroundService
 
             try
             {
+                Guid? baseBackupRecordId = null;
+                if (mode == BackupMode.PhysicalDifferential)
+                {
+                    var lookup = await _recordClient.GetLastSuccessfulAsync(
+                        config.Database, storageName, BackupMode.Physical, stoppingToken);
+
+                    switch (lookup.Outcome)
+                    {
+                        case LastSuccessfulLookupOutcome.Found:
+                            baseBackupRecordId = lookup.Body!.Id;
+                            _logger.LogInformation(
+                                "[{Index}/{Total}] Differential backup base resolved. Database: '{Database}', BaseRecordId: {BaseRecordId}, BaseBackupAt: {BackupAt:u}",
+                                i + 1, due.Count, config.Database, lookup.Body!.Id, lookup.Body!.BackupAt);
+                            break;
+
+                        case LastSuccessfulLookupOutcome.NotFound:
+                            failed++;
+                            _logger.LogWarning(
+                                "[{Index}/{Total}] Skipping differential backup for '{Database}' on '{Storage}': no successful full (Physical) backup found on the dashboard. Run a full backup first.",
+                                i + 1, due.Count, config.Database, storageName);
+                            continue;
+
+                        case LastSuccessfulLookupOutcome.DashboardUnavailable:
+                            _logger.LogWarning(
+                                "[{Index}/{Total}] Skipping differential backup for '{Database}' on '{Storage}': dashboard unavailable, cannot resolve parent. Will retry on next tick.",
+                                i + 1, due.Count, config.Database, storageName);
+                            continue;
+                    }
+                }
+
                 BackupResult result;
                 using (await _activityLock.AcquireAsync($"backup:{config.Database}:{mode}:{storageName}", stoppingToken))
                 {
-                    result = await _job.RunAsync(config, storage, mode, stoppingToken);
+                    result = await _job.RunAsync(config, storage, mode, stoppingToken, baseBackupRecordId);
                 }
 
                 if (result.Success)

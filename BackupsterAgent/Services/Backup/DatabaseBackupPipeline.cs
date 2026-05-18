@@ -43,12 +43,17 @@ public sealed class DatabaseBackupPipeline
         DatabaseConfig config,
         StorageConfig storage,
         BackupMode mode,
+        Guid? baseBackupRecordId,
         CancellationToken ct)
     {
         var startedAt = exec.StartedAt;
         string? dumpFile = null;
         string? encryptedFile = null;
+        string? pgManifestFile = null;
+        string? encryptedPgManifest = null;
+        string? decryptedBaseManifest = null;
         string? dumpObjectKey = null;
+        string? pgBaseManifestKey = null;
         string? backupFolder = null;
         IUploadProvider uploader;
         long sizeBytes;
@@ -57,20 +62,63 @@ public sealed class DatabaseBackupPipeline
         try
         {
             var connection = _connections.Resolve(config.ConnectionName);
-            var provider = _factory.GetProvider(connection.DatabaseType, mode);
             uploader = _uploadFactory.GetProvider(storage.Name);
             backupFolder = $"{config.Database}/{startedAt:yyyy-MM-dd_HH-mm-ss}";
 
-            _logger.LogInformation(
-                "DatabaseBackupPipeline resolved. Provider: {ProviderType}, Folder: '{Folder}'",
-                provider.GetType().Name, backupFolder);
+            BackupResult dumpResult;
+            if (mode == BackupMode.PhysicalDifferential)
+            {
+                if (baseBackupRecordId is null || baseBackupRecordId.Value == Guid.Empty)
+                    throw new InvalidOperationException(
+                        "Дифференциальный бэкап невозможен: дашборд не передал идентификатор родительского полного бэкапа.");
 
-            await provider.ValidatePermissionsAsync(connection, config.Database, ct);
+                var diffProvider = _factory.GetDifferentialProvider(connection.DatabaseType);
 
-            _logger.LogInformation("Step 1/3: dump");
-            exec.Reporter.Report(BackupStage.Dumping);
-            var dumpResult = await provider.BackupAsync(config, connection, ct);
+                _logger.LogInformation(
+                    "DatabaseBackupPipeline resolved (differential). Provider: {ProviderType}, Folder: '{Folder}', BaseRecordId: {BaseRecordId}",
+                    diffProvider.GetType().Name, backupFolder, baseBackupRecordId);
+
+                await diffProvider.ValidatePermissionsAsync(connection, config.Database, ct);
+
+                if (connection.DatabaseType == DatabaseType.Postgres)
+                {
+                    if (string.IsNullOrWhiteSpace(exec.BasePgBaseManifestKey))
+                        throw new InvalidOperationException(
+                            "Дифференциальный бэкап PostgreSQL невозможен: дашборд не передал ключ backup_manifest родительского бэкапа.");
+
+                    decryptedBaseManifest = await DownloadAndDecryptManifestAsync(
+                        uploader, exec.BasePgBaseManifestKey, config, ct);
+                }
+
+                var context = new DifferentialBackupContext
+                {
+                    BaseBackupRecordId = baseBackupRecordId.Value,
+                    BaseDumpObjectKey = exec.BaseDumpObjectKey,
+                    BasePgBaseManifestPath = decryptedBaseManifest,
+                    BaseBackupAt = exec.BaseBackupAt,
+                };
+
+                _logger.LogInformation("Step 1/3: dump (differential)");
+                exec.Reporter.Report(BackupStage.Dumping);
+                dumpResult = await diffProvider.BackupAsync(config, connection, context, ct);
+            }
+            else
+            {
+                var provider = _factory.GetProvider(connection.DatabaseType, mode);
+
+                _logger.LogInformation(
+                    "DatabaseBackupPipeline resolved. Provider: {ProviderType}, Folder: '{Folder}'",
+                    provider.GetType().Name, backupFolder);
+
+                await provider.ValidatePermissionsAsync(connection, config.Database, ct);
+
+                _logger.LogInformation("Step 1/3: dump");
+                exec.Reporter.Report(BackupStage.Dumping);
+                dumpResult = await provider.BackupAsync(config, connection, ct);
+            }
+
             dumpFile = dumpResult.FilePath;
+            pgManifestFile = dumpResult.PgBaseManifestPath;
             sizeBytes = dumpResult.SizeBytes;
             durationMs = dumpResult.DurationMs;
 
@@ -78,12 +126,23 @@ public sealed class DatabaseBackupPipeline
             exec.Reporter.Report(BackupStage.EncryptingDump);
             encryptedFile = await _encryption.EncryptAsync(dumpFile, ct);
 
+            if (pgManifestFile is not null)
+                encryptedPgManifest = await _encryption.EncryptAsync(pgManifestFile, ct);
+
             _logger.LogInformation("Step 3/3: upload");
             exec.Reporter.Report(BackupStage.UploadingDump, processed: 0, unit: "bytes");
             var uploadProgress = new Progress<long>(bytes =>
                 exec.Reporter.Report(BackupStage.UploadingDump, processed: bytes, unit: "bytes"));
             await uploader.UploadAsync(encryptedFile, backupFolder, uploadProgress, ct);
             dumpObjectKey = $"{backupFolder}/{Path.GetFileName(encryptedFile)}";
+
+            if (encryptedPgManifest is not null)
+            {
+                await uploader.UploadAsync(encryptedPgManifest, backupFolder, progress: null, ct);
+                pgBaseManifestKey = $"{backupFolder}/{Path.GetFileName(encryptedPgManifest)}";
+                _logger.LogInformation(
+                    "PostgreSQL backup_manifest uploaded. Key: '{Key}'", pgBaseManifestKey);
+            }
 
             _logger.LogInformation(
                 "Dump uploaded. File: '{FilePath}', Size: {SizeBytes} bytes, " +
@@ -94,6 +153,9 @@ public sealed class DatabaseBackupPipeline
         {
             TryDelete(dumpFile);
             TryDelete(encryptedFile);
+            TryDelete(pgManifestFile);
+            TryDelete(encryptedPgManifest);
+            TryDelete(decryptedBaseManifest);
         }
 
         var (fileMetrics, fileError) = await CaptureFilesSafelyAsync(
@@ -108,6 +170,7 @@ public sealed class DatabaseBackupPipeline
             DumpObjectKey = dumpObjectKey,
             FileMetrics = fileMetrics,
             FileBackupError = fileError,
+            PgBaseManifestKey = pgBaseManifestKey,
         };
     }
 
@@ -156,6 +219,37 @@ public sealed class DatabaseBackupPipeline
             _logger.LogError(ex, "File backup failed for database '{Database}'", config.Database);
             return (null, "Не удалось загрузить файлы в хранилище. Подробности — в логах агента.");
         }
+    }
+
+    private async Task<string> DownloadAndDecryptManifestAsync(
+        IUploadProvider uploader,
+        string objectKey,
+        DatabaseConfig config,
+        CancellationToken ct)
+    {
+        var workDir = Path.Combine(config.OutputPath, $"diff-base-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+
+        var encryptedPath = Path.Combine(workDir, "base.backup_manifest.enc");
+        var decryptedPath = Path.Combine(workDir, "base.backup_manifest");
+
+        _logger.LogInformation(
+            "Downloading parent backup_manifest from storage. Key: '{Key}', Local: '{Path}'",
+            objectKey, encryptedPath);
+
+        await uploader.DownloadAsync(objectKey, encryptedPath, progress: null, ct);
+        await _encryption.DecryptAsync(encryptedPath, decryptedPath, ct);
+
+        try
+        {
+            if (File.Exists(encryptedPath)) File.Delete(encryptedPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete encrypted parent manifest '{Path}'", encryptedPath);
+        }
+
+        return decryptedPath;
     }
 
     private void TryDelete(string? path)

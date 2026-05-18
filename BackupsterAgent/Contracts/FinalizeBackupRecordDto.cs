@@ -16,4 +16,6 @@ public sealed class FinalizeBackupRecordDto
     public long? FilesTotalBytes { get; init; }
     public int? NewChunksCount { get; init; }
     public string? FileBackupError { get; init; }
+
+    public string? PgBaseManifestKey { get; init; }
 }

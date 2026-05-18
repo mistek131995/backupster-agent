@@ -62,7 +62,18 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         return Task.CompletedTask;
     }
 
-    public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct)
+    public Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct) =>
+        ExecuteRestoreAsync(connection, async (stagingPath, populateCt) =>
+        {
+            _logger.LogInformation(
+                "Extracting base archive '{ArchivePath}' to staging '{StagingPath}'", restoreFilePath, stagingPath);
+            await ExtractTarGzAsync(restoreFilePath, stagingPath, populateCt);
+        }, ct);
+
+    internal async Task ExecuteRestoreAsync(
+        ConnectionConfig connection,
+        Func<string, CancellationToken, Task> populateStagingAsync,
+        CancellationToken ct)
     {
         var pgCtl = await _binaryResolver.ResolveAsync(connection, "pg_ctl", ct);
         var pgDataPath = await QueryDataDirectoryAsync(connection, ct);
@@ -92,9 +103,8 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         {
             try
             {
-                _logger.LogInformation(
-                    "Extracting base archive '{ArchivePath}' to staging '{StagingPath}'", restoreFilePath, stagingPath);
-                await ExtractTarGzAsync(restoreFilePath, stagingPath, ct);
+                await populateStagingAsync(stagingPath, ct);
+
                 await VerifyStagedClusterAsync(stagingPath, pgCtl, ct);
                 _logger.LogInformation("Staged cluster verified at '{StagingPath}'", stagingPath);
 
@@ -431,7 +441,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         }
     }
 
-    private async Task ExtractTarGzAsync(string archivePath, string targetDir, CancellationToken ct)
+    internal async Task ExtractTarGzAsync(string archivePath, string targetDir, CancellationToken ct)
     {
         var psi = new ProcessStartInfo
         {
@@ -544,7 +554,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         }
     }
 
-    private static void WriteMarkerFile(string dir)
+    internal static void WriteMarkerFile(string dir)
     {
         var path = Path.Combine(dir, MarkerFileName);
         File.WriteAllText(path, DateTime.UtcNow.ToString("o"));

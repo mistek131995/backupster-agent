@@ -6,7 +6,9 @@ public sealed class BackupProviderFactory : IBackupProviderFactory
 {
     private readonly PostgresLogicalBackupProvider _postgresLogical;
     private readonly PostgresPhysicalBackupProvider _postgresPhysical;
+    private readonly PostgresPhysicalDifferentialBackupProvider _postgresPhysicalDiff;
     private readonly MssqlPhysicalBackupProvider _mssqlPhysical;
+    private readonly MssqlPhysicalDifferentialBackupProvider _mssqlPhysicalDiff;
     private readonly MssqlLogicalBackupProvider _mssqlLogical;
     private readonly MysqlLogicalBackupProvider _mysqlLogical;
     private readonly MysqlPhysicalBackupProvider _mysqlPhysical;
@@ -14,14 +16,18 @@ public sealed class BackupProviderFactory : IBackupProviderFactory
     public BackupProviderFactory(
         PostgresLogicalBackupProvider postgresLogical,
         PostgresPhysicalBackupProvider postgresPhysical,
+        PostgresPhysicalDifferentialBackupProvider postgresPhysicalDiff,
         MssqlPhysicalBackupProvider mssqlPhysical,
+        MssqlPhysicalDifferentialBackupProvider mssqlPhysicalDiff,
         MssqlLogicalBackupProvider mssqlLogical,
         MysqlLogicalBackupProvider mysqlLogical,
         MysqlPhysicalBackupProvider mysqlPhysical)
     {
         _postgresLogical = postgresLogical;
         _postgresPhysical = postgresPhysical;
+        _postgresPhysicalDiff = postgresPhysicalDiff;
         _mssqlPhysical = mssqlPhysical;
+        _mssqlPhysicalDiff = mssqlPhysicalDiff;
         _mssqlLogical = mssqlLogical;
         _mysqlLogical = mysqlLogical;
         _mysqlPhysical = mysqlPhysical;
@@ -38,5 +44,14 @@ public sealed class BackupProviderFactory : IBackupProviderFactory
             (DatabaseType.Mssql,    BackupMode.Logical)  => _mssqlLogical,
             _ => throw new NotSupportedException(
                 $"Backup provider is not implemented for DatabaseType='{databaseType}', BackupMode='{backupMode}'.")
+        };
+
+    public IDifferentialBackupProvider GetDifferentialProvider(DatabaseType databaseType) =>
+        databaseType switch
+        {
+            DatabaseType.Postgres => _postgresPhysicalDiff,
+            DatabaseType.Mssql    => _mssqlPhysicalDiff,
+            _ => throw new NotSupportedException(
+                $"Differential backup is not supported for DatabaseType='{databaseType}'.")
         };
 }

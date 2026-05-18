@@ -75,7 +75,15 @@ public sealed class BackupRunCoordinator
         try
         {
             outcome = await descriptor.ExecuteAsync(
-                new BackupRunExecution(recordId, offline, startedAt, reporter), ct);
+                new BackupRunExecution(
+                    recordId,
+                    offline,
+                    startedAt,
+                    reporter,
+                    openResult.BaseDumpObjectKey,
+                    openResult.BasePgBaseManifestKey,
+                    openResult.BaseBackupAt),
+                ct);
         }
         catch (OperationCanceledException)
         {
@@ -139,6 +147,7 @@ public sealed class BackupRunCoordinator
         FilesTotalBytes = outcome.FileMetrics?.FilesTotalBytes,
         NewChunksCount = outcome.FileMetrics?.NewChunksCount,
         FileBackupError = outcome.FileBackupError,
+        PgBaseManifestKey = outcome.PgBaseManifestKey,
     };
 
     private async Task<FinalizeRecordResult> FinalizeRecordAsync(

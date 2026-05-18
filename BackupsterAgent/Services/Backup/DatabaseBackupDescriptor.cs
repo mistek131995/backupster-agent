@@ -12,17 +12,20 @@ internal sealed class DatabaseBackupDescriptor : IBackupRunDescriptor
     private readonly StorageConfig _storage;
     private readonly BackupMode _mode;
     private readonly DatabaseBackupPipeline _pipeline;
+    private readonly Guid? _baseBackupRecordId;
 
     public DatabaseBackupDescriptor(
         DatabaseConfig config,
         StorageConfig storage,
         BackupMode mode,
-        DatabaseBackupPipeline pipeline)
+        DatabaseBackupPipeline pipeline,
+        Guid? baseBackupRecordId)
     {
         _config = config;
         _storage = storage;
         _mode = mode;
         _pipeline = pipeline;
+        _baseBackupRecordId = baseBackupRecordId;
     }
 
     public string DisplayName => $"BackupJob[{_config.Database}]";
@@ -44,10 +47,11 @@ internal sealed class DatabaseBackupDescriptor : IBackupRunDescriptor
         StorageName = _storage.Name,
         StartedAt = startedAt,
         BackupMode = _mode,
+        BaseBackupRecordId = _baseBackupRecordId,
     };
 
     public Task<PipelineOutcome> ExecuteAsync(BackupRunExecution exec, CancellationToken ct) =>
-        _pipeline.ExecuteAsync(exec, _config, _storage, _mode, ct);
+        _pipeline.ExecuteAsync(exec, _config, _storage, _mode, _baseBackupRecordId, ct);
 
     public OutboxEntry BuildOutboxEntry(
         string clientTaskId,
@@ -75,5 +79,7 @@ internal sealed class DatabaseBackupDescriptor : IBackupRunDescriptor
         AttemptCount = 0,
         ServerRecordId = serverRecordId,
         BackupMode = _mode,
+        BaseBackupRecordId = _baseBackupRecordId,
+        PgBaseManifestKey = finalize.PgBaseManifestKey,
     };
 }

@@ -211,5 +211,8 @@ public sealed class BackupJobTests
     {
         public BackupsterAgent.Providers.Backup.IBackupProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) =>
             throw new NotSupportedException("CaptureFilesSafelyAsync must not touch the backup provider");
+
+        public BackupsterAgent.Providers.Backup.IDifferentialBackupProvider GetDifferentialProvider(DatabaseType databaseType) =>
+            throw new NotSupportedException("CaptureFilesSafelyAsync must not touch the differential backup provider");
     }
 }

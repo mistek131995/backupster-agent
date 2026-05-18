@@ -8,4 +8,5 @@ public sealed class BackupTaskPayload
     public string? FileSetName { get; init; }
     public BackupMode BackupMode { get; init; } = BackupMode.Logical;
     public string? StorageName { get; init; }
+    public Guid? BaseBackupRecordId { get; init; }
 }

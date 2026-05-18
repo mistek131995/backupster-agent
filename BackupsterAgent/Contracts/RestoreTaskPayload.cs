@@ -12,4 +12,5 @@ public sealed class RestoreTaskPayload
     public string? TargetConnectionName { get; init; }
     public string? StorageName { get; init; }
     public BackupMode? BackupMode { get; init; }
+    public List<RestoreChainItemDto>? Chain { get; init; }
 }

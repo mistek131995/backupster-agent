@@ -61,4 +61,18 @@ internal sealed class FakeBackupRecordClient : IBackupRecordClient
         AllFinalizes.Add(dto);
         return Task.FromResult(NextFinalize);
     }
+
+    public LastSuccessfulLookupResult NextLastSuccessful { get; set; } =
+        new LastSuccessfulLookupResult(LastSuccessfulLookupOutcome.NotFound);
+    public int LastSuccessfulCalls { get; private set; }
+
+    public Task<LastSuccessfulLookupResult> GetLastSuccessfulAsync(
+        string database,
+        string storage,
+        BackupMode mode,
+        CancellationToken ct)
+    {
+        LastSuccessfulCalls++;
+        return Task.FromResult(NextLastSuccessful);
+    }
 }

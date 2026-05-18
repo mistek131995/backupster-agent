@@ -4,4 +4,5 @@ public enum BackupMode
 {
     Logical,
     Physical,
+    PhysicalDifferential,
 }

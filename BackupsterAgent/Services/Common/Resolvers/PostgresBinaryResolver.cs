@@ -83,6 +83,16 @@ public sealed class PostgresBinaryResolver
         return null;
     }
 
+    public async Task<int> GetMajorVersionAsync(ConnectionConfig connection, CancellationToken ct)
+    {
+        var major = await QueryServerMajorAsync(connection, ct);
+        if (major is null)
+            throw new InvalidOperationException(
+                $"Не удалось определить мажорную версию PostgreSQL для подключения '{connection.Name}'. " +
+                "Сервер не вернул значение server_version_num.");
+        return major.Value;
+    }
+
     private static async Task<int?> QueryServerMajorAsync(ConnectionConfig connection, CancellationToken ct)
     {
         var connString = new NpgsqlConnectionStringBuilder

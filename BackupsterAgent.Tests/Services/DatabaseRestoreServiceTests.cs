@@ -492,6 +492,9 @@ public sealed class DatabaseRestoreServiceTests
     private sealed class StubRestoreProviderFactory(IRestoreProvider provider) : IRestoreProviderFactory
     {
         public IRestoreProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) => provider;
+
+        public IDifferentialRestoreProvider GetDifferentialProvider(DatabaseType databaseType) =>
+            throw new NotSupportedException("StubRestoreProviderFactory has no differential provider configured");
     }
 
     private sealed class FakeUploadProvider : IUploadProvider

@@ -20,6 +20,8 @@ public sealed class BackupJob
         DatabaseConfig config,
         StorageConfig storage,
         BackupMode mode,
-        CancellationToken ct) =>
-        _coordinator.RunAsync(new DatabaseBackupDescriptor(config, storage, mode, _pipeline), ct);
+        CancellationToken ct,
+        Guid? baseBackupRecordId = null) =>
+        _coordinator.RunAsync(
+            new DatabaseBackupDescriptor(config, storage, mode, _pipeline, baseBackupRecordId), ct);
 }

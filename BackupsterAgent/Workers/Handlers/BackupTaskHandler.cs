@@ -96,13 +96,13 @@ public sealed class BackupTaskHandler : IAgentTaskHandler
         }
 
         _logger.LogInformation(
-            "BackupTaskHandler: executing backup task {TaskId} for database '{Database}' (mode={Mode}, storage={Storage})",
-            task.Id, databaseName, mode, storage.Name);
+            "BackupTaskHandler: executing backup task {TaskId} for database '{Database}' (mode={Mode}, storage={Storage}, baseRecordId={BaseRecordId})",
+            task.Id, databaseName, mode, storage.Name, task.Backup.BaseBackupRecordId?.ToString() ?? "-");
 
         BackupResult result;
         try
         {
-            result = await _backupJob.RunAsync(config, storage, mode, ct);
+            result = await _backupJob.RunAsync(config, storage, mode, ct, task.Backup.BaseBackupRecordId);
         }
         catch (OperationCanceledException)
         {

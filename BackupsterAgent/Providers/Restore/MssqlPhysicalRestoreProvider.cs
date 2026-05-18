@@ -96,7 +96,15 @@ END";
                 "Восстановление невозможно — файл повреждён или это не full backup.");
     }
 
-    public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct)
+    public Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct) =>
+        RestoreFromBakAsync(connection, targetDatabase, restoreFilePath, withRecovery: true, ct);
+
+    internal async Task RestoreFromBakAsync(
+        ConnectionConfig connection,
+        string targetDatabase,
+        string restoreFilePath,
+        bool withRecovery,
+        CancellationToken ct)
     {
         var fileList = await GetFileListAsync(connection, restoreFilePath, ct);
         var (dataPath, logPath) = await GetDefaultPathsAsync(connection, ct);
@@ -104,12 +112,13 @@ END";
 
         var quoted = QuoteIdentifier(targetDatabase);
         var escapedPath = restoreFilePath.Replace("'", "''");
+        var recoveryClause = withRecovery ? "RECOVERY" : "NORECOVERY";
 
-        var sql = $"RESTORE DATABASE {quoted} FROM DISK = N'{escapedPath}' WITH FILE = 1, REPLACE, RECOVERY{moveClauses};";
+        var sql = $"RESTORE DATABASE {quoted} FROM DISK = N'{escapedPath}' WITH FILE = 1, REPLACE, {recoveryClause}{moveClauses};";
 
         _logger.LogInformation(
-            "Executing RESTORE DATABASE '{Database}' FROM '{Path}' with {MoveCount} MOVE clause(s)",
-            targetDatabase, restoreFilePath, fileList.Count);
+            "Executing RESTORE DATABASE '{Database}' FROM '{Path}' with {MoveCount} MOVE clause(s), {Recovery}",
+            targetDatabase, restoreFilePath, fileList.Count, recoveryClause);
 
         await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
         await conn.OpenAsync(ct);
@@ -117,7 +126,9 @@ END";
         await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 0 };
         await cmd.ExecuteNonQueryAsync(ct);
 
-        _logger.LogInformation("MSSQL restore completed for database '{Database}'", targetDatabase);
+        _logger.LogInformation(
+            "MSSQL restore step completed for database '{Database}' ({Recovery})",
+            targetDatabase, recoveryClause);
     }
 
     private static async Task<List<(string LogicalName, string Type)>> GetFileListAsync(

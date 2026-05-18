@@ -16,12 +16,14 @@ Poll task → Download → Decrypt → Restore DB → Restore Files → Report
 ```
 
 1. **Long-poll** — запрашивает `GET /api/v1/agent/task` (единый канал задач). При отсутствии задачи — ждёт 30 секунд; при получении — сразу исполняет и тут же опрашивает снова.
-2. **Database restore** — проверяет права target-подключения одним SQL-запросом до скачивания дампа → скачивает и расшифровывает → разворачивает БД одним из 5 способов в зависимости от `DatabaseType` × `BackupMode` → cleanup временных файлов:
+2. **Database restore** — проверяет права target-подключения одним SQL-запросом до скачивания дампа → скачивает и расшифровывает → разворачивает БД одним из способов в зависимости от `DatabaseType` × `BackupMode` → cleanup временных файлов:
    - **Postgres logical** — `pg_terminate_backend` → `DROP DATABASE IF EXISTS` → `CREATE DATABASE` → `psql -f -v ON_ERROR_STOP=1`.
    - **Postgres physical** — `pg_ctl stop` → атомарный swap PGDATA (`Directory.Move`) → `pg_ctl start`. Восстанавливается **весь кластер целиком**, не одна БД. Требует service-manager guard'а и доступа к PGDATA — см. [postgres.md](postgres.md).
+   - **Postgres physicalDifferential** — скачивание всей цепочки (FULL + промежуточные DIFF) → распаковка каждого звена в свой подкаталог → склейка через `pg_combinebackup -o <staging> chain-0 chain-1 …` → дальше та же swap-логика, что у physical. Требует PostgreSQL 17+ и `pg_combinebackup` в PATH/`BinPath`. Подробности — в [postgres.md](postgres.md#дифференциальный-бэкап).
    - **MySQL logical** — `DROP DATABASE IF EXISTS` → `CREATE DATABASE` → `mysql` поверх stdin со стримом `gzip` (без промежуточного `.sql`).
    - **MSSQL logical** — `DROP DATABASE IF EXISTS` → `DacServices.ImportBacpac` по TDS (in-process, без внешних бинарников).
    - **MSSQL physical** — `DROP DATABASE IF EXISTS` → `RESTORE DATABASE ... WITH FILE = 1, REPLACE, RECOVERY` + автоматические `MOVE`-клозы для логических имён файлов.
+   - **MSSQL physicalDifferential** — скачивание цепочки → `RESTORE DATABASE [target] FROM DISK = '<full>.bak' WITH FILE = 1, REPLACE, NORECOVERY, MOVE ...` → `RESTORE DATABASE [target] FROM DISK = '<last-diff>.bak' WITH FILE = 1, RECOVERY`. Применяется только последний DIFF цепочки — SQL Server DIFF кумулятивный, промежуточные `.bak` не нужны (но скачиваются ради целостности). Подробности — в [mssql.md](mssql.md#дифференциальный-бэкап).
 
    Если file-set-бэкап (`DumpObjectKey` пустой) — этот шаг пропускается полностью, выполняется только пункт 3.
 3. **File restore** — если в бэкапе были файлы (`ManifestKey`), скачивает зашифрованный манифест, поштучно собирает каждый файл из чанков, атомарно переименовывает `.restore-tmp` → target. Падение одного файла не валит задачу — статус `partial` с подробностями.

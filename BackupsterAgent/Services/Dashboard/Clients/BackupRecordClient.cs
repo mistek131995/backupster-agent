@@ -1,6 +1,8 @@
+using System.Net;
 using System.Net.Http.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
+using BackupsterAgent.Enums;
 using Microsoft.Extensions.Options;
 using Polly;
 
@@ -64,7 +66,12 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
 
                 _logger.LogInformation(
                     "BackupRecordClient: opened record {Id} for '{Database}'", body.Id, dto.DatabaseName);
-                return new OpenRecordResult(DashboardAvailability.Ok, body.Id);
+                return new OpenRecordResult(
+                    DashboardAvailability.Ok,
+                    body.Id,
+                    body.BaseDumpObjectKey,
+                    body.BasePgBaseManifestKey,
+                    body.BaseBackupAt);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -149,6 +156,75 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
                 "BackupRecordClient: dashboard unavailable, finalize skipped for record {Id} — {Availability}",
                 backupRecordId, availability);
             return new FinalizeRecordResult(availability);
+        }
+    }
+
+    public async Task<LastSuccessfulLookupResult> GetLastSuccessfulAsync(
+        string database,
+        string storage,
+        BackupMode mode,
+        CancellationToken ct)
+    {
+        if (!IsConfigured(_logger, nameof(BackupRecordClient)))
+            return new LastSuccessfulLookupResult(LastSuccessfulLookupOutcome.DashboardUnavailable);
+
+        var modeQuery = mode switch
+        {
+            BackupMode.Logical => "logical",
+            BackupMode.Physical => "physical",
+            BackupMode.PhysicalDifferential => "physicalDifferential",
+            _ => mode.ToString().ToLowerInvariant(),
+        };
+
+        var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/backup-records/last-successful" +
+                  $"?database={Uri.EscapeDataString(database)}" +
+                  $"&storage={Uri.EscapeDataString(storage)}" +
+                  $"&mode={Uri.EscapeDataString(modeQuery)}";
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("X-Agent-Token", Settings.Token);
+
+            using var response = await _http.SendAsync(request, ct);
+            ThrowIfUnauthorized(response, $"{nameof(BackupRecordClient)}.{nameof(GetLastSuccessfulAsync)}", _logger);
+
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                return new LastSuccessfulLookupResult(LastSuccessfulLookupOutcome.NotFound);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "BackupRecordClient.GetLastSuccessfulAsync: HTTP {Status} for '{Database}' on '{Storage}' — treating as dashboard unavailable",
+                    (int)response.StatusCode, database, storage);
+                return new LastSuccessfulLookupResult(LastSuccessfulLookupOutcome.DashboardUnavailable);
+            }
+
+            var body = await response.Content.ReadFromJsonAsync<LastSuccessfulBackupResponseDto>(JsonOptions, ct);
+
+            if (body is null || body.Id == Guid.Empty)
+                return new LastSuccessfulLookupResult(LastSuccessfulLookupOutcome.NotFound);
+
+            _logger.LogInformation(
+                "BackupRecordClient.GetLastSuccessfulAsync: found {Id} for '{Database}' on '{Storage}' (mode={Mode})",
+                body.Id, database, storage, mode);
+
+            return new LastSuccessfulLookupResult(LastSuccessfulLookupOutcome.Found, body);
+        }
+        catch (DashboardUnauthorizedException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "BackupRecordClient.GetLastSuccessfulAsync: dashboard unavailable for '{Database}' on '{Storage}'",
+                database, storage);
+            return new LastSuccessfulLookupResult(LastSuccessfulLookupOutcome.DashboardUnavailable);
         }
     }
 

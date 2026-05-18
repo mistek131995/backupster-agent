@@ -51,20 +51,29 @@ public sealed class DatabaseRestoreService
         IProgressReporter<RestoreStage> reporter,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(payload.DumpObjectKey))
-            return DatabaseRestoreResult.Failed("Задача восстановления БД без DumpObjectKey.");
-
         var tempDir = ResolveTempDir(taskId);
         var targetDatabase = string.IsNullOrWhiteSpace(payload.TargetDatabaseName)
             ? payload.SourceDatabaseName
             : payload.TargetDatabaseName!;
 
-        string? mssqlBakAgentPath = null;
+        var mssqlBakAgentPaths = new List<string>();
 
         try
         {
             var connection = ResolveTargetConnection(payload);
             var backupMode = payload.BackupMode ?? InferDefaultMode(connection.DatabaseType);
+
+            if (backupMode == BackupMode.PhysicalDifferential)
+            {
+                await ExecuteDifferentialRestoreAsync(
+                    taskId, payload, connection, targetDatabase,
+                    uploader, reporter, tempDir, mssqlBakAgentPaths, ct);
+                return DatabaseRestoreResult.Success();
+            }
+
+            if (string.IsNullOrWhiteSpace(payload.DumpObjectKey))
+                return DatabaseRestoreResult.Failed("Задача восстановления БД без DumpObjectKey.");
+
             var provider = _restoreFactory.GetProvider(connection.DatabaseType, backupMode);
 
             _logger.LogInformation(
@@ -112,7 +121,8 @@ public sealed class DatabaseRestoreService
 
                 EnsureFreeSpace(decryptedPath, agentDir);
 
-                mssqlBakAgentPath = Path.Combine(agentDir, fileName);
+                var mssqlBakAgentPath = Path.Combine(agentDir, fileName);
+                mssqlBakAgentPaths.Add(mssqlBakAgentPath);
                 await CopyFileAsync(decryptedPath, mssqlBakAgentPath, ct);
                 SafeDelete(decryptedPath);
 
@@ -209,11 +219,117 @@ public sealed class DatabaseRestoreService
         }
         finally
         {
-            if (mssqlBakAgentPath is not null)
-                SafeDelete(mssqlBakAgentPath);
+            foreach (var p in mssqlBakAgentPaths)
+                SafeDelete(p);
 
             TryDeleteDirectory(tempDir);
         }
+    }
+
+    private async Task ExecuteDifferentialRestoreAsync(
+        Guid taskId,
+        RestoreTaskPayload payload,
+        ConnectionConfig connection,
+        string targetDatabase,
+        IUploadProvider uploader,
+        IProgressReporter<RestoreStage> reporter,
+        string tempDir,
+        List<string> mssqlBakAgentPaths,
+        CancellationToken ct)
+    {
+        if (payload.Chain is null || payload.Chain.Count < 2)
+            throw new InvalidOperationException(
+                "Дифференциальное восстановление требует цепочки минимум из двух элементов (FULL + DIFF), " +
+                $"но получено {payload.Chain?.Count ?? 0}.");
+
+        var diffProvider = _restoreFactory.GetDifferentialProvider(connection.DatabaseType);
+
+        _logger.LogInformation(
+            "DatabaseRestoreService starting differential. Task: {TaskId}, Target: '{Target}' on connection '{Connection}' ({Type}), Chain length: {ChainLen}",
+            taskId, targetDatabase, connection.Name, connection.DatabaseType, payload.Chain.Count);
+
+        Directory.CreateDirectory(tempDir);
+
+        await diffProvider.ValidatePermissionsAsync(connection, targetDatabase, ct);
+
+        var localChain = new List<DifferentialRestoreChainItem>(payload.Chain.Count);
+        string? mssqlSqlDir = null;
+        string? mssqlAgentDir = null;
+
+        for (var i = 0; i < payload.Chain.Count; i++)
+        {
+            var item = payload.Chain[i];
+            if (string.IsNullOrWhiteSpace(item.DumpObjectKey))
+                throw new InvalidOperationException(
+                    $"Элемент цепочки #{i} (recordId={item.BackupRecordId}) не содержит DumpObjectKey.");
+
+            reporter.Report(RestoreStage.DownloadingDump, processed: i, unit: "chain-items");
+
+            var encryptedSize = await uploader.GetObjectSizeAsync(item.DumpObjectKey, ct);
+            EnsureFreeSpace(encryptedSize * 2, tempDir);
+
+            var encryptedPath = Path.Combine(tempDir, $"chain-{i}.enc");
+            var decryptedPath = Path.Combine(tempDir, $"chain-{i}.bin");
+            await uploader.DownloadAsync(item.DumpObjectKey, encryptedPath, progress: null, ct);
+            await _encryption.DecryptAsync(encryptedPath, decryptedPath, ct);
+            SafeDelete(encryptedPath);
+
+            string dumpPath;
+            if (connection.DatabaseType == DatabaseType.Mssql)
+            {
+                mssqlSqlDir ??= await MssqlSharedPathResolver.GetSqlDirAsync(connection, ct);
+                if (mssqlAgentDir is null)
+                {
+                    mssqlAgentDir = await MssqlSharedPathResolver.GetAgentDirAsync(connection, ct);
+                    Directory.CreateDirectory(mssqlAgentDir);
+                }
+
+                EnsureFreeSpace(decryptedPath, mssqlAgentDir);
+
+                var fileName = $"{targetDatabase}_{taskId:N}_chain{i}.bak";
+                var agentPath = Path.Combine(mssqlAgentDir, fileName);
+                mssqlBakAgentPaths.Add(agentPath);
+                await CopyFileAsync(decryptedPath, agentPath, ct);
+                SafeDelete(decryptedPath);
+
+                dumpPath = MssqlSharedPathResolver.JoinSqlPath(mssqlSqlDir, fileName);
+            }
+            else
+            {
+                dumpPath = decryptedPath;
+            }
+
+            string? manifestPath = null;
+            if (connection.DatabaseType == DatabaseType.Postgres && !string.IsNullOrWhiteSpace(item.PgBaseManifestKey))
+            {
+                var manifestEnc = Path.Combine(tempDir, $"chain-{i}.manifest.enc");
+                var manifestDec = Path.Combine(tempDir, $"chain-{i}.manifest");
+                await uploader.DownloadAsync(item.PgBaseManifestKey, manifestEnc, progress: null, ct);
+                await _encryption.DecryptAsync(manifestEnc, manifestDec, ct);
+                SafeDelete(manifestEnc);
+                manifestPath = manifestDec;
+            }
+
+            localChain.Add(new DifferentialRestoreChainItem
+            {
+                BackupRecordId = item.BackupRecordId,
+                DumpFilePath = dumpPath,
+                BackupMode = item.BackupMode,
+                PgBaseManifestFilePath = manifestPath,
+            });
+        }
+
+        await diffProvider.ValidateRestoreSourceAsync(connection, localChain, ct);
+
+        reporter.Report(RestoreStage.PreparingDatabase);
+        await diffProvider.PrepareTargetDatabaseAsync(connection, targetDatabase, ct);
+
+        reporter.Report(RestoreStage.RestoringDatabase);
+        await diffProvider.RestoreAsync(connection, targetDatabase, localChain, ct);
+
+        _logger.LogInformation(
+            "DatabaseRestoreService differential completed. Task: {TaskId}, Target: '{Target}'",
+            taskId, targetDatabase);
     }
 
     internal static BackupMode InferDefaultMode(DatabaseType databaseType) =>

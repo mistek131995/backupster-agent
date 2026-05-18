@@ -37,7 +37,13 @@
 Dump → Encrypt → Upload → Cleanup → File Backup (S3 / SFTP / Azure Blob / WebDAV / LocalFs) → Report
 ```
 
-1. **Dump** — для PostgreSQL вызывает `pg_dump`, для MySQL — `mysqldump` (стрим в gzip без промежуточного `.sql`), для MSSQL работает in-process по TDS через `Microsoft.Data.SqlClient` + `Microsoft.SqlServer.DacFx` (logical — `.bacpac`, physical — T-SQL `BACKUP DATABASE`), внешние бинарники MSSQL не требуются.
+Три режима бэкапа на БД, у каждого своё независимое cron-расписание:
+
+- **Logical** — для PG/MySQL/MSSQL. Полный снимок одной БД в виде SQL/`.bacpac`. Универсальный, легко переносится между версиями и серверами.
+- **Physical** — для PG/MSSQL. Полный снимок на уровне файлов/страниц. Быстрее на больших БД, требовательнее к инфраструктуре. Подробности — [postgres.md](docs/postgres.md), [mssql.md](docs/mssql.md).
+- **PhysicalDifferential** — для PG 17+ и MSSQL. Снимок только изменений с момента последнего полного физического бэкапа; восстановление склеивает цепочку FULL+DIFFs обратно. PG-провайдер использует `pg_basebackup --incremental` + `pg_combinebackup`, MSSQL — `BACKUP DATABASE ... WITH DIFFERENTIAL`. Без живого FULL дифференциалы не запускаются — DIFF-расписания молча пропускают тики с предупреждением в логе.
+
+1. **Dump** — для PostgreSQL вызывает `pg_dump` (logical) или `pg_basebackup` (physical/differential), для MySQL — `mysqldump` (стрим в gzip без промежуточного `.sql`), для MSSQL работает in-process по TDS через `Microsoft.Data.SqlClient` + `Microsoft.SqlServer.DacFx` (logical — `.bacpac`, physical/differential — T-SQL `BACKUP DATABASE` с/без `WITH DIFFERENTIAL`), внешние бинарники MSSQL не требуются.
 2. **Encrypt** — AES-256-GCM, дамп режется на фреймы по 1 МиБ (каждый со своим nonce и tag). Файл начинается с header `BK02`; AAD каждого фрейма — его порядковый номер (uint32 big-endian), что делает перестановку фреймов или склейку с другим дампом невалидной. Чанки файлового бэкапа шифруются с AAD = sha256 плейнтекста. Манифест нового формата шифруется тем же framed-GCM; легаси-манифест (`manifest.json.enc`) шифрован одним блоком с AAD = UTF-8 своего object key. Добавляется суффикс `.enc`.
 3. **Upload** — загружает зашифрованный файл в выбранное хранилище (S3, SFTP, Azure Blob, WebDAV или локальный путь / смонтированную сетевую шару).
 4. **Cleanup** — удаляет оба локальных файла (дамп + зашифрованный), всегда, даже при ошибке.
@@ -79,6 +85,7 @@ Backup и restore/delete на одном агенте не идут паралл
 ### Поддерживаемое
 
 - **БД:** PostgreSQL, MySQL/MariaDB, MSSQL.
+- **Режимы бэкапа БД:** Logical (все три СУБД), Physical (PG, MSSQL), PhysicalDifferential (PG 17+ и MSSQL).
 - **Файловые наборы:** произвольные каталоги с рекурсивным обходом (S3, SFTP, Azure Blob, WebDAV, LocalFs).
 - **Хранилища:** все провайдеры — полный функционал, включая дедуплицированный файловый бэкап, file-set'ы и chunk GC.
   - **S3-совместимые** (MinIO, Yandex Object Storage, AWS S3, Cloudflare R2), **Azure Blob**, **LocalFs** (локальная папка / смонтированная NFS/CIFS-шара) — максимальная скорость.

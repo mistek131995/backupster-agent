@@ -308,6 +308,9 @@ public sealed class BackupJobRunTests
     private sealed class StubProviderFactory(IBackupProvider provider) : IBackupProviderFactory
     {
         public IBackupProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) => provider;
+
+        public IDifferentialBackupProvider GetDifferentialProvider(DatabaseType databaseType) =>
+            throw new NotSupportedException("StubProviderFactory has no differential provider configured");
     }
 
     private sealed class StubUploadFactory(IUploadProvider service) : IUploadProviderFactory
