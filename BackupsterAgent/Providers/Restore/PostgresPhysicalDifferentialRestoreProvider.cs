@@ -58,6 +58,16 @@ public sealed class PostgresPhysicalDifferentialRestoreProvider : IDifferentialR
             if (!File.Exists(item.DumpFilePath))
                 throw new InvalidOperationException(
                     $"Файл дампа цепочки '{item.DumpFilePath}' (recordId={item.BackupRecordId}) недоступен на хосте агента.");
+
+            if (string.IsNullOrWhiteSpace(item.PgBaseManifestFilePath))
+                throw new InvalidOperationException(
+                    $"Невозможно восстановить цепочку: у бэкапа recordId={item.BackupRecordId} отсутствует backup_manifest. " +
+                    "Вероятно, бэкап создан старой версией агента без сохранения backup_manifest. " +
+                    "Сделайте новый полный (Physical) бэкап и пересоберите цепочку.");
+
+            if (!File.Exists(item.PgBaseManifestFilePath))
+                throw new InvalidOperationException(
+                    $"Файл backup_manifest цепочки '{item.PgBaseManifestFilePath}' (recordId={item.BackupRecordId}) недоступен на хосте агента.");
         }
 
         await Task.CompletedTask;
@@ -83,7 +93,6 @@ public sealed class PostgresPhysicalDifferentialRestoreProvider : IDifferentialR
         await _fullProvider.ExecuteRestoreAsync(connection, async (stagingPath, populateCt) =>
         {
             var combineWorkDir = stagingPath + ".combine";
-            var combineOutputDir = Path.Combine(combineWorkDir, "result");
 
             try
             {
@@ -104,22 +113,33 @@ public sealed class PostgresPhysicalDifferentialRestoreProvider : IDifferentialR
                         i, item.BackupRecordId, item.BackupMode, extractDir);
 
                     await _fullProvider.ExtractTarGzAsync(item.DumpFilePath, extractDir, populateCt);
+
+                    var manifestDest = Path.Combine(extractDir, "backup_manifest");
+                    File.Copy(item.PgBaseManifestFilePath!, manifestDest, overwrite: true);
+
+                    _logger.LogInformation(
+                        "Placed backup_manifest for chain item #{Index} at '{ManifestPath}'",
+                        i, manifestDest);
+
                     extractedDirs.Add(extractDir);
                 }
 
+                if (Directory.Exists(stagingPath))
+                    Directory.Delete(stagingPath, recursive: true);
+
                 _logger.LogInformation(
-                    "Running pg_combinebackup → '{Output}' from {Count} chain dir(s)", combineOutputDir, extractedDirs.Count);
+                    "Running pg_combinebackup → '{Output}' from {Count} chain dir(s)", stagingPath, extractedDirs.Count);
 
-                await RunPgCombineBackupAsync(pgCombineBinary, combineOutputDir, extractedDirs, populateCt);
+                await RunPgCombineBackupAsync(pgCombineBinary, stagingPath, extractedDirs, populateCt);
 
-                if (!Directory.Exists(combineOutputDir))
+                if (!Directory.Exists(stagingPath))
                     throw new InvalidOperationException(
-                        $"pg_combinebackup завершился без ошибок, но каталог '{combineOutputDir}' отсутствует.");
+                        $"pg_combinebackup завершился без ошибок, но каталог '{stagingPath}' отсутствует.");
 
-                MoveDirectoryContents(combineOutputDir, stagingPath);
+                PostgresPhysicalRestoreProvider.WriteMarkerFile(stagingPath);
 
                 _logger.LogInformation(
-                    "Combined cluster moved into staging '{StagingPath}'", stagingPath);
+                    "Combined cluster materialized at staging '{StagingPath}'", stagingPath);
             }
             finally
             {
@@ -173,20 +193,6 @@ public sealed class PostgresPhysicalDifferentialRestoreProvider : IDifferentialR
                 $"Восстановление цепочки дифференциальных бэкапов PostgreSQL требует версии {MinimumSupportedMajorVersion}+, " +
                 $"но кластер '{connection.Name}' работает на версии {major}. " +
                 "Обновите PostgreSQL или восстановите БД из последнего полного бэкапа.");
-    }
-
-    private static void MoveDirectoryContents(string sourceDir, string targetDir)
-    {
-        foreach (var entry in Directory.EnumerateFileSystemEntries(sourceDir))
-        {
-            var name = Path.GetFileName(entry);
-            var destination = Path.Combine(targetDir, name);
-
-            if (File.Exists(entry))
-                File.Move(entry, destination, overwrite: false);
-            else
-                Directory.Move(entry, destination);
-        }
     }
 
     private void TryDeleteDirectory(string path)

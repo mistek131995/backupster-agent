@@ -376,11 +376,16 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
 
     private async Task<string> QueryDataDirectoryAsync(ConnectionConfig connection, CancellationToken ct)
     {
-        await using var conn = new NpgsqlConnection(BuildConnectionString(connection));
-        await conn.OpenAsync(ct);
+        var result = await PostgresQueryRetry.ExecuteAsync(
+            _logger, "SHOW data_directory", connection.Name,
+            async innerCt =>
+            {
+                await using var conn = new NpgsqlConnection(BuildConnectionString(connection));
+                await conn.OpenAsync(innerCt);
 
-        await using var cmd = new NpgsqlCommand("SHOW data_directory;", conn);
-        var result = await cmd.ExecuteScalarAsync(ct);
+                await using var cmd = new NpgsqlCommand("SHOW data_directory;", conn);
+                return await cmd.ExecuteScalarAsync(innerCt);
+            }, ct);
 
         if (result is not string path || string.IsNullOrWhiteSpace(path))
             throw new RestorePermissionException(
@@ -730,6 +735,8 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
             Username = connection.Username,
             Password = connection.Password,
             Database = "postgres",
+            TcpKeepAlive = true,
+            KeepAlive = 30,
         }.ToString();
 
     private async Task EnsureClusterIsNotServiceManagedAsync(string pgDataPath, CancellationToken ct)

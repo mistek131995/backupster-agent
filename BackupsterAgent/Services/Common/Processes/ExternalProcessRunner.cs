@@ -1,10 +1,13 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 
 namespace BackupsterAgent.Services.Common.Processes;
 
 public sealed class ExternalProcessRunner : IExternalProcessRunner
 {
+    private static readonly Encoding ChildProcessEncoding = ResolveChildProcessEncoding();
+
     private readonly ILogger<ExternalProcessRunner> _logger;
 
     public ExternalProcessRunner(ILogger<ExternalProcessRunner> logger)
@@ -24,8 +27,8 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = request.RedirectStandardInput,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
+            StandardOutputEncoding = ChildProcessEncoding,
+            StandardErrorEncoding = ChildProcessEncoding,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -107,9 +110,35 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
         return new ExternalProcessResult
         {
             ExitCode = process.ExitCode,
-            Stdout = stdoutTextTask is null ? string.Empty : await stdoutTextTask,
-            Stderr = await stderrTask,
+            Stdout = Sanitize(stdoutTextTask is null ? string.Empty : await stdoutTextTask),
+            Stderr = Sanitize(await stderrTask),
         };
+    }
+
+    private static Encoding ResolveChildProcessEncoding()
+    {
+        if (!OperatingSystem.IsWindows())
+            return Encoding.UTF8;
+
+        try
+        {
+            var oemCodePage = CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
+            if (oemCodePage > 0)
+                return Encoding.GetEncoding(oemCodePage);
+        }
+        catch
+        {
+        }
+
+        return Encoding.UTF8;
+    }
+
+    private static string Sanitize(string value)
+    {
+        if (string.IsNullOrEmpty(value) || !value.Contains('�'))
+            return value;
+
+        return value.Replace('�', '?');
     }
 
     private static async Task WriteStdinAsync(

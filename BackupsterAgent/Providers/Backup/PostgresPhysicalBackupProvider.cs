@@ -36,45 +36,64 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
             Username = connection.Username,
             Password = connection.Password,
             Database = "postgres",
+            TcpKeepAlive = true,
+            KeepAlive = 30,
         }.ToString();
 
-        await using var conn = new NpgsqlConnection(connString);
-        await conn.OpenAsync(ct);
+        var (isSuperuser, hasReplication) = await PostgresQueryRetry.ExecuteAsync(
+            _logger, "SELECT rolsuper, rolreplication", connection.Name,
+            async innerCt =>
+            {
+                await using var conn = new NpgsqlConnection(connString);
+                await conn.OpenAsync(innerCt);
 
-        await using (var cmd = new NpgsqlCommand(
-            "SELECT rolsuper, rolreplication FROM pg_roles WHERE rolname = current_user;", conn))
-        await using (var reader = await cmd.ExecuteReaderAsync(ct))
-        {
-            if (!await reader.ReadAsync(ct))
-                throw new BackupPermissionException(
-                    $"Пользователь '{connection.Username}' не найден в pg_roles — проверьте корректность credentials для подключения '{connection.Name}'.");
+                await using var cmd = new NpgsqlCommand(
+                    "SELECT rolsuper, rolreplication FROM pg_roles WHERE rolname = current_user;", conn);
+                await using var reader = await cmd.ExecuteReaderAsync(innerCt);
 
-            var isSuperuser    = reader.GetBoolean(0);
-            var hasReplication = reader.GetBoolean(1);
+                if (!await reader.ReadAsync(innerCt))
+                    throw new BackupPermissionException(
+                        $"Пользователь '{connection.Username}' не найден в pg_roles — проверьте корректность credentials для подключения '{connection.Name}'.");
 
-            if (!isSuperuser && !hasReplication)
-                throw new BackupPermissionException(
-                    $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для physical бэкапа. " +
-                    "Требуется привилегия REPLICATION или superuser. " +
-                    $"Выдайте права: ALTER ROLE \"{connection.Username}\" WITH REPLICATION;");
-        }
+                return (reader.GetBoolean(0), reader.GetBoolean(1));
+            }, ct);
 
-        await using (var cmd = new NpgsqlCommand(
-            "SELECT string_agg(spcname, ', ' ORDER BY spcname) " +
-            "FROM pg_tablespace WHERE spcname NOT IN ('pg_default', 'pg_global');", conn))
-        {
-            var extraTablespaces = await cmd.ExecuteScalarAsync(ct) as string;
-            if (!string.IsNullOrEmpty(extraTablespaces))
-                throw new BackupPermissionException(
-                    $"Кластер '{connection.Name}' использует tablespaces ({extraTablespaces}), " +
-                    "но physical-режим Backupster их не поддерживает: данные tablespace остались бы вне архива, " +
-                    "а restore развернул бы кластер с битыми ссылками на пустые каталоги. " +
-                    "Используйте logical-режим (BackupMode=Logical) — он не зависит от tablespaces.");
-        }
+        if (!isSuperuser && !hasReplication)
+            throw new BackupPermissionException(
+                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для physical бэкапа. " +
+                "Требуется привилегия REPLICATION или superuser. " +
+                $"Выдайте права: ALTER ROLE \"{connection.Username}\" WITH REPLICATION;");
 
-        string pgdata;
-        await using (var cmd = new NpgsqlCommand("SHOW data_directory;", conn))
-            pgdata = (string?)await cmd.ExecuteScalarAsync(ct) ?? string.Empty;
+        var extraTablespaces = await PostgresQueryRetry.ExecuteAsync(
+            _logger, "SELECT pg_tablespace", connection.Name,
+            async innerCt =>
+            {
+                await using var conn = new NpgsqlConnection(connString);
+                await conn.OpenAsync(innerCt);
+
+                await using var cmd = new NpgsqlCommand(
+                    "SELECT string_agg(spcname, ', ' ORDER BY spcname) " +
+                    "FROM pg_tablespace WHERE spcname NOT IN ('pg_default', 'pg_global');", conn);
+                return await cmd.ExecuteScalarAsync(innerCt) as string;
+            }, ct);
+
+        if (!string.IsNullOrEmpty(extraTablespaces))
+            throw new BackupPermissionException(
+                $"Кластер '{connection.Name}' использует tablespaces ({extraTablespaces}), " +
+                "но physical-режим Backupster их не поддерживает: данные tablespace остались бы вне архива, " +
+                "а restore развернул бы кластер с битыми ссылками на пустые каталоги. " +
+                "Используйте logical-режим (BackupMode=Logical) — он не зависит от tablespaces.");
+
+        var pgdata = await PostgresQueryRetry.ExecuteAsync(
+            _logger, "SHOW data_directory", connection.Name,
+            async innerCt =>
+            {
+                await using var conn = new NpgsqlConnection(connString);
+                await conn.OpenAsync(innerCt);
+
+                await using var cmd = new NpgsqlCommand("SHOW data_directory;", conn);
+                return (string?)await cmd.ExecuteScalarAsync(innerCt) ?? string.Empty;
+            }, ct);
 
         if (string.IsNullOrWhiteSpace(pgdata))
             throw new InvalidOperationException(

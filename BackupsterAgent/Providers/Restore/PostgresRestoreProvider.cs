@@ -29,21 +29,22 @@ SELECT rolcreatedb, rolsuper,
        pg_has_role(current_user, 'pg_signal_backend', 'MEMBER') AS can_signal
 FROM pg_roles WHERE rolname = current_user;";
 
-        await using var conn = new NpgsqlConnection(BuildAdminConnectionString(connection));
-        await conn.OpenAsync(ct);
+        var (rolCreateDb, rolSuper, canSignal) = await PostgresQueryRetry.ExecuteAsync(
+            _logger, "SELECT pg_roles restore permissions", connection.Name,
+            async innerCt =>
+            {
+                await using var conn = new NpgsqlConnection(BuildAdminConnectionString(connection));
+                await conn.OpenAsync(innerCt);
 
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
+                await using var cmd = new NpgsqlCommand(sql, conn);
+                await using var reader = await cmd.ExecuteReaderAsync(innerCt);
 
-        if (!await reader.ReadAsync(ct))
-        {
-            throw new RestorePermissionException(
-                $"Пользователь '{connection.Username}' не найден в pg_roles — проверьте корректность credentials для подключения '{connection.Name}'.");
-        }
+                if (!await reader.ReadAsync(innerCt))
+                    throw new RestorePermissionException(
+                        $"Пользователь '{connection.Username}' не найден в pg_roles — проверьте корректность credentials для подключения '{connection.Name}'.");
 
-        var rolCreateDb = reader.GetBoolean(0);
-        var rolSuper = reader.GetBoolean(1);
-        var canSignal = reader.GetBoolean(2);
+                return (reader.GetBoolean(0), reader.GetBoolean(1), reader.GetBoolean(2));
+            }, ct);
 
         if (rolSuper) return;
         if (rolCreateDb && canSignal) return;
@@ -134,6 +135,8 @@ FROM pg_roles WHERE rolname = current_user;";
             Username = connection.Username,
             Password = connection.Password,
             Database = "postgres",
+            TcpKeepAlive = true,
+            KeepAlive = 30,
         }.ToString();
 
     private static string QuoteIdentifier(string name)

@@ -1,9 +1,8 @@
 using System.Diagnostics;
+using System.Text;
 using BackupsterAgent.Configuration;
-using BackupsterAgent.Providers;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
-using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Backup.Coordinator;
 using BackupsterAgent.Providers.Upload;
@@ -21,6 +20,8 @@ using BackupsterAgent.Services.Restore;
 using BackupsterAgent.Workers;
 using BackupsterAgent.Workers.Handlers;
 using Microsoft.Extensions.Options;
+
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var defaultConfigDir = OperatingSystem.IsWindows()
     ? Path.Combine(AppContext.BaseDirectory, "config")

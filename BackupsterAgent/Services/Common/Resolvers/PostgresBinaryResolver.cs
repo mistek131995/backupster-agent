@@ -93,28 +93,32 @@ public sealed class PostgresBinaryResolver
         return major.Value;
     }
 
-    private static async Task<int?> QueryServerMajorAsync(ConnectionConfig connection, CancellationToken ct)
-    {
-        var connString = new NpgsqlConnectionStringBuilder
+    private async Task<int?> QueryServerMajorAsync(ConnectionConfig connection, CancellationToken ct) =>
+        await PostgresQueryRetry.ExecuteAsync(_logger, "SHOW server_version_num", connection.Name, async innerCt =>
+        {
+            await using var conn = new NpgsqlConnection(BuildConnectionString(connection));
+            await conn.OpenAsync(innerCt);
+
+            await using var cmd = new NpgsqlCommand("SHOW server_version_num;", conn);
+            var result = await cmd.ExecuteScalarAsync(innerCt);
+
+            if (result is string s && int.TryParse(s, out var versionNum) && versionNum > 0)
+                return (int?)(versionNum / 10000);
+
+            return null;
+        }, ct);
+
+    private static string BuildConnectionString(ConnectionConfig connection) =>
+        new NpgsqlConnectionStringBuilder
         {
             Host = connection.Host,
             Port = connection.Port,
             Username = connection.Username,
             Password = connection.Password,
             Database = "postgres",
+            TcpKeepAlive = true,
+            KeepAlive = 30,
         }.ToString();
-
-        await using var conn = new NpgsqlConnection(connString);
-        await conn.OpenAsync(ct);
-
-        await using var cmd = new NpgsqlCommand("SHOW server_version_num;", conn);
-        var result = await cmd.ExecuteScalarAsync(ct);
-
-        if (result is string s && int.TryParse(s, out var versionNum) && versionNum > 0)
-            return versionNum / 10000;
-
-        return null;
-    }
 
     private static string? FindBinDirForMajor(int major)
     {

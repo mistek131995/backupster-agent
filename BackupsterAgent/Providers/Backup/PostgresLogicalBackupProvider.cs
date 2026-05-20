@@ -43,21 +43,26 @@ FROM pg_roles WHERE rolname = current_user;";
             Username = connection.Username,
             Password = connection.Password,
             Database = database,
+            TcpKeepAlive = true,
+            KeepAlive = 30,
         }.ToString();
 
-        await using var conn = new NpgsqlConnection(connString);
-        await conn.OpenAsync(ct);
+        var (isSuperuser, canConnect, canUsePublic) = await PostgresQueryRetry.ExecuteAsync(
+            _logger, "SELECT pg_roles permissions", connection.Name,
+            async innerCt =>
+            {
+                await using var conn = new NpgsqlConnection(connString);
+                await conn.OpenAsync(innerCt);
 
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
+                await using var cmd = new NpgsqlCommand(sql, conn);
+                await using var reader = await cmd.ExecuteReaderAsync(innerCt);
 
-        if (!await reader.ReadAsync(ct))
-            throw new BackupPermissionException(
-                $"Пользователь '{connection.Username}' не найден в pg_roles — проверьте корректность credentials для подключения '{connection.Name}'.");
+                if (!await reader.ReadAsync(innerCt))
+                    throw new BackupPermissionException(
+                        $"Пользователь '{connection.Username}' не найден в pg_roles — проверьте корректность credentials для подключения '{connection.Name}'.");
 
-        var isSuperuser  = reader.GetBoolean(0);
-        var canConnect   = reader.GetBoolean(1);
-        var canUsePublic = reader.GetBoolean(2);
+                return (reader.GetBoolean(0), reader.GetBoolean(1), reader.GetBoolean(2));
+            }, ct);
 
         if (!isSuperuser && !(canConnect && canUsePublic))
             throw new BackupPermissionException(
