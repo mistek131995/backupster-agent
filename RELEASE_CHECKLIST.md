@@ -16,7 +16,7 @@
 | Тест-кейс | 1.4.0 |
 |---|---|
 | **Бэкап** | |
-| Postgres — logical | |
+| Postgres — logical | ✓ |
 | Postgres — physical | ✓ |
 | Postgres — physical differential | ✓ |
 | MySQL — logical | |
@@ -41,7 +41,7 @@
 | SFTP — download | ✓ |
 | Azure Blob — upload | |
 | Azure Blob — download | |
-| WebDAV — upload | |
-| WebDAV — download | |
+| WebDAV — upload | ✓ |
+| WebDAV — download | ✓ |
 | LocalFs — upload | |
 | LocalFs — download | |
