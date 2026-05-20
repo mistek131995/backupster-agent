@@ -20,7 +20,7 @@
 | Postgres — physical | ✓ |
 | Postgres — physical differential | ✓ |
 | MySQL — logical | |
-| MSSQL — logical | |
+| MSSQL — logical | ✓ |
 | MSSQL — physical | ✓ |
 | MSSQL — physical differential | ✓ |
 | File-set | |
@@ -29,7 +29,7 @@
 | Postgres — physical | ✓ |
 | Postgres — physical differential | ✓ |
 | MySQL — logical | |
-| MSSQL — bacpac | |
+| MSSQL — logical | ✓ |
 | MSSQL — physical | ✓ |
 | MSSQL — physical differential | ✓ |
 | БД + файлы вместе | |
@@ -37,8 +37,8 @@
 | **Хранилища** | |
 | S3 — upload | ✓ |
 | S3 — download | ✓ |
-| SFTP — upload | |
-| SFTP — download | |
+| SFTP — upload | ✓ |
+| SFTP — download | ✓ |
 | Azure Blob — upload | |
 | Azure Blob — download | |
 | WebDAV — upload | |

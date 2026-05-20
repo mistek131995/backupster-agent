@@ -19,6 +19,7 @@
 - **[docs/gc-and-retention.md](docs/gc-and-retention.md)** — сборщик мусора для чанков и очистка устаревших бэкапов с настройками.
 - **[docs/restore.md](docs/restore.md)** — восстановление: `RestoreSettings`, требуемые права, поведение при ошибках.
 - **[NETWORK.md](NETWORK.md)** — полный перечень HTTP-запросов к дашборду и инвариант «creds не покидают хост».
+- **[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)** — таблица ручных прогонов по версиям.
 
 **Физический и логический бэкап по СУБД:**
 - **[docs/postgres.md](docs/postgres.md)** — логический бэкап (`pg_dump`/`psql`) и физический (`pg_basebackup`): права, сценарии развёртывания, ограничения.
