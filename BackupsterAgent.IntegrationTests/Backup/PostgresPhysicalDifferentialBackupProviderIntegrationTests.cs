@@ -195,6 +195,11 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
         await ExtractTarGzAsync(fullResult.FilePath, fullStaging, _cts.Token);
         await ExtractTarGzAsync(diffResult.FilePath, diffStaging, _cts.Token);
 
+        // pg_basebackup splits archive (base.tar.gz) and backup_manifest into two outputs;
+        // pg_combinebackup needs the manifest *inside* each input cluster directory.
+        File.Copy(fullResult.PgBaseManifestPath!, Path.Combine(fullStaging, "backup_manifest"), overwrite: true);
+        File.Copy(diffResult.PgBaseManifestPath!, Path.Combine(diffStaging, "backup_manifest"), overwrite: true);
+
         var combineExit = await RunPgCombineBackupAsync(fullStaging, diffStaging, _restoreDir, _cts.Token);
         Assert.That(combineExit, Is.EqualTo(0), "pg_combinebackup must succeed");
         Assert.That(File.Exists(Path.Combine(_restoreDir, "PG_VERSION")), Is.True,
@@ -211,51 +216,74 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
     public async Task RoundTrip_RestoreProviderRestoresChainToSeparateCluster()
     {
         var (fullProvider, diffProvider) = BuildProviders();
-        var (fullRestoreProvider, diffRestoreProvider) = BuildRestoreProviders();
+        var (_, diffRestoreProvider) = BuildRestoreProviders();
 
-        var fullResult = await fullProvider.BackupAsync(MakeConfig(_fullOutputDir), _connection, _cts.Token);
-        Assert.That(fullResult.PgBaseManifestPath, Is.Not.Null);
-
-        await InsertRowsAsync(_connection, _srcDb, PostFullRows, _cts.Token);
-        await ExecuteOnDatabaseAsync(_connection, _srcDb, "CHECKPOINT;", _cts.Token);
-        await WaitForWalSummarizerAsync(_connection, _cts.Token);
-
-        var ctx = new DifferentialBackupContext
+        // Spin up an ephemeral source cluster so the test does not depend on a service-managed
+        // system Postgres (pg_ctl cannot stop a cluster owned by SCM/systemd, which the restore
+        // swap requires when the combined cluster inherits the source port from postgresql.conf).
+        var sourcePgData = Path.Combine(
+            Path.GetTempPath(),
+            "backupster-pg-diff-source-" + Guid.NewGuid().ToString("N"));
+        var sourceServerLog = sourcePgData + ".log";
+        var sourcePort = FindFreeLoopbackPort();
+        var sourceConnection = new ConnectionConfig
         {
-            BaseBackupRecordId = Guid.NewGuid(),
-            BasePgBaseManifestPath = fullResult.PgBaseManifestPath,
+            Name = "pg-source-itest",
+            DatabaseType = _connection.DatabaseType,
+            Host = "localhost",
+            Port = sourcePort,
+            Username = "postgres",
+            Password = string.Empty,
+            BinPath = _connection.BinPath,
         };
-        var diffResult = await diffProvider.BackupAsync(
-            MakeConfig(_diffOutputDir), _connection, ctx, _cts.Token);
+        var sourceStarted = false;
 
-        var sourcePgData = await QuerySourcePgDataAsync(_connection, _cts.Token);
         var targetPgData = Path.Combine(
             Path.GetTempPath(),
             "backupster-pg-diff-target-" + Guid.NewGuid().ToString("N"));
         var targetServerLog = targetPgData + ".log";
-        var sourcePort = _connection.Port;
         var targetPort = FindFreeLoopbackPort();
-        var sourceWasRunning = false;
-        var combinedClusterStarted = false;
+        var targetClusterStarted = false;
 
         try
         {
+            await RunInitDbAsync(_initDbBinary, sourcePgData, _cts.Token);
+            AppendPostgresConfOverrides(sourcePgData, sourcePort);
+            AppendSummarizeWalOverride(sourcePgData);
+
+            await StartClusterAsync(sourcePgData, sourceServerLog, _cts.Token);
+            sourceStarted = true;
+            await WaitForServerReadyOnPortAsync("postgres", sourcePort, _cts.Token);
+
+            await CreateSourceDatabaseAsync(sourceConnection, _srcDb, _cts.Token);
+
+            var fullResult = await fullProvider.BackupAsync(
+                MakeConfig(_fullOutputDir), sourceConnection, _cts.Token);
+            Assert.That(fullResult.PgBaseManifestPath, Is.Not.Null);
+
+            await InsertRowsAsync(sourceConnection, _srcDb, PostFullRows, _cts.Token);
+            await ExecuteOnDatabaseAsync(sourceConnection, _srcDb, "CHECKPOINT;", _cts.Token);
+            await WaitForWalSummarizerAsync(sourceConnection, _cts.Token);
+
+            var ctx = new DifferentialBackupContext
+            {
+                BaseBackupRecordId = Guid.NewGuid(),
+                BasePgBaseManifestPath = fullResult.PgBaseManifestPath,
+            };
+            var diffResult = await diffProvider.BackupAsync(
+                MakeConfig(_diffOutputDir), sourceConnection, ctx, _cts.Token);
+
             await RunInitDbAsync(_initDbBinary, targetPgData, _cts.Token);
             AppendPostgresConfOverrides(targetPgData, targetPort);
 
             await StartClusterAsync(targetPgData, targetServerLog, _cts.Token);
-            try
-            {
-                await WaitForServerReadyOnPortAsync("postgres", targetPort, _cts.Token);
-            }
-            catch
-            {
-                await TryStopClusterAsync(targetPgData);
-                throw;
-            }
+            targetClusterStarted = true;
+            await WaitForServerReadyOnPortAsync("postgres", targetPort, _cts.Token);
 
-            sourceWasRunning = true;
+            // Free up sourcePort: after the restore swap the combined cluster will inherit
+            // source's postgresql.conf and try to bind sourcePort itself.
             await StopClusterFastAsync(sourcePgData, _cts.Token);
+            sourceStarted = false;
 
             var chain = new[]
             {
@@ -263,12 +291,14 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
                 {
                     BackupRecordId = Guid.NewGuid(),
                     DumpFilePath = fullResult.FilePath,
+                    PgBaseManifestFilePath = fullResult.PgBaseManifestPath,
                     BackupMode = BackupMode.Physical,
                 },
                 new DifferentialRestoreChainItem
                 {
                     BackupRecordId = Guid.NewGuid(),
                     DumpFilePath = diffResult.FilePath,
+                    PgBaseManifestFilePath = diffResult.PgBaseManifestPath,
                     BackupMode = BackupMode.PhysicalDifferential,
                 },
             };
@@ -276,12 +306,12 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             var targetConnection = new ConnectionConfig
             {
                 Name = "pg-target-itest",
-                DatabaseType = _connection.DatabaseType,
+                DatabaseType = sourceConnection.DatabaseType,
                 Host = "localhost",
                 Port = targetPort,
                 Username = "postgres",
                 Password = string.Empty,
-                BinPath = _connection.BinPath,
+                BinPath = sourceConnection.BinPath,
             };
 
             await diffRestoreProvider.ValidatePermissionsAsync(targetConnection, _srcDb, _cts.Token);
@@ -289,10 +319,9 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             await diffRestoreProvider.PrepareTargetDatabaseAsync(targetConnection, _srcDb, _cts.Token);
             await diffRestoreProvider.RestoreAsync(targetConnection, _srcDb, chain, _cts.Token);
 
-            combinedClusterStarted = true;
-            await WaitForServerReadyAsync(sourcePort, _connection, _cts.Token);
+            await WaitForServerReadyAsync(sourcePort, sourceConnection, _cts.Token);
 
-            var rows = await ReadItemsAsync(_connection, sourcePort, _srcDb, _cts.Token);
+            var rows = await ReadItemsAsync(sourceConnection, sourcePort, _srcDb, _cts.Token);
             Assert.That(rows, Is.EquivalentTo(InitialRows.Concat(PostFullRows)));
 
             var combineWorkDir = Directory.GetParent(targetPgData)!.EnumerateDirectories(
@@ -305,29 +334,22 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
         }
         finally
         {
-            if (combinedClusterStarted)
+            // targetClusterStarted covers every state where Postgres may still be live on targetPgData:
+            // 1) freshly started on targetPort after StartClusterAsync;
+            // 2) restarted by the restore provider on sourcePort after the swap (the data dir is still targetPgData).
+            // TryStopClusterAsync is idempotent on a stopped cluster.
+            if (targetClusterStarted)
                 await TryStopClusterAsync(targetPgData);
 
             TryDeleteDirectory(targetPgData, "target pgdata");
             TryDeleteFile(targetServerLog, "target server log");
             TryCleanupSiblings(targetPgData);
 
-            if (sourceWasRunning)
-            {
-                try
-                {
-                    await StartClusterAsync(sourcePgData, sourcePgData + ".restart.log", _cts.Token);
-                    await WaitForServerReadyAsync(sourcePort, _connection, _cts.Token);
-                }
-                catch (Exception ex)
-                {
-                    TestContext.Progress.WriteLine($"Failed to restart source cluster: {ex.Message}");
-                }
-                finally
-                {
-                    TryDeleteFile(sourcePgData + ".restart.log", "source restart log");
-                }
-            }
+            if (sourceStarted)
+                await TryStopClusterAsync(sourcePgData);
+
+            TryDeleteDirectory(sourcePgData, "source pgdata");
+            TryDeleteFile(sourceServerLog, "source server log");
         }
     }
 
@@ -435,17 +457,6 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
                 TryKillByPidFile(pgDataPath);
             }
         }
-    }
-
-    private static async Task<string> QuerySourcePgDataAsync(ConnectionConfig connection, CancellationToken ct)
-    {
-        await using var conn = new NpgsqlConnection(BuildConnectionString(connection, "postgres"));
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand("SHOW data_directory;", conn);
-        var result = await cmd.ExecuteScalarAsync(ct);
-        if (result is not string s || string.IsNullOrWhiteSpace(s))
-            throw new InvalidOperationException("SHOW data_directory returned empty value on source cluster.");
-        return s;
     }
 
     private static async Task WaitForServerReadyOnPortAsync(string username, int port, CancellationToken ct)
@@ -719,6 +730,19 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
         File.AppendAllText(confPath, overrides);
     }
 
+    private static void AppendSummarizeWalOverride(string pgData)
+    {
+        var confPath = Path.Combine(pgData, "postgresql.conf");
+        var overrides = string.Join(Environment.NewLine,
+        [
+            string.Empty,
+            "# WAL summarizer required for incremental (differential) pg_basebackup",
+            "summarize_wal = on",
+            string.Empty,
+        ]);
+        File.AppendAllText(confPath, overrides);
+    }
+
     private static async Task WaitForServerReadyAsync(int port, ConnectionConfig connection, CancellationToken ct)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
@@ -757,18 +781,19 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
 
     private static bool IsTransientStartupError(Exception ex)
     {
-        switch (ex)
+        for (var current = ex; current is not null; current = current.InnerException)
         {
-            case SocketException:
-            case TimeoutException:
-                return true;
-            case PostgresException pg:
-                return pg.SqlState == "57P03";
-            case NpgsqlException npg when npg.InnerException is SocketException:
-                return true;
-            default:
-                return false;
+            switch (current)
+            {
+                case SocketException:
+                case TimeoutException:
+                case IOException:
+                    return true;
+                case PostgresException pg when pg.SqlState == "57P03":
+                    return true;
+            }
         }
+        return false;
     }
 
     private static async Task WaitForWalSummarizerAsync(ConnectionConfig connection, CancellationToken ct)
@@ -780,6 +805,12 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
 
         await using var conn = new NpgsqlConnection(connString);
         await conn.OpenAsync(ct);
+
+        // Force a WAL segment switch so the summarizer has a fully-written segment to summarize.
+        // On a freshly-initialized low-activity cluster (e.g. the ephemeral source we spin up here),
+        // summaries are otherwise not emitted within the polling window.
+        await using (var cmd = new NpgsqlCommand("SELECT pg_switch_wal();", conn))
+            await cmd.ExecuteScalarAsync(ct);
 
         string targetLsn;
         await using (var cmd = new NpgsqlCommand("SELECT pg_current_wal_lsn()::text;", conn))
