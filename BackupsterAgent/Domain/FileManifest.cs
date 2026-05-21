@@ -4,4 +4,5 @@ public sealed record FileManifest(
     DateTime CreatedAtUtc,
     string Database,
     string DumpObjectKey,
-    List<FileEntry> Files);
+    List<FileEntry> Files,
+    List<string>? Roots = null);

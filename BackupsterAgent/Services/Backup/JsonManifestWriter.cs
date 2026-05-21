@@ -59,6 +59,15 @@ public sealed class JsonManifestWriter : IManifestWriter
         _jsonWriter.WriteString("database", meta.Database);
         _jsonWriter.WriteString("dumpObjectKey", meta.DumpObjectKey);
         _jsonWriter.WriteString("createdAtUtc", meta.CreatedAtUtc);
+
+        if (meta.Roots.Count > 0)
+        {
+            _jsonWriter.WriteStartArray("roots");
+            foreach (var root in meta.Roots)
+                _jsonWriter.WriteStringValue(root);
+            _jsonWriter.WriteEndArray();
+        }
+
         _jsonWriter.WriteStartArray("files");
     }
 

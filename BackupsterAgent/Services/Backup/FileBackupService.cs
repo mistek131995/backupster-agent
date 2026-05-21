@@ -28,7 +28,7 @@ public sealed class FileBackupService
     }
 
     public async Task<FileBackupResult> CaptureAsync(
-        List<string> filePaths,
+        IReadOnlyList<string> roots,
         IUploadProvider uploader,
         IManifestWriter writer,
         IProgressReporter<BackupStage> reporter,
@@ -46,8 +46,10 @@ public sealed class FileBackupService
             IgnoreInaccessible = true,
         };
 
-        foreach (var root in filePaths)
+        for (int rootIndex = 0; rootIndex < roots.Count; rootIndex++)
         {
+            var root = roots[rootIndex];
+
             if (!Directory.Exists(root))
             {
                 _logger.LogWarning("File path does not exist, skipping: '{Path}'", root);
@@ -66,7 +68,7 @@ public sealed class FileBackupService
 
                 try
                 {
-                    var (entry, newChunks) = await CaptureFileAsync(root, filePath, uploader, ct);
+                    var (entry, newChunks) = await CaptureFileAsync(root, filePath, rootIndex, uploader, ct);
                     await writer.AppendAsync(entry, ct);
                     newChunksTotal += newChunks;
                     processedFiles++;
@@ -90,7 +92,7 @@ public sealed class FileBackupService
     }
 
     private async Task<(FileEntry Entry, int NewChunks)> CaptureFileAsync(
-        string root, string filePath, IUploadProvider uploader, CancellationToken ct)
+        string root, string filePath, int rootIndex, IUploadProvider uploader, CancellationToken ct)
     {
         var info = new FileInfo(filePath);
         var relPath = Path.GetRelativePath(root, filePath).Replace('\\', '/');
@@ -120,7 +122,7 @@ public sealed class FileBackupService
             chunks.Add(sha);
         }
 
-        var entry = new FileEntry(relPath, info.Length, mtime, mode, chunks);
+        var entry = new FileEntry(relPath, info.Length, mtime, mode, chunks, rootIndex);
         return (entry, newChunks);
     }
 

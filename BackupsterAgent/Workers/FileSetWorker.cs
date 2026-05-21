@@ -68,20 +68,12 @@ public sealed class FileSetWorker : BackgroundService
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(fs.StorageName))
+            if (!string.IsNullOrWhiteSpace(fs.StorageName) && !storages.TryResolve(fs.StorageName, out _))
             {
-                logger.LogError(
-                    "FileSetWorker: file set '{Name}' has empty StorageName, skipping.", fs.Name);
-                continue;
-            }
-
-            if (!storages.TryResolve(fs.StorageName, out _))
-            {
-                logger.LogError(
-                    "FileSetWorker: file set '{Name}' references unknown storage '{StorageName}', skipping. Available: {Available}",
+                logger.LogWarning(
+                    "FileSetWorker: file set '{Name}' references unknown legacy-fallback storage '{StorageName}'. Active schedules with explicit storageNames will still run. Available: {Available}",
                     fs.Name, fs.StorageName,
                     storages.Names.Count == 0 ? "(none)" : string.Join(", ", storages.Names));
-                continue;
             }
 
             if (fs.Paths.Count == 0)

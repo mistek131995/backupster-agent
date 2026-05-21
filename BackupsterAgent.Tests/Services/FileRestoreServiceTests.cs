@@ -32,6 +32,7 @@ public sealed class FileRestoreServiceTests
     private EncryptionService _encryption = null!;
     private FakeUploadProvider _upload = null!;
     private FileRestoreService _service = null!;
+    private ManifestStore _manifestStore = null!;
 
     [SetUp]
     public void SetUp()
@@ -51,14 +52,14 @@ public sealed class FileRestoreServiceTests
             FileRestoreBasePath = _landingDir,
             TempPath = _tempRoot,
         });
-        var manifestStore = new ManifestStore(
+        _manifestStore = new ManifestStore(
             _encryption,
             restoreSettings,
             NullLoggerFactory.Instance,
             NullLogger<ManifestStore>.Instance);
         _service = new FileRestoreService(
             _encryption,
-            manifestStore,
+            _manifestStore,
             restoreSettings,
             NullLogger<FileRestoreService>.Instance);
     }
@@ -502,6 +503,152 @@ public sealed class FileRestoreServiceTests
     }
 
     [Test]
+    public async Task RunAsync_V2Manifest_NoTarget_RestoresToOriginalRoots()
+    {
+        var rootA = Path.Combine(_tempRoot, "origin-a");
+        var rootB = Path.Combine(_tempRoot, "origin-b");
+
+        var content1 = RandomNumberGenerator.GetBytes(32);
+        var content2 = RandomNumberGenerator.GetBytes(48);
+        var sha1 = StoreChunk(content1);
+        var sha2 = StoreChunk(content2);
+
+        var entries = new[]
+        {
+            new FileEntry("sub/a.bin", content1.Length, 0, SafeMode, [sha1], RootIndex: 0),
+            new FileEntry("c.bin", content2.Length, 0, SafeMode, [sha2], RootIndex: 1),
+        };
+        var manifestKey = await StoreV2ManifestAsync([rootA, rootB], entries);
+
+        var result = await _service.RunAsync(manifestKey, targetFileRoot: null, _upload, TestHelpers.NullReporter<RestoreStage>(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(RestoreFilesStatus.Success));
+            Assert.That(File.Exists(Path.Combine(rootA, "sub", "a.bin")), Is.True);
+            Assert.That(File.Exists(Path.Combine(rootB, "c.bin")), Is.True);
+            Assert.That(File.Exists(Path.Combine(_landingDir, "sub", "a.bin")), Is.False,
+                "landing zone must NOT be used when manifest carries roots");
+        });
+    }
+
+    [Test]
+    public async Task RunAsync_V2Manifest_NoTarget_DoesNotResetOriginalRoots()
+    {
+        var root = Path.Combine(_tempRoot, "origin-keep");
+        Directory.CreateDirectory(root);
+        var keep = Path.Combine(root, "user-file.txt");
+        await File.WriteAllBytesAsync(keep, [9, 9, 9]);
+
+        var content = RandomNumberGenerator.GetBytes(16);
+        var sha = StoreChunk(content);
+        var entries = new[] { new FileEntry("restored.bin", content.Length, 0, SafeMode, [sha], RootIndex: 0) };
+        var manifestKey = await StoreV2ManifestAsync([root], entries);
+
+        var result = await _service.RunAsync(manifestKey, targetFileRoot: null, _upload, TestHelpers.NullReporter<RestoreStage>(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(RestoreFilesStatus.Success));
+            Assert.That(File.Exists(keep), Is.True, "original root must not be wiped");
+            Assert.That(File.Exists(Path.Combine(root, "restored.bin")), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task RunAsync_V2Manifest_SameRelPathInTwoRoots_NoCollision()
+    {
+        var rootA = Path.Combine(_tempRoot, "ra");
+        var rootB = Path.Combine(_tempRoot, "rb");
+
+        var contentA = RandomNumberGenerator.GetBytes(64);
+        var contentB = RandomNumberGenerator.GetBytes(96);
+        var shaA = StoreChunk(contentA);
+        var shaB = StoreChunk(contentB);
+
+        var entries = new[]
+        {
+            new FileEntry("conflict.bin", contentA.Length, 0, SafeMode, [shaA], RootIndex: 0),
+            new FileEntry("conflict.bin", contentB.Length, 0, SafeMode, [shaB], RootIndex: 1),
+        };
+        var manifestKey = await StoreV2ManifestAsync([rootA, rootB], entries);
+
+        var result = await _service.RunAsync(manifestKey, targetFileRoot: null, _upload, TestHelpers.NullReporter<RestoreStage>(), CancellationToken.None);
+
+        Assert.That(result.Status, Is.EqualTo(RestoreFilesStatus.Success));
+        Assert.That(await File.ReadAllBytesAsync(Path.Combine(rootA, "conflict.bin")), Is.EqualTo(contentA));
+        Assert.That(await File.ReadAllBytesAsync(Path.Combine(rootB, "conflict.bin")), Is.EqualTo(contentB));
+    }
+
+    [Test]
+    public async Task RunAsync_V2Manifest_TargetWithMultipleRoots_BucketsBySubfolder()
+    {
+        var rootA = @"C:\app\data";
+        var rootB = @"C:\app\logs";
+        var target = Path.Combine(_tempRoot, "target");
+
+        var content1 = RandomNumberGenerator.GetBytes(20);
+        var content2 = RandomNumberGenerator.GetBytes(30);
+        var sha1 = StoreChunk(content1);
+        var sha2 = StoreChunk(content2);
+
+        var entries = new[]
+        {
+            new FileEntry("x.bin", content1.Length, 0, SafeMode, [sha1], RootIndex: 0),
+            new FileEntry("x.bin", content2.Length, 0, SafeMode, [sha2], RootIndex: 1),
+        };
+        var manifestKey = await StoreV2ManifestAsync([rootA, rootB], entries);
+
+        var result = await _service.RunAsync(manifestKey, target, _upload, TestHelpers.NullReporter<RestoreStage>(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(RestoreFilesStatus.Success));
+            Assert.That(File.Exists(Path.Combine(target, "data_0", "x.bin")), Is.True);
+            Assert.That(File.Exists(Path.Combine(target, "logs_1", "x.bin")), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task RunAsync_V2Manifest_TargetWithSingleRoot_FlatUnderTarget()
+    {
+        var rootA = Path.Combine(_tempRoot, "src");
+        var target = Path.Combine(_tempRoot, "dst");
+
+        var content = RandomNumberGenerator.GetBytes(20);
+        var sha = StoreChunk(content);
+
+        var entries = new[] { new FileEntry("sub/f.bin", content.Length, 0, SafeMode, [sha], RootIndex: 0) };
+        var manifestKey = await StoreV2ManifestAsync([rootA], entries);
+
+        var result = await _service.RunAsync(manifestKey, target, _upload, TestHelpers.NullReporter<RestoreStage>(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(RestoreFilesStatus.Success));
+            Assert.That(File.Exists(Path.Combine(target, "sub", "f.bin")), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task RunAsync_V1Manifest_NoTarget_StillUsesLandingZone()
+    {
+        var content = RandomNumberGenerator.GetBytes(16);
+        var sha = StoreChunk(content);
+        var entry = new FileEntry("legacy.bin", content.Length, 0, SafeMode, [sha]);
+        StoreManifest(new FileManifest(DateTime.UtcNow, "db", "dump.key", [entry]));
+
+        var result = await _service.RunAsync(ManifestKey, targetFileRoot: null, _upload, TestHelpers.NullReporter<RestoreStage>(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(RestoreFilesStatus.Success));
+            Assert.That(File.Exists(Path.Combine(_landingDir, "legacy.bin")), Is.True,
+                "v1 manifests (no roots) must still fall back to landing zone");
+        });
+    }
+
+    [Test]
     public async Task RunAsync_AppliesMtimeFromManifestEntry()
     {
         var mtime = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
@@ -532,6 +679,17 @@ public sealed class FileRestoreServiceTests
         _upload.SetBytes(ManifestKey, _encryption.Encrypt(json, Encoding.UTF8.GetBytes(ManifestKey)));
     }
 
+    private async Task<string> StoreV2ManifestAsync(
+        IReadOnlyList<string> roots,
+        IReadOnlyList<FileEntry> entries,
+        string folder = "fileset_2026-01-01_00-00-00")
+    {
+        await using var writer = _manifestStore.OpenWriter("fileset", dumpObjectKey: string.Empty, roots: roots);
+        foreach (var e in entries)
+            await writer.AppendAsync(e, CancellationToken.None);
+        return await writer.CompleteAsync(_upload, folder, CancellationToken.None);
+    }
+
     private sealed class FakeUploadProvider : IUploadProvider
     {
         private readonly Dictionary<string, byte[]> _bytes = [];
@@ -559,8 +717,13 @@ public sealed class FileRestoreServiceTests
             return Task.FromResult(data);
         }
 
-        public Task<string> UploadAsync(string filePath, string folder, IProgress<long>? progress, CancellationToken ct) =>
-            throw new NotSupportedException("FileRestoreService must not call UploadAsync");
+        public async Task<string> UploadAsync(string filePath, string folder, IProgress<long>? progress, CancellationToken ct)
+        {
+            var fileName = System.IO.Path.GetFileName(filePath);
+            var objectKey = $"{folder.TrimEnd('/')}/{fileName}";
+            _bytes[objectKey] = await File.ReadAllBytesAsync(filePath, ct);
+            return $"fake://{objectKey}";
+        }
 
         public Task UploadBytesAsync(byte[] content, string objectKey, CancellationToken ct) =>
             throw new NotSupportedException("FileRestoreService must not call UploadBytesAsync");
@@ -571,8 +734,15 @@ public sealed class FileRestoreServiceTests
         public Task<long> GetObjectSizeAsync(string objectKey, CancellationToken ct) =>
             throw new NotSupportedException("FileRestoreService must not call GetObjectSizeAsync");
 
-        public Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct) =>
-            throw new NotSupportedException("FileRestoreService must not call DownloadAsync");
+        public async Task DownloadAsync(string objectKey, string localPath, IProgress<long>? progress, CancellationToken ct)
+        {
+            if (!_bytes.TryGetValue(objectKey, out var data))
+                throw new FileNotFoundException($"Fake: object '{objectKey}' not found.", objectKey);
+
+            var dir = System.IO.Path.GetDirectoryName(localPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            await File.WriteAllBytesAsync(localPath, data, ct);
+        }
 
         public IAsyncEnumerable<StorageObject> ListAsync(string prefix, CancellationToken ct) =>
             throw new NotSupportedException("FileRestoreService must not call ListAsync");

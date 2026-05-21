@@ -40,8 +40,11 @@ public sealed class FileSetBackupPipeline
 
         exec.Reporter.Report(BackupStage.CapturingFiles);
 
-        await using var writer = _manifestStore.OpenWriter(config.Name, dumpObjectKey: string.Empty);
-        var capture = await _fileBackup.CaptureAsync(config.Paths, uploader, writer, exec.Reporter, ct);
+        var normalizedRoots = NormalizeRoots(config.Paths);
+
+        await using var writer = _manifestStore.OpenWriter(
+            config.Name, dumpObjectKey: string.Empty, roots: normalizedRoots);
+        var capture = await _fileBackup.CaptureAsync(normalizedRoots, uploader, writer, exec.Reporter, ct);
         var manifestKey = await writer.CompleteAsync(uploader, backupFolder, ct);
 
         var metrics = new FileBackupMetrics
@@ -64,5 +67,16 @@ public sealed class FileSetBackupPipeline
             DurationMs = durationMs,
             FileMetrics = metrics,
         };
+    }
+
+    private static IReadOnlyList<string> NormalizeRoots(IReadOnlyList<string> raw)
+    {
+        var result = new List<string>(raw.Count);
+        foreach (var path in raw)
+        {
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            result.Add(Path.GetFullPath(path));
+        }
+        return result;
     }
 }

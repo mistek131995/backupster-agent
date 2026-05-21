@@ -29,14 +29,18 @@ public sealed class ManifestStore
         _logger = logger;
     }
 
-    public IManifestWriter OpenWriter(string database, string dumpObjectKey)
+    public IManifestWriter OpenWriter(
+        string database,
+        string dumpObjectKey,
+        IReadOnlyList<string>? roots = null)
     {
         var tempDir = BuildWriterTempDir();
         var meta = new ManifestMeta(
-            SchemaVersion: 1,
+            SchemaVersion: roots is null ? 1 : 2,
             CreatedAtUtc: DateTime.UtcNow,
             Database: database,
-            DumpObjectKey: dumpObjectKey);
+            DumpObjectKey: dumpObjectKey,
+            Roots: roots ?? Array.Empty<string>());
 
         return new JsonManifestWriter(
             _encryption,

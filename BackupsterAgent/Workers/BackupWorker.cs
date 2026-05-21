@@ -78,21 +78,12 @@ public sealed class BackupWorker : BackgroundService
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(db.StorageName))
+            if (!string.IsNullOrWhiteSpace(db.StorageName) && !storages.TryResolve(db.StorageName, out _))
             {
-                logger.LogError(
-                    "BackupWorker: database '{Database}' has empty StorageName, skipping.",
-                    db.Database);
-                continue;
-            }
-
-            if (!storages.TryResolve(db.StorageName, out _))
-            {
-                logger.LogError(
-                    "BackupWorker: database '{Database}' references unknown storage '{StorageName}', skipping. Available: {Available}",
+                logger.LogWarning(
+                    "BackupWorker: database '{Database}' references unknown legacy-fallback storage '{StorageName}'. Active schedules with explicit storageNames will still run. Available: {Available}",
                     db.Database, db.StorageName,
                     storages.Names.Count == 0 ? "(none)" : string.Join(", ", storages.Names));
-                continue;
             }
 
             valid.Add(db);

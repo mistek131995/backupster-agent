@@ -2,7 +2,6 @@ using System.Net.Http.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Services.Common;
-using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Extensions.Options;
 using Polly;
 
@@ -11,7 +10,6 @@ namespace BackupsterAgent.Services.Dashboard.Sync;
 public sealed class FileSetSyncService : DashboardClientBase, IFileSetSyncService
 {
     private readonly HttpClient _http;
-    private readonly StorageResolver _storages;
     private readonly List<FileSetConfig> _fileSets;
     private readonly ILogger<FileSetSyncService> _logger;
     private readonly ResiliencePipeline _pipeline;
@@ -19,7 +17,6 @@ public sealed class FileSetSyncService : DashboardClientBase, IFileSetSyncServic
 
     public FileSetSyncService(
         HttpClient http,
-        StorageResolver storages,
         IOptions<List<FileSetConfig>> fileSets,
         IOptions<AgentSettings> settings,
         IDashboardAuthGuard authGuard,
@@ -27,7 +24,6 @@ public sealed class FileSetSyncService : DashboardClientBase, IFileSetSyncServic
         : base(settings.Value, authGuard)
     {
         _http = http;
-        _storages = storages;
         _fileSets = fileSets.Value;
         _logger = logger;
         _pipeline = BuildRetryPipeline(nameof(FileSetSyncService), logger);
@@ -99,26 +95,7 @@ public sealed class FileSetSyncService : DashboardClientBase, IFileSetSyncServic
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(fs.StorageName))
-            {
-                _logger.LogWarning(
-                    "FileSetSyncService: skipping file set '{Name}' — StorageName is empty.", fs.Name);
-                continue;
-            }
-
-            if (!_storages.TryResolve(fs.StorageName, out _))
-            {
-                _logger.LogWarning(
-                    "FileSetSyncService: skipping file set '{Name}' — storage '{StorageName}' not configured.",
-                    fs.Name, fs.StorageName);
-                continue;
-            }
-
-            items.Add(new FileSetSyncItemDto
-            {
-                Name = fs.Name,
-                StorageName = fs.StorageName,
-            });
+            items.Add(new FileSetSyncItemDto { Name = fs.Name });
         }
 
         return new FileSetSyncRequestDto { FileSets = items };

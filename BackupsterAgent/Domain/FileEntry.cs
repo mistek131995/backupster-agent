@@ -5,4 +5,5 @@ public sealed record FileEntry(
     long Size,
     long Mtime,
     int Mode,
-    List<string> Chunks);
+    List<string> Chunks,
+    int RootIndex = 0);

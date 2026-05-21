@@ -188,6 +188,54 @@ public sealed class ManifestStoreTests
             _store.OpenReaderAsync("folder/manifest.xyz", _uploader, CancellationToken.None));
     }
 
+    [Test]
+    public async Task RoundTrip_WithRoots_PreservesRootsAndRootIndex()
+    {
+        const string folder = "db/2026-04-20_12-00-03";
+        var roots = new[] { @"C:\app\data", @"C:\app\logs" };
+
+        await using (var writer = _store.OpenWriter("mydb", "dump.key", roots))
+        {
+            await writer.AppendAsync(new FileEntry("a.bin", 10, 1700000000, 0, ["aa"], RootIndex: 0), CancellationToken.None);
+            await writer.AppendAsync(new FileEntry("b.bin", 20, 1700000001, 0, ["bb"], RootIndex: 1), CancellationToken.None);
+            await writer.CompleteAsync(_uploader, folder, CancellationToken.None);
+        }
+
+        var manifestKey = $"{folder}/manifest.json.gz.enc";
+        await using var reader = await _store.OpenReaderAsync(manifestKey, _uploader, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.Meta.SchemaVersion, Is.EqualTo(2), "writer must bump schemaVersion when roots provided");
+            Assert.That(reader.Meta.Roots, Is.EqualTo(roots));
+        });
+
+        var read = await CollectAsync(reader.ReadFilesAsync(CancellationToken.None));
+        Assert.That(read, Has.Count.EqualTo(2));
+        Assert.That(read[0].RootIndex, Is.EqualTo(0));
+        Assert.That(read[1].RootIndex, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task RoundTrip_NoRoots_StaysSchemaV1AndEmptyRoots()
+    {
+        const string folder = "db/2026-04-20_12-00-04";
+
+        await using (var writer = _store.OpenWriter("mydb", "dump.key"))
+        {
+            await writer.CompleteAsync(_uploader, folder, CancellationToken.None);
+        }
+
+        await using var reader = await _store.OpenReaderAsync(
+            $"{folder}/manifest.json.gz.enc", _uploader, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.Meta.SchemaVersion, Is.EqualTo(1));
+            Assert.That(reader.Meta.Roots, Is.Empty);
+        });
+    }
+
     private static async Task<List<FileEntry>> CollectAsync(IAsyncEnumerable<FileEntry> source)
     {
         var list = new List<FileEntry>();

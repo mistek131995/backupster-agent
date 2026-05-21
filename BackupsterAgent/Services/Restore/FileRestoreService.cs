@@ -88,36 +88,29 @@ public sealed class FileRestoreService
 
         await using var _ = reader;
 
-        string baseDir;
-        bool isAgentLandingZone;
-        try
-        {
-            (baseDir, isAgentLandingZone) = ResolveBaseDir(targetFileRoot);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "FileRestoreService: failed to resolve base directory");
-            return FileRestoreResult.Failed(
-                $"Не удалось определить папку для восстановления файлов: {ex.Message}");
-        }
+        var roots = reader.Meta.Roots;
+        var hasTarget = !string.IsNullOrWhiteSpace(targetFileRoot);
+        var fallbackToLandingZone = !hasTarget && roots.Count == 0;
 
-        if (isAgentLandingZone)
+        string? landingZoneDir = null;
+        if (fallbackToLandingZone)
         {
             try
             {
-                ResetDirectory(baseDir);
+                landingZoneDir = ResolveLandingZone();
+                ResetDirectory(landingZoneDir);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "FileRestoreService: failed to reset landing zone '{Base}'", baseDir);
+                _logger.LogError(ex, "FileRestoreService: failed to reset landing zone");
                 return FileRestoreResult.Failed(
-                    $"Не удалось очистить служебную папку восстановления '{baseDir}': {ex.Message}");
+                    $"Не удалось очистить служебную папку восстановления: {ex.Message}");
             }
         }
 
         _logger.LogInformation(
-            "FileRestoreService: restoring files from manifest '{ManifestKey}' into '{Base}' (landingZone={Landing})",
-            manifestKey, baseDir, isAgentLandingZone);
+            "FileRestoreService: restoring files from manifest '{ManifestKey}'. Roots: {RootsCount}, target: '{Target}', fallback: {Fallback}",
+            manifestKey, roots.Count, targetFileRoot ?? "(none)", fallbackToLandingZone);
 
         var restored = 0;
         var failed = new List<(string Path, string Reason)>();
@@ -135,6 +128,18 @@ public sealed class FileRestoreService
                     unit: "files",
                     currentItem: entry.Path);
                 processed++;
+
+                string baseDir;
+                try
+                {
+                    baseDir = ResolveBaseDirForEntry(entry, roots, targetFileRoot, landingZoneDir);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "FileRestoreService: failed to resolve base for entry '{Path}'", entry.Path);
+                    failed.Add((entry.Path, ClassifyFileError(ex)));
+                    continue;
+                }
 
                 try
                 {
@@ -240,23 +245,58 @@ public sealed class FileRestoreService
         }
     }
 
-    private (string BaseDir, bool IsAgentLandingZone) ResolveBaseDir(string? targetFileRoot)
+    private string ResolveLandingZone()
     {
-        if (!string.IsNullOrWhiteSpace(targetFileRoot))
-        {
-            var absolute = Path.GetFullPath(targetFileRoot);
-            return (absolute, false);
-        }
-
         var raw = string.IsNullOrWhiteSpace(_restoreSettings.FileRestoreBasePath)
             ? "./restore-files"
             : _restoreSettings.FileRestoreBasePath;
 
-        var defaultBase = Path.IsPathRooted(raw)
+        return Path.IsPathRooted(raw)
             ? Path.GetFullPath(raw)
             : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, raw));
+    }
 
-        return (defaultBase, true);
+    internal string ResolveBaseDirForEntry(
+        FileEntry entry,
+        IReadOnlyList<string> roots,
+        string? targetFileRoot,
+        string? landingZoneDir)
+    {
+        if (!string.IsNullOrWhiteSpace(targetFileRoot))
+        {
+            var target = Path.GetFullPath(targetFileRoot);
+
+            if (roots.Count > 1 && entry.RootIndex >= 0 && entry.RootIndex < roots.Count)
+                return Path.Combine(target, SafeRootBucket(roots[entry.RootIndex], entry.RootIndex));
+
+            return target;
+        }
+
+        if (roots.Count > 0 && entry.RootIndex >= 0 && entry.RootIndex < roots.Count)
+            return Path.GetFullPath(roots[entry.RootIndex]);
+
+        if (landingZoneDir is null)
+            throw new InvalidDataException(
+                $"Запись манифеста ссылается на rootIndex={entry.RootIndex} вне диапазона (Roots={roots.Count}), а fallback-папка не задана.");
+
+        return landingZoneDir;
+    }
+
+    internal static string SafeRootBucket(string root, int rootIndex)
+    {
+        var trimmed = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var name = Path.GetFileName(trimmed);
+
+        if (string.IsNullOrWhiteSpace(name))
+            return $"root_{rootIndex}";
+
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitized = new StringBuilder(name.Length);
+        foreach (var ch in name)
+            sanitized.Append(invalid.Contains(ch) ? '_' : ch);
+
+        var safe = sanitized.ToString().Trim('.', ' ');
+        return string.IsNullOrEmpty(safe) ? $"root_{rootIndex}" : $"{safe}_{rootIndex}";
     }
 
     private void ResetDirectory(string path)

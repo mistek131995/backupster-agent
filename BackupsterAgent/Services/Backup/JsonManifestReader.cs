@@ -221,6 +221,22 @@ public sealed class JsonManifestReader : IManifestReader
                 case "createdAtUtc":
                     meta.CreatedAtUtc = reader.GetDateTime();
                     break;
+                case "roots":
+                    if (reader.TokenType != JsonTokenType.StartArray)
+                        throw new InvalidDataException($"'roots' must be an array, got {reader.TokenType}.");
+                    while (true)
+                    {
+                        if (!reader.Read())
+                        {
+                            state = lastSafeState;
+                            return new MetaParseResult(needMoreData: true, filesFound: false, consumed: lastSafePosition);
+                        }
+                        if (reader.TokenType == JsonTokenType.EndArray) break;
+                        if (reader.TokenType != JsonTokenType.String)
+                            throw new InvalidDataException($"'roots' must contain strings, got {reader.TokenType}.");
+                        meta.Roots.Add(reader.GetString() ?? string.Empty);
+                    }
+                    break;
                 default:
                     if (!reader.TrySkip())
                     {
@@ -304,8 +320,9 @@ public sealed class JsonManifestReader : IManifestReader
         public DateTime CreatedAtUtc { get; set; }
         public string Database { get; set; } = string.Empty;
         public string DumpObjectKey { get; set; } = string.Empty;
+        public List<string> Roots { get; } = new();
 
-        public ManifestMeta Build() => new(SchemaVersion, CreatedAtUtc, Database, DumpObjectKey);
+        public ManifestMeta Build() => new(SchemaVersion, CreatedAtUtc, Database, DumpObjectKey, Roots);
     }
 
     private readonly struct MetaParseResult

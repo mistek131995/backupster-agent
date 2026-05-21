@@ -27,7 +27,8 @@ public sealed class LegacyJsonManifestReader : IManifestReader
             SchemaVersion: 0,
             CreatedAtUtc: manifest.CreatedAtUtc,
             Database: manifest.Database,
-            DumpObjectKey: manifest.DumpObjectKey);
+            DumpObjectKey: manifest.DumpObjectKey,
+            Roots: (IReadOnlyList<string>?)manifest.Roots ?? Array.Empty<string>());
     }
 
     public static async Task<LegacyJsonManifestReader> OpenAsync(

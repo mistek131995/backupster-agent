@@ -14,26 +14,26 @@
 ## Прогоны
 
 | Тест-кейс | 1.4.0 |
-|---|---|
-| **Бэкап** | |
+|---|--|
+| **Бэкап** |  |
 | Postgres — logical | ✓ |
 | Postgres — physical | ✓ |
 | Postgres — physical differential | ✓ |
-| MySQL — logical | |
+| MySQL — logical | ✓ |
 | MSSQL — logical | ✓ |
 | MSSQL — physical | ✓ |
 | MSSQL — physical differential | ✓ |
-| File-set | |
+| File-set | ✓ |
 | **Восстановление** | |
-| Postgres — logical | |
+| Postgres — logical | ✓ |
 | Postgres — physical | ✓ |
 | Postgres — physical differential | ✓ |
-| MySQL — logical | |
+| MySQL — logical | ✓ |
 | MSSQL — logical | ✓ |
 | MSSQL — physical | ✓ |
 | MSSQL — physical differential | ✓ |
-| БД + файлы вместе | |
-| File-set only | |
+| БД + файлы вместе | ✓ |
+| File-set only | ✓ |
 | **Хранилища** | |
 | S3 — upload | ✓ |
 | S3 — download | ✓ |
@@ -43,5 +43,5 @@
 | Azure Blob — download | |
 | WebDAV — upload | ✓ |
 | WebDAV — download | ✓ |
-| LocalFs — upload | |
-| LocalFs — download | |
+| LocalFs — upload | ✓ |
+| LocalFs — download | ✓ |

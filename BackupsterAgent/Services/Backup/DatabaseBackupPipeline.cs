@@ -194,11 +194,14 @@ public sealed class DatabaseBackupPipeline
 
             reporter.Report(BackupStage.CapturingFiles);
 
+            var normalizedRoots = NormalizeRoots(config.FilePaths);
+
             await using var writer = _manifestStore.OpenWriter(
                 config.Database,
-                dumpObjectKey ?? string.Empty);
+                dumpObjectKey ?? string.Empty,
+                roots: normalizedRoots);
 
-            var capture = await _fileBackup.CaptureAsync(config.FilePaths, uploader, writer, reporter, ct);
+            var capture = await _fileBackup.CaptureAsync(normalizedRoots, uploader, writer, reporter, ct);
             var manifestKey = await writer.CompleteAsync(uploader, backupFolder, ct);
 
             var metrics = new FileBackupMetrics
@@ -267,5 +270,16 @@ public sealed class DatabaseBackupPipeline
         {
             _logger.LogWarning(ex, "Could not delete local file '{Path}'", path);
         }
+    }
+
+    private static IReadOnlyList<string> NormalizeRoots(IReadOnlyList<string> raw)
+    {
+        var result = new List<string>(raw.Count);
+        foreach (var path in raw)
+        {
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            result.Add(Path.GetFullPath(path));
+        }
+        return result;
     }
 }
