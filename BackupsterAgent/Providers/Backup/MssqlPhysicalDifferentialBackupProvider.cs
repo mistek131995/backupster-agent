@@ -73,6 +73,14 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
         {
             await cmd.ExecuteNonQueryAsync(ct);
         }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation(
+                "MSSQL differential backup cancelled for '{Database}', attempting cleanup of '{Path}'",
+                config.Database, agentFilePath);
+            TryDeleteFile(agentFilePath);
+            throw;
+        }
         catch (SqlException ex) when (ex.Number == 3035)
         {
             throw new InvalidOperationException(
@@ -115,10 +123,14 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
         if (baseBackupAt is null)
         {
             _logger.LogWarning(
-                "MSSQL differential chain check skipped for '{Database}': dashboard did not provide BaseBackupAt (likely older dashboard version). " +
+                "MSSQL differential chain check refused for '{Database}': dashboard did not provide BaseBackupAt. " +
                 "Cannot detect external FULL backups that would re-base the differential chain.",
                 database);
-            return;
+
+            throw new InvalidOperationException(
+                $"Дифференциальный бэкап БД '{database}' отменён: дашборд не передал отметку времени родительского полного бэкапа, " +
+                "поэтому невозможно проверить, что цепочка восстановления не была перебита сторонним полным бэкапом. " +
+                "Обновите дашборд до версии 1.4.0 или выше, либо запустите новый полный бэкап через Backupster.");
         }
 
         const string sql = @"
@@ -161,5 +173,11 @@ WHERE database_name = @db
                 "а Backupster ожидал бы свой — цепочка восстановления была бы повреждена. " +
                 "Запустите новый полный бэкап через Backupster, чтобы восстановить цепочку.");
         }
+    }
+
+    private void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Could not delete partial backup file '{Path}'", path); }
     }
 }

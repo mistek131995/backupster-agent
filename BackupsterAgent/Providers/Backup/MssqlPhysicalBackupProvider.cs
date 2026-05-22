@@ -90,7 +90,18 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
         cmd.StatementCompleted += (_, e) =>
             _logger.LogDebug("MSSQL backup progress: {RecordsAffected} rows affected", e.RecordCount);
 
-        await cmd.ExecuteNonQueryAsync(ct);
+        try
+        {
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation(
+                "MSSQL physical backup cancelled for '{Database}', attempting cleanup of '{Path}'",
+                config.Database, agentFilePath);
+            TryDeleteFile(agentFilePath);
+            throw;
+        }
 
         sw.Stop();
 
@@ -126,4 +137,10 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
             TrustServerCertificate = true,
             Encrypt = true,
         }.ToString();
+
+    private void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Could not delete partial backup file '{Path}'", path); }
+    }
 }
