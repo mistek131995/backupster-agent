@@ -89,7 +89,7 @@ SELECT IS_MEMBER('db_owner')     AS is_owner,
             TryDeleteFile(outputFile);
             logger.LogError(ex, "DacFx ExportBacpac failed for database '{Database}'", config.Database);
             throw new InvalidOperationException(
-                $"Ошибка экспорта MSSQL logical бэкапа БД '{config.Database}': {ex.Message}");
+                $"Ошибка экспорта MSSQL logical-бэкапа БД '{config.Database}'. Подробности — в логах агента.");
         }
         finally
         {

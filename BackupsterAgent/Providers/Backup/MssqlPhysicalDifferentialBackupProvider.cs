@@ -134,12 +134,19 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
         }
 
         const string sql = @"
-SELECT COUNT(*) FROM msdb.dbo.backupset
+SELECT
+    SUM(CASE
+        WHEN DATEADD(MINUTE, DATEDIFF(MINUTE, GETDATE(), GETUTCDATE()), backup_finish_date)
+             BETWEEN DATEADD(SECOND, -120, @baseUtc) AND DATEADD(SECOND, 120, @baseUtc)
+        THEN 1 ELSE 0 END) AS parent_count,
+    SUM(CASE
+        WHEN DATEADD(MINUTE, DATEDIFF(MINUTE, GETDATE(), GETUTCDATE()), backup_finish_date)
+             > DATEADD(SECOND, 60, @baseUtc)
+        THEN 1 ELSE 0 END) AS foreign_count
+FROM msdb.dbo.backupset
 WHERE database_name = @db
   AND type = 'D'
-  AND is_copy_only = 0
-  AND DATEADD(MINUTE, DATEDIFF(MINUTE, GETDATE(), GETUTCDATE()), backup_finish_date) >
-      DATEADD(SECOND, 60, @baseUtc);";
+  AND is_copy_only = 0;";
 
         var connectionString = new SqlConnectionStringBuilder
         {
@@ -151,6 +158,7 @@ WHERE database_name = @db
             Encrypt = true,
         }.ConnectionString;
 
+        int parentCount;
         int foreignCount;
         await using (var conn = new SqlConnection(connectionString))
         {
@@ -158,7 +166,30 @@ WHERE database_name = @db
             await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 30 };
             cmd.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = database });
             cmd.Parameters.Add(new SqlParameter("@baseUtc", System.Data.SqlDbType.DateTime2) { Value = baseBackupAt.Value });
-            foreignCount = (int)(await cmd.ExecuteScalarAsync(ct) ?? 0);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                parentCount = 0;
+                foreignCount = 0;
+            }
+            else
+            {
+                parentCount = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+                foreignCount = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+            }
+        }
+
+        if (parentCount == 0)
+        {
+            _logger.LogWarning(
+                "MSSQL differential chain check refused for '{Database}': parent FULL record not found in msdb around BaseBackupAt={BaseAt:o} (likely msdb history was purged).",
+                database, baseBackupAt.Value);
+
+            throw new InvalidOperationException(
+                $"Дифференциальный бэкап БД '{database}' отменён: в служебной базе msdb отсутствует запись о родительском полном бэкапе. " +
+                "Скорее всего, история msdb была очищена системной задачей (sp_delete_backuphistory или maintenance plan), " +
+                "поэтому невозможно достоверно проверить, не привязан ли DIFF к стороннему полному бэкапу. " +
+                "Запустите новый полный бэкап через Backupster, чтобы восстановить цепочку.");
         }
 
         if (foreignCount > 0)
