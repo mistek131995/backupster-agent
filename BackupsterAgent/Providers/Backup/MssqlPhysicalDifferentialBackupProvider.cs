@@ -8,6 +8,8 @@ namespace BackupsterAgent.Providers.Backup;
 
 public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBackupProvider
 {
+    private const int DifferentialChainLockTimeoutMs = 60_000;
+
     private readonly ILogger<MssqlPhysicalDifferentialBackupProvider> _logger;
     private readonly MssqlPhysicalBackupProvider _fullProvider;
 
@@ -44,12 +46,6 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
             "SQL path: '{SqlPath}', Agent path: '{AgentPath}', BaseRecordId: '{BaseRecordId}'",
             config.Database, connection.Host, connection.Port, sqlFilePath, agentFilePath, context.BaseBackupRecordId);
 
-        await EnsureNoForeignFullSinceBaseAsync(
-            connection,
-            config.Database,
-            context.BaseDumpObjectKey,
-            ct);
-
         var escapedDb = config.Database.Replace("]", "]]");
         var escapedPath = sqlFilePath.Replace("'", "''");
         var tsql = $"BACKUP DATABASE [{escapedDb}] TO DISK = N'{escapedPath}' WITH DIFFERENTIAL, FORMAT, INIT, STATS = 10;";
@@ -64,10 +60,17 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
             Encrypt = true,
         }.ConnectionString;
 
-        var sw = Stopwatch.StartNew();
-
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(ct);
+
+        await AcquireDifferentialChainLockAsync(conn, config.Database, ct);
+        await EnsureNoForeignFullSinceBaseAsync(
+            conn,
+            config.Database,
+            context.BaseDumpObjectKey,
+            ct);
+
+        var sw = Stopwatch.StartNew();
 
         await using var cmd = new SqlCommand(tsql, conn) { CommandTimeout = 0 };
         cmd.StatementCompleted += (_, e) =>
@@ -76,6 +79,33 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
         try
         {
             await cmd.ExecuteNonQueryAsync(ct);
+
+            ct.ThrowIfCancellationRequested();
+
+            sw.Stop();
+
+            if (!File.Exists(agentFilePath))
+            {
+                throw new InvalidOperationException(
+                    $"Файл дифференциального бэкапа '{agentFilePath}' недоступен на хосте агента. " +
+                    "Проверьте, что SharedBackupPath и AgentBackupPath указывают на один и тот же каталог.");
+            }
+
+            var sizeBytes = new FileInfo(agentFilePath).Length;
+
+            ct.ThrowIfCancellationRequested();
+
+            _logger.LogInformation(
+                "MSSQL differential backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
+                agentFilePath, sizeBytes, sw.ElapsedMilliseconds);
+
+            return new BackupResult
+            {
+                FilePath = agentFilePath,
+                SizeBytes = sizeBytes,
+                DurationMs = sw.ElapsedMilliseconds,
+                Success = true,
+            };
         }
         catch (OperationCanceledException)
         {
@@ -93,33 +123,10 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
                 "Возможно, полный бэкап был сделан другим инструментом или удалён напрямую из msdb. " +
                 "Запустите сначала полный бэкап.", ex);
         }
-
-        sw.Stop();
-
-        if (!File.Exists(agentFilePath))
-        {
-            throw new InvalidOperationException(
-                $"Файл дифференциального бэкапа '{agentFilePath}' недоступен на хосте агента. " +
-                "Проверьте, что SharedBackupPath и AgentBackupPath указывают на один и тот же каталог.");
-        }
-
-        var sizeBytes = new FileInfo(agentFilePath).Length;
-
-        _logger.LogInformation(
-            "MSSQL differential backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
-            agentFilePath, sizeBytes, sw.ElapsedMilliseconds);
-
-        return new BackupResult
-        {
-            FilePath = agentFilePath,
-            SizeBytes = sizeBytes,
-            DurationMs = sw.ElapsedMilliseconds,
-            Success = true,
-        };
     }
 
     private async Task EnsureNoForeignFullSinceBaseAsync(
-        ConnectionConfig connection,
+        SqlConnection conn,
         string database,
         string? baseDumpObjectKey,
         CancellationToken ct)
@@ -160,41 +167,27 @@ SELECT
             SELECT COUNT_BIG(*)
             FROM msdb.dbo.backupset
             WHERE database_name = @db
-              AND type = 'D'
+              AND type IN ('D', 'F', 'P')
               AND is_copy_only = 0
               AND backup_set_id > @parent_backup_set_id
         )
     END AS foreign_count;";
 
-        var connectionString = new SqlConnectionStringBuilder
-        {
-            DataSource = $"{connection.Host},{connection.Port}",
-            InitialCatalog = "msdb",
-            UserID = connection.Username,
-            Password = connection.Password,
-            TrustServerCertificate = true,
-            Encrypt = true,
-        }.ConnectionString;
-
         int parentCount;
         long foreignCount;
-        await using (var conn = new SqlConnection(connectionString))
+        await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 30 };
+        cmd.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = database });
+        cmd.Parameters.Add(new SqlParameter("@parentFileName", System.Data.SqlDbType.NVarChar, 260) { Value = parentBackupFileName });
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
         {
-            await conn.OpenAsync(ct);
-            await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 30 };
-            cmd.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = database });
-            cmd.Parameters.Add(new SqlParameter("@parentFileName", System.Data.SqlDbType.NVarChar, 260) { Value = parentBackupFileName });
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct))
-            {
-                parentCount = 0;
-                foreignCount = 0;
-            }
-            else
-            {
-                parentCount = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
-                foreignCount = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
-            }
+            parentCount = 0;
+            foreignCount = 0;
+        }
+        else
+        {
+            parentCount = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+            foreignCount = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
         }
 
         if (parentCount == 0)
@@ -213,15 +206,51 @@ SELECT
         if (foreignCount > 0)
         {
             _logger.LogError(
-                "MSSQL differential chain check failed for '{Database}': {Count} foreign FULL backup(s) detected in msdb after parent file '{ParentFile}'.",
+                "MSSQL differential chain check failed for '{Database}': {Count} foreign full-like backup(s) detected in msdb after parent file '{ParentFile}'.",
                 database, foreignCount, parentBackupFileName);
 
             throw new InvalidOperationException(
-                $"Дифференциальный бэкап БД '{database}' отменён: в msdb обнаружен(ы) сторонний(е) полный(е) бэкап(ы), " +
+                $"Дифференциальный бэкап БД '{database}' отменён: в msdb обнаружен(ы) сторонний(е) полный(е), partial или file/filegroup бэкап(ы), " +
                 "сделанные после родительского полного бэкапа Backupster. SQL Server привязал бы DIFF к стороннему FULL, " +
                 "а Backupster ожидал бы свой — цепочка восстановления была бы повреждена. " +
                 "Запустите новый полный бэкап через Backupster, чтобы восстановить цепочку.");
         }
+    }
+
+    private async Task AcquireDifferentialChainLockAsync(SqlConnection conn, string database, CancellationToken ct)
+    {
+        const string sql = @"
+DECLARE @result INT;
+EXEC @result = sys.sp_getapplock
+    @Resource = @resource,
+    @LockMode = 'Exclusive',
+    @LockOwner = 'Session',
+    @LockTimeout = @timeoutMs;
+SELECT @result;";
+
+        var resource = $"Backupster:MSSQL:DIFF:{database}";
+
+        await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 30 };
+        cmd.Parameters.Add(new SqlParameter("@resource", System.Data.SqlDbType.NVarChar, 255) { Value = resource });
+        cmd.Parameters.Add(new SqlParameter("@timeoutMs", System.Data.SqlDbType.Int) { Value = DifferentialChainLockTimeoutMs });
+
+        var resultObj = await cmd.ExecuteScalarAsync(ct);
+        var result = resultObj is int value ? value : -999;
+        if (result >= 0)
+        {
+            _logger.LogDebug(
+                "MSSQL differential chain app lock acquired for '{Database}'. Resource: '{Resource}', Result: {Result}",
+                database, resource, result);
+            return;
+        }
+
+        _logger.LogWarning(
+            "MSSQL differential chain app lock refused for '{Database}'. Resource: '{Resource}', Result: {Result}",
+            database, resource, result);
+
+        throw new InvalidOperationException(
+            $"Дифференциальный бэкап БД '{database}' отменён: не удалось получить эксклюзивную блокировку цепочки MSSQL в течение {DifferentialChainLockTimeoutMs / 1000} секунд. " +
+            "Вероятно, для этой БД уже выполняется другой бэкап Backupster. Повторите запуск позже.");
     }
 
     private static string? ResolveParentBackupFileName(string? baseDumpObjectKey)

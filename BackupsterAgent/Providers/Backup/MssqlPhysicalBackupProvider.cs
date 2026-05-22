@@ -93,6 +93,33 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
         try
         {
             await cmd.ExecuteNonQueryAsync(ct);
+
+            ct.ThrowIfCancellationRequested();
+
+            sw.Stop();
+
+            if (!File.Exists(agentFilePath))
+            {
+                throw new InvalidOperationException(
+                    $"Файл бэкапа '{agentFilePath}' недоступен на хосте агента. " +
+                    "Проверьте, что SharedBackupPath и AgentBackupPath указывают на один и тот же каталог.");
+            }
+
+            var sizeBytes = new FileInfo(agentFilePath).Length;
+
+            ct.ThrowIfCancellationRequested();
+
+            _logger.LogInformation(
+                "MSSQL physical backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
+                agentFilePath, sizeBytes, sw.ElapsedMilliseconds);
+
+            return new BackupResult
+            {
+                FilePath = agentFilePath,
+                SizeBytes = sizeBytes,
+                DurationMs = sw.ElapsedMilliseconds,
+                Success = true,
+            };
         }
         catch (OperationCanceledException)
         {
@@ -102,29 +129,6 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
             TryDeleteFile(agentFilePath);
             throw;
         }
-
-        sw.Stop();
-
-        if (!File.Exists(agentFilePath))
-        {
-            throw new InvalidOperationException(
-                $"Файл бэкапа '{agentFilePath}' недоступен на хосте агента. " +
-                "Проверьте, что SharedBackupPath и AgentBackupPath указывают на один и тот же каталог.");
-        }
-
-        var sizeBytes = new FileInfo(agentFilePath).Length;
-
-        _logger.LogInformation(
-            "MSSQL physical backup completed successfully. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
-            agentFilePath, sizeBytes, sw.ElapsedMilliseconds);
-
-        return new BackupResult
-        {
-            FilePath = agentFilePath,
-            SizeBytes = sizeBytes,
-            DurationMs = sw.ElapsedMilliseconds,
-            Success = true,
-        };
     }
 
     private static string BuildConnectionString(ConnectionConfig connection, string database) =>

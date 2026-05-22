@@ -5,6 +5,7 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Restore;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
@@ -95,7 +96,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         var stagingPath = Path.Combine(parent, $"{leaf}.new-{guid}");
         var oldPath = Path.Combine(parent, $"{leaf}.old-{guid}");
         var failedPath = Path.Combine(parent, $"{leaf}.failed-{guid}");
-        var startLog = Path.Combine(Path.GetTempPath(), $"backupster-pg-start-{Guid.NewGuid():N}.log");
+        var startLog = BuildRestoreTempPath("backupster-pg-start") + ".log";
 
         Directory.CreateDirectory(stagingPath);
         WriteMarkerFile(stagingPath);
@@ -209,7 +210,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
                 $"Восстановление не удалось завершить автоматически: {rollbackError} Кластер остановлен.",
                 originalException);
 
-        var recoveryLog = Path.Combine(Path.GetTempPath(), $"backupster-pg-recovery-{Guid.NewGuid():N}.log");
+        var recoveryLog = BuildRestoreTempPath("backupster-pg-recovery") + ".log";
         try
         {
             _logger.LogInformation("Restarting cluster on original PGDATA at '{PgDataPath}'", pgDataPath);
@@ -464,7 +465,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
             "Detected pgbase container (ustar magic) at '{Path}'. Unpacking container, then extracting base and pg_wal into '{TargetDir}'.",
             dumpPath, targetDir);
 
-        var workDir = Path.Combine(Path.GetTempPath(), $"backupster-pgbase-{Guid.NewGuid():N}");
+        var workDir = BuildRestoreTempPath("backupster-pgbase");
         Directory.CreateDirectory(workDir);
 
         try
@@ -762,6 +763,13 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         {
             _logger.LogWarning(ex, "Failed to delete file '{Path}'", path);
         }
+    }
+
+    private string BuildRestoreTempPath(string prefix)
+    {
+        var root = DatabaseRestoreService.BuildTempRoot(_restoreSettings.TempPath);
+        Directory.CreateDirectory(root);
+        return Path.Combine(root, $"{prefix}-{Guid.NewGuid():N}");
     }
 
     private static string BuildConnectionString(ConnectionConfig connection) =>
