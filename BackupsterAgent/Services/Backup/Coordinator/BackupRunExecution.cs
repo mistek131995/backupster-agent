@@ -9,5 +9,4 @@ public sealed record BackupRunExecution(
     DateTime StartedAt,
     IProgressReporter<BackupStage> Reporter,
     string? BaseDumpObjectKey = null,
-    string? BasePgBaseManifestKey = null,
-    DateTime? BaseBackupAt = null);
+    string? BasePgBaseManifestKey = null);

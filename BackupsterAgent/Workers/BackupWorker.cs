@@ -230,7 +230,7 @@ public sealed class BackupWorker : BackgroundService
                         case LastSuccessfulLookupOutcome.Found:
                             baseBackupRecordId = lookup.Body!.Id;
                             _logger.LogInformation(
-                                "[{Index}/{Total}] Differential backup base resolved. Database: '{Database}', BaseRecordId: {BaseRecordId}, BaseBackupAt: {BackupAt:u}",
+                                "[{Index}/{Total}] Differential backup base resolved. Database: '{Database}', BaseRecordId: {BaseRecordId}, ParentBackupAt: {BackupAt:u}",
                                 i + 1, due.Count, config.Database, lookup.Body!.Id, lookup.Body!.BackupAt);
                             break;
 

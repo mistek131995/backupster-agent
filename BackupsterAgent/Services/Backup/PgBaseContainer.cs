@@ -21,11 +21,42 @@ public static class PgBaseContainer
             throw new FileNotFoundException(
                 $"Файл WAL для упаковки не найден: '{pgWalTarGzPath}'.", pgWalTarGzPath);
 
-        await using var output = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        await using var writer = new TarWriter(output, TarEntryFormat.Pax, leaveOpen: false);
+        var tmpPath = BuildTmpPath(outputPath);
 
-        await writer.WriteEntryAsync(baseTarGzPath, BaseEntryName, ct);
-        await writer.WriteEntryAsync(pgWalTarGzPath, WalEntryName, ct);
+        try
+        {
+            await using (var output = new FileStream(tmpPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            await using (var writer = new TarWriter(output, TarEntryFormat.Pax, leaveOpen: false))
+            {
+                await writer.WriteEntryAsync(baseTarGzPath, BaseEntryName, ct);
+                await writer.WriteEntryAsync(pgWalTarGzPath, WalEntryName, ct);
+            }
+
+            File.Move(tmpPath, outputPath, overwrite: true);
+        }
+        finally
+        {
+            TryDeleteFile(tmpPath);
+        }
+    }
+
+    public static void MoveFileIntoPlace(string sourcePath, string outputPath)
+    {
+        if (!File.Exists(sourcePath))
+            throw new FileNotFoundException(
+                $"Файл для перемещения не найден: '{sourcePath}'.", sourcePath);
+
+        var tmpPath = BuildTmpPath(outputPath);
+
+        try
+        {
+            File.Move(sourcePath, tmpPath, overwrite: false);
+            File.Move(tmpPath, outputPath, overwrite: true);
+        }
+        finally
+        {
+            TryDeleteFile(tmpPath);
+        }
     }
 
     public static async Task<PgBaseContainerEntries> ExtractAsync(
@@ -79,6 +110,15 @@ public static class PgBaseContainer
                 "Возможно, файл повреждён или создан несовместимой версией агента.");
 
         return new PgBaseContainerEntries(baseTarGzPath, pgWalTarGzPath);
+    }
+
+    private static string BuildTmpPath(string outputPath) =>
+        $"{outputPath}.tmp-{Guid.NewGuid():N}";
+
+    private static void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch { }
     }
 }
 

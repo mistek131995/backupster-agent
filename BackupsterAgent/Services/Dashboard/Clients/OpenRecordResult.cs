@@ -4,5 +4,4 @@ public sealed record OpenRecordResult(
     DashboardAvailability Status,
     Guid? Id = null,
     string? BaseDumpObjectKey = null,
-    string? BasePgBaseManifestKey = null,
-    DateTime? BaseBackupAt = null);
+    string? BasePgBaseManifestKey = null);

@@ -77,11 +77,10 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
 
             await InsertRowsAsync(_connection, _srcDb, PostFullRows, _cts.Token);
 
-            var baseAt = await ReadLastFullBackupFinishUtcAsync(_connection, _srcDb, _cts.Token);
             var diffCtx = new DifferentialBackupContext
             {
                 BaseBackupRecordId = Guid.NewGuid(),
-                BaseBackupAt = baseAt,
+                BaseDumpObjectKey = BuildDumpObjectKey(fullResult.FilePath),
             };
             var diffResult = await diffProvider.BackupAsync(config, _connection, diffCtx, _cts.Token);
             try
@@ -135,11 +134,10 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
         {
             await InsertRowsAsync(_connection, _srcDb, PostFullRows, _cts.Token);
 
-            var baseAt = await ReadLastFullBackupFinishUtcAsync(_connection, _srcDb, _cts.Token);
             var diffCtx = new DifferentialBackupContext
             {
                 BaseBackupRecordId = Guid.NewGuid(),
-                BaseBackupAt = baseAt,
+                BaseDumpObjectKey = BuildDumpObjectKey(fullResult.FilePath),
             };
             var diffResult = await diffProvider.BackupAsync(config, _connection, diffCtx, _cts.Token);
             try
@@ -344,40 +342,8 @@ END";
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    private static async Task<DateTime> ReadLastFullBackupFinishUtcAsync(
-        ConnectionConfig connection, string dbName, CancellationToken ct)
-    {
-        const string sql = @"
-SELECT TOP 1
-    DATEADD(MINUTE, DATEDIFF(MINUTE, GETDATE(), GETUTCDATE()), backup_finish_date)
-FROM msdb.dbo.backupset
-WHERE database_name = @db
-  AND type = 'D'
-  AND is_copy_only = 0
-ORDER BY backup_finish_date DESC;";
-
-        var connectionString = new SqlConnectionStringBuilder
-        {
-            DataSource = $"{connection.Host},{connection.Port}",
-            InitialCatalog = "msdb",
-            UserID = connection.Username,
-            Password = connection.Password,
-            Encrypt = true,
-            TrustServerCertificate = true,
-        }.ConnectionString;
-
-        await using var conn = new SqlConnection(connectionString);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 30 };
-        cmd.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = dbName });
-        var result = await cmd.ExecuteScalarAsync(ct);
-        if (result is null || result is DBNull)
-        {
-            throw new InvalidOperationException(
-                $"msdb has no FULL backup record for '{dbName}'; full backup must complete before reading its finish time.");
-        }
-        return DateTime.SpecifyKind((DateTime)result, DateTimeKind.Utc);
-    }
+    private static string BuildDumpObjectKey(string bakPath) =>
+        $"integration/{Path.GetFileName(bakPath)}.enc";
 
     private static string BuildMasterConnectionString(ConnectionConfig connection) =>
         BuildConnectionString(connection, "master");

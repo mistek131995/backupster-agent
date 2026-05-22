@@ -82,6 +82,26 @@ public sealed class PgBaseContainerTests
     }
 
     [Test]
+    public async Task WriteAsync_Cancelled_DoesNotLeaveFinalOrTmpFile()
+    {
+        var containerPath = Path.Combine(_workDir, "out.pgbase.tar");
+        var baseSrc = Path.Combine(_workDir, "base.tar.gz");
+        var walSrc = Path.Combine(_workDir, "pg_wal.tar.gz");
+        await File.WriteAllBytesAsync(baseSrc, RandomNumberGenerator.GetBytes(16 * 1024));
+        await File.WriteAllBytesAsync(walSrc, RandomNumberGenerator.GetBytes(16 * 1024));
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        Assert.That(
+            () => PgBaseContainer.WriteAsync(containerPath, baseSrc, walSrc, cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+
+        Assert.That(File.Exists(containerPath), Is.False);
+        Assert.That(Directory.GetFiles(_workDir, "out.pgbase.tar.tmp-*"), Is.Empty);
+    }
+
+    [Test]
     public async Task ExtractAsync_ContainerMissingBaseEntry_Throws()
     {
         var containerPath = Path.Combine(_workDir, "broken.pgbase.tar");

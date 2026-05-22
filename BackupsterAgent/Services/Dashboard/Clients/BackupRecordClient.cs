@@ -70,8 +70,7 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
                     DashboardAvailability.Ok,
                     body.Id,
                     body.BaseDumpObjectKey,
-                    body.BasePgBaseManifestKey,
-                    body.BaseBackupAt);
+                    body.BasePgBaseManifestKey);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

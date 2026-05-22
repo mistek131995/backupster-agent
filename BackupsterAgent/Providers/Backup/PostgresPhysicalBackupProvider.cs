@@ -185,7 +185,7 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
             string? manifestPath = null;
             if (File.Exists(manifestSource))
             {
-                File.Move(manifestSource, manifestOutputFile, overwrite: true);
+                PgBaseContainer.MoveFileIntoPlace(manifestSource, manifestOutputFile);
                 manifestPath = manifestOutputFile;
                 _logger.LogInformation(
                     "PostgreSQL backup_manifest captured: '{ManifestPath}'", manifestOutputFile);

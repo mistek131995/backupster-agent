@@ -130,7 +130,7 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
             string? manifestPath = null;
             if (File.Exists(manifestSource))
             {
-                File.Move(manifestSource, manifestOutputFile, overwrite: true);
+                PgBaseContainer.MoveFileIntoPlace(manifestSource, manifestOutputFile);
                 manifestPath = manifestOutputFile;
                 _logger.LogInformation(
                     "PostgreSQL differential backup_manifest captured: '{ManifestPath}'", manifestOutputFile);

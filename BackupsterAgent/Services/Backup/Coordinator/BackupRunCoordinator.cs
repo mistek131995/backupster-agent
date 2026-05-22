@@ -81,8 +81,7 @@ public sealed class BackupRunCoordinator
                     startedAt,
                     reporter,
                     openResult.BaseDumpObjectKey,
-                    openResult.BasePgBaseManifestKey,
-                    openResult.BaseBackupAt),
+                    openResult.BasePgBaseManifestKey),
                 ct);
         }
         catch (OperationCanceledException)

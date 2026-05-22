@@ -44,7 +44,11 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
             "SQL path: '{SqlPath}', Agent path: '{AgentPath}', BaseRecordId: '{BaseRecordId}'",
             config.Database, connection.Host, connection.Port, sqlFilePath, agentFilePath, context.BaseBackupRecordId);
 
-        await EnsureNoForeignFullSinceBaseAsync(connection, config.Database, context.BaseBackupAt, ct);
+        await EnsureNoForeignFullSinceBaseAsync(
+            connection,
+            config.Database,
+            context.BaseDumpObjectKey,
+            ct);
 
         var escapedDb = config.Database.Replace("]", "]]");
         var escapedPath = sqlFilePath.Replace("'", "''");
@@ -117,36 +121,50 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
     private async Task EnsureNoForeignFullSinceBaseAsync(
         ConnectionConfig connection,
         string database,
-        DateTime? baseBackupAt,
+        string? baseDumpObjectKey,
         CancellationToken ct)
     {
-        if (baseBackupAt is null)
+        var parentBackupFileName = ResolveParentBackupFileName(baseDumpObjectKey);
+        if (parentBackupFileName is null)
         {
             _logger.LogWarning(
-                "MSSQL differential chain check refused for '{Database}': dashboard did not provide BaseBackupAt. " +
+                "MSSQL differential chain check refused for '{Database}': dashboard did not provide BaseDumpObjectKey. " +
                 "Cannot detect external FULL backups that would re-base the differential chain.",
                 database);
 
             throw new InvalidOperationException(
-                $"Дифференциальный бэкап БД '{database}' отменён: дашборд не передал отметку времени родительского полного бэкапа, " +
-                "поэтому невозможно проверить, что цепочка восстановления не была перебита сторонним полным бэкапом. " +
+                $"Дифференциальный бэкап БД '{database}' отменён: дашборд не передал ключ файла родительского полного бэкапа, " +
+                "поэтому невозможно сопоставить цепочку Backupster с msdb и проверить, что она не была перебита сторонним полным бэкапом. " +
                 "Обновите дашборд до версии 1.4.0 или выше, либо запустите новый полный бэкап через Backupster.");
         }
 
         const string sql = @"
+DECLARE @parent_backup_set_id INT;
+
+SELECT TOP (1)
+    @parent_backup_set_id = bs.backup_set_id
+FROM msdb.dbo.backupset bs
+INNER JOIN msdb.dbo.backupmediafamily bmf
+    ON bmf.media_set_id = bs.media_set_id
+WHERE bs.database_name = @db
+  AND bs.type = 'D'
+  AND bs.is_copy_only = 0
+  AND RIGHT(bmf.physical_device_name, LEN(@parentFileName)) = @parentFileName
+ORDER BY bs.backup_set_id DESC;
+
 SELECT
-    SUM(CASE
-        WHEN DATEADD(MINUTE, DATEDIFF(MINUTE, GETDATE(), GETUTCDATE()), backup_finish_date)
-             BETWEEN DATEADD(SECOND, -120, @baseUtc) AND DATEADD(SECOND, 120, @baseUtc)
-        THEN 1 ELSE 0 END) AS parent_count,
-    SUM(CASE
-        WHEN DATEADD(MINUTE, DATEDIFF(MINUTE, GETDATE(), GETUTCDATE()), backup_finish_date)
-             > DATEADD(SECOND, 60, @baseUtc)
-        THEN 1 ELSE 0 END) AS foreign_count
-FROM msdb.dbo.backupset
-WHERE database_name = @db
-  AND type = 'D'
-  AND is_copy_only = 0;";
+    CASE WHEN @parent_backup_set_id IS NULL THEN 0 ELSE 1 END AS parent_count,
+    CASE
+        WHEN @parent_backup_set_id IS NULL THEN CAST(0 AS BIGINT)
+        ELSE (
+            SELECT COUNT_BIG(*)
+            FROM msdb.dbo.backupset
+            WHERE database_name = @db
+              AND type = 'D'
+              AND is_copy_only = 0
+              AND backup_set_id > @parent_backup_set_id
+        )
+    END AS foreign_count;";
 
         var connectionString = new SqlConnectionStringBuilder
         {
@@ -159,13 +177,13 @@ WHERE database_name = @db
         }.ConnectionString;
 
         int parentCount;
-        int foreignCount;
+        long foreignCount;
         await using (var conn = new SqlConnection(connectionString))
         {
             await conn.OpenAsync(ct);
             await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 30 };
             cmd.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = database });
-            cmd.Parameters.Add(new SqlParameter("@baseUtc", System.Data.SqlDbType.DateTime2) { Value = baseBackupAt.Value });
+            cmd.Parameters.Add(new SqlParameter("@parentFileName", System.Data.SqlDbType.NVarChar, 260) { Value = parentBackupFileName });
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             if (!await reader.ReadAsync(ct))
             {
@@ -175,15 +193,15 @@ WHERE database_name = @db
             else
             {
                 parentCount = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
-                foreignCount = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                foreignCount = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
             }
         }
 
         if (parentCount == 0)
         {
             _logger.LogWarning(
-                "MSSQL differential chain check refused for '{Database}': parent FULL record not found in msdb around BaseBackupAt={BaseAt:o} (likely msdb history was purged).",
-                database, baseBackupAt.Value);
+                "MSSQL differential chain check refused for '{Database}': parent FULL file '{ParentFile}' not found in msdb.",
+                database, parentBackupFileName);
 
             throw new InvalidOperationException(
                 $"Дифференциальный бэкап БД '{database}' отменён: в служебной базе msdb отсутствует запись о родительском полном бэкапе. " +
@@ -195,8 +213,8 @@ WHERE database_name = @db
         if (foreignCount > 0)
         {
             _logger.LogError(
-                "MSSQL differential chain check failed for '{Database}': {Count} foreign FULL backup(s) detected in msdb after BaseBackupAt={BaseAt:o}.",
-                database, foreignCount, baseBackupAt.Value);
+                "MSSQL differential chain check failed for '{Database}': {Count} foreign FULL backup(s) detected in msdb after parent file '{ParentFile}'.",
+                database, foreignCount, parentBackupFileName);
 
             throw new InvalidOperationException(
                 $"Дифференциальный бэкап БД '{database}' отменён: в msdb обнаружен(ы) сторонний(е) полный(е) бэкап(ы), " +
@@ -204,6 +222,18 @@ WHERE database_name = @db
                 "а Backupster ожидал бы свой — цепочка восстановления была бы повреждена. " +
                 "Запустите новый полный бэкап через Backupster, чтобы восстановить цепочку.");
         }
+    }
+
+    private static string? ResolveParentBackupFileName(string? baseDumpObjectKey)
+    {
+        if (string.IsNullOrWhiteSpace(baseDumpObjectKey)) return null;
+
+        var fileName = Path.GetFileName(baseDumpObjectKey.Replace('\\', '/'));
+        if (string.IsNullOrWhiteSpace(fileName)) return null;
+
+        return fileName.EndsWith(".enc", StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^4]
+            : fileName;
     }
 
     private void TryDeleteFile(string path)

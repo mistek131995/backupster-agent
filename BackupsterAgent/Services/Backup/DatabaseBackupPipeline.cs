@@ -95,7 +95,6 @@ public sealed class DatabaseBackupPipeline
                     BaseBackupRecordId = baseBackupRecordId.Value,
                     BaseDumpObjectKey = exec.BaseDumpObjectKey,
                     BasePgBaseManifestPath = decryptedBaseManifest,
-                    BaseBackupAt = exec.BaseBackupAt,
                 };
 
                 _logger.LogInformation("Step 1/3: dump (differential)");
