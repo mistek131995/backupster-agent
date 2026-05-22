@@ -13,25 +13,25 @@
 
 ## Прогоны
 
-| Тест-кейс | 1.4.0 |
-|---|--|
-| **Бэкап** |  |
-| Postgres — logical | ✓ |
-| Postgres — physical | ✓ |
-| Postgres — physical differential | ✓ |
+| Тест-кейс | 1.4.0 | 1.4.1 |
+|---|--|--|
+| **Бэкап** |  |  |
+| Postgres — logical | ✓ | ✓ |
+| Postgres — physical | ✓ | ✓ |
+| Postgres — physical differential | ✓ | ✓ |
 | MySQL — logical | ✓ |
-| MSSQL — logical | ✓ |
-| MSSQL — physical | ✓ |
-| MSSQL — physical differential | ✓ |
+| MSSQL — logical | ✓ | ✓ |
+| MSSQL — physical | ✓ | ✓ |
+| MSSQL — physical differential | ✓ | ✓ |
 | File-set | ✓ |
 | **Восстановление** | |
-| Postgres — logical | ✓ |
-| Postgres — physical | ✓ |
-| Postgres — physical differential | ✓ |
+| Postgres — logical | ✓ | ✓ |
+| Postgres — physical | ✓ | ✓ |
+| Postgres — physical differential | ✓ | ✓ |
 | MySQL — logical | ✓ |
-| MSSQL — logical | ✓ |
-| MSSQL — physical | ✓ |
-| MSSQL — physical differential | ✓ |
+| MSSQL — logical | ✓ | ✓ |
+| MSSQL — physical | ✓ | ✓ |
+| MSSQL — physical differential | ✓ | ✓ |
 | БД + файлы вместе | ✓ |
 | File-set only | ✓ |
 | **Хранилища** | |
