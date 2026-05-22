@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Providers.Backup;
+using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -109,10 +110,12 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
         var result = await provider.BackupAsync(config, _connection, _cts.Token);
 
         Assert.That(result.Success, Is.True);
-        Assert.That(File.Exists(result.FilePath), Is.True, "tar.gz file must exist after backup");
+        Assert.That(File.Exists(result.FilePath), Is.True, "pgbase container file must exist after backup");
         Assert.That(result.SizeBytes, Is.GreaterThan(0));
+        Assert.That(Path.GetFileName(result.FilePath), Does.EndWith(".pgbase.tar"),
+            "physical backup must produce a pgbase container, not a legacy single tar.gz");
 
-        await ExtractTarGzAsync(result.FilePath, _restoreDir, _cts.Token);
+        await ExtractPgBaseContainerAsync(result.FilePath, _restoreDir, _cts.Token);
 
         Assert.That(File.Exists(Path.Combine(_restoreDir, "PG_VERSION")), Is.True,
             "extracted archive must contain PG_VERSION marker");
@@ -289,6 +292,32 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
         await using var fileStream = File.OpenRead(archivePath);
         await using var gz = new GZipStream(fileStream, CompressionMode.Decompress);
         await TarFile.ExtractToDirectoryAsync(gz, targetDir, overwriteFiles: true, ct);
+    }
+
+    private static async Task ExtractPgBaseContainerAsync(string containerPath, string targetDir, CancellationToken ct)
+    {
+        Directory.CreateDirectory(targetDir);
+
+        var workDir = Path.Combine(Path.GetTempPath(), "backupster-pgbase-itest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var entries = await PgBaseContainer.ExtractAsync(containerPath, workDir, ct);
+
+            await ExtractTarGzAsync(entries.BaseTarGzPath, targetDir, ct);
+
+            var pgWalDir = Path.Combine(targetDir, "pg_wal");
+            Directory.CreateDirectory(pgWalDir);
+            await ExtractTarGzAsync(entries.PgWalTarGzPath, pgWalDir, ct);
+        }
+        finally
+        {
+            try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
+            catch (Exception ex)
+            {
+                TestContext.Progress.WriteLine($"pgbase work dir cleanup failed for '{workDir}': {ex.Message}");
+            }
+        }
     }
 
     private static int FindFreeLoopbackPort()

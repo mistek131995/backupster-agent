@@ -13,8 +13,8 @@ public sealed class BackupDeleteService(IUploadProviderFactory uploadFactory, IL
         IProgressReporter<DeleteStage>? reporter, CancellationToken ct)
     {
         logger.LogInformation(
-            "BackupDeleteService starting. Correlation: {CorrelationId}, Storage: '{Storage}', Dump: '{Dump}', Manifest: '{Manifest}'",
-            correlationId, payload.StorageName, payload.DumpObjectKey ?? "(none)", payload.ManifestKey ?? "(none)");
+            "BackupDeleteService starting. Correlation: {CorrelationId}, Storage: '{Storage}', Dump: '{Dump}', Manifest: '{Manifest}', PgBaseManifest: '{PgBaseManifest}'",
+            correlationId, payload.StorageName, payload.DumpObjectKey ?? "(none)", payload.ManifestKey ?? "(none)", payload.PgBaseManifestKey ?? "(none)");
 
         reporter?.Report(DeleteStage.Resolving);
 
@@ -51,6 +51,27 @@ public sealed class BackupDeleteService(IUploadProviderFactory uploadFactory, IL
                     payload.ManifestKey, correlationId);
                 return BackupDeleteResult.Failed(
                     $"Не удалось удалить манифест '{payload.ManifestKey}' из хранилища: {ex.Message}");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(payload.PgBaseManifestKey))
+        {
+            reporter?.Report(DeleteStage.DeletingManifest, currentItem: payload.PgBaseManifestKey);
+            try
+            {
+                await uploader.DeleteAsync(payload.PgBaseManifestKey, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "BackupDeleteService: failed to delete PostgreSQL backup_manifest '{Key}' for {CorrelationId}",
+                    payload.PgBaseManifestKey, correlationId);
+                return BackupDeleteResult.Failed(
+                    $"Не удалось удалить PostgreSQL backup_manifest '{payload.PgBaseManifestKey}' из хранилища: {ex.Message}");
             }
         }
 

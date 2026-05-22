@@ -112,7 +112,7 @@ public sealed class PostgresPhysicalDifferentialRestoreProvider : IDifferentialR
                         "Extracting chain item #{Index} (recordId={RecordId}, mode={Mode}) to '{ExtractDir}'",
                         i, item.BackupRecordId, item.BackupMode, extractDir);
 
-                    await _fullProvider.ExtractTarGzAsync(item.DumpFilePath, extractDir, populateCt);
+                    await _fullProvider.ExtractDumpAsync(item.DumpFilePath, extractDir, populateCt);
 
                     var manifestDest = Path.Combine(extractDir, "backup_manifest");
                     File.Copy(item.PgBaseManifestFilePath!, manifestDest, overwrite: true);

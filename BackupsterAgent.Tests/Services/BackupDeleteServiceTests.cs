@@ -173,6 +173,88 @@ public sealed class BackupDeleteServiceTests
         }));
     }
 
+    [Test]
+    public async Task RunAsync_AllThreeKeys_DeletesInOrder_Manifest_PgManifest_Dump()
+    {
+        var payload = new DeleteTaskPayload
+        {
+            StorageName = StorageName,
+            ManifestKey = "folder/manifest.json.gz.enc",
+            PgBaseManifestKey = "folder/mydb_20260419_030000.backup_manifest.enc",
+            DumpObjectKey = "folder/mydb_20260419_030000.tar.gz.enc",
+        };
+
+        var result = await _service.RunAsync(Guid.NewGuid(), payload, reporter: null, CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(_uploader.DeleteOrder, Is.EqualTo(new[]
+        {
+            "folder/manifest.json.gz.enc",
+            "folder/mydb_20260419_030000.backup_manifest.enc",
+            "folder/mydb_20260419_030000.tar.gz.enc",
+        }));
+    }
+
+    [Test]
+    public async Task RunAsync_OnlyPgBaseManifestKey_DeletesOnlyIt()
+    {
+        var payload = new DeleteTaskPayload
+        {
+            StorageName = StorageName,
+            PgBaseManifestKey = "folder/mydb_20260419_030000.backup_manifest.enc",
+        };
+
+        var result = await _service.RunAsync(Guid.NewGuid(), payload, reporter: null, CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(_uploader.DeleteOrder, Is.EqualTo(new[]
+        {
+            "folder/mydb_20260419_030000.backup_manifest.enc",
+        }));
+    }
+
+    [Test]
+    public async Task RunAsync_PgManifestDeleteFails_ReturnsFailed_DoesNotDeleteDump()
+    {
+        _uploader.ThrowOnDelete["folder/mydb_20260419_030000.backup_manifest.enc"] = new IOException("S3 error");
+
+        var payload = new DeleteTaskPayload
+        {
+            StorageName = StorageName,
+            PgBaseManifestKey = "folder/mydb_20260419_030000.backup_manifest.enc",
+            DumpObjectKey = "folder/mydb_20260419_030000.tar.gz.enc",
+        };
+
+        var result = await _service.RunAsync(Guid.NewGuid(), payload, reporter: null, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(result.ErrorMessage, Does.Contain("backup_manifest"));
+        });
+        Assert.That(_uploader.DeleteOrder, Is.Empty, "dump must not be deleted if PostgreSQL backup_manifest deletion failed");
+    }
+
+    [Test]
+    public async Task RunAsync_PgManifest_ReportsDeletingManifestStage()
+    {
+        var payload = new DeleteTaskPayload
+        {
+            StorageName = StorageName,
+            PgBaseManifestKey = "folder/mydb_20260419_030000.backup_manifest.enc",
+        };
+        var reporter = new RecordingProgressReporter<DeleteStage>();
+
+        await _service.RunAsync(Guid.NewGuid(), payload, reporter, CancellationToken.None);
+
+        Assert.That(reporter.Stages, Is.EqualTo(new[]
+        {
+            DeleteStage.Resolving,
+            DeleteStage.DeletingManifest,
+            DeleteStage.Completed,
+        }));
+    }
+
     private sealed class FakeDeleteTrackingProvider : IUploadProvider
     {
         public List<string> DeleteOrder { get; } = [];

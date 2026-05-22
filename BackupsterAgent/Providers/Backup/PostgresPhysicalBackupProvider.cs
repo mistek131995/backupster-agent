@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 using Npgsql;
@@ -112,8 +113,10 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
     {
         var binary = await _binaryResolver.ResolveAsync(connection, "pg_basebackup", ct);
 
+        await WarnIfInsufficientWalSendersAsync(connection, ct);
+
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var fileName = $"{config.Database}_{timestamp}.tar.gz";
+        var fileName = $"{config.Database}_{timestamp}{PgBaseFormatDetector.ContainerExtension}";
         var manifestFileName = $"{config.Database}_{timestamp}.backup_manifest";
         var tempDir = Path.Combine(config.OutputPath, $"pgbase-{Guid.NewGuid():N}");
         var outputFile = Path.Combine(config.OutputPath, fileName);
@@ -122,7 +125,7 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
         Directory.CreateDirectory(config.OutputPath);
 
         _logger.LogInformation(
-            "Starting PostgreSQL physical backup (pg_basebackup). Host: '{Host}:{Port}', Output: '{OutputFile}', Binary: '{Binary}'",
+            "Starting PostgreSQL physical backup (pg_basebackup --wal-method=stream). Host: '{Host}:{Port}', Output: '{OutputFile}', Binary: '{Binary}'",
             connection.Host, connection.Port, outputFile, binary);
 
         var request = new ExternalProcessRequest
@@ -134,7 +137,7 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
                 "-p", connection.Port.ToString(),
                 "-U", connection.Username,
                 "--format=tar",
-                "--wal-method=fetch",
+                "--wal-method=stream",
                 "--checkpoint=fast",
                 "--gzip",
                 "-D", tempDir,
@@ -165,16 +168,18 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
             }
 
             var baseTar = Path.Combine(tempDir, "base.tar.gz");
-            if (!File.Exists(baseTar))
+            var pgWalTar = Path.Combine(tempDir, "pg_wal.tar.gz");
+
+            if (!File.Exists(baseTar) || !File.Exists(pgWalTar))
             {
                 var found = Directory.Exists(tempDir)
                     ? string.Join(", ", Directory.GetFiles(tempDir).Select(Path.GetFileName))
                     : "(directory missing)";
                 throw new InvalidOperationException(
-                    $"pg_basebackup не создал ожидаемый файл 'base.tar.gz'. Найдено: {found}");
+                    $"pg_basebackup не создал ожидаемые файлы 'base.tar.gz' и 'pg_wal.tar.gz'. Найдено: {found}");
             }
 
-            File.Move(baseTar, outputFile, overwrite: true);
+            await PgBaseContainer.WriteAsync(outputFile, baseTar, pgWalTar, ct);
 
             var manifestSource = Path.Combine(tempDir, "backup_manifest");
             string? manifestPath = null;
@@ -209,6 +214,48 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
         finally
         {
             TryDeleteDirectory(tempDir);
+        }
+    }
+
+    internal async Task WarnIfInsufficientWalSendersAsync(ConnectionConfig connection, CancellationToken ct)
+    {
+        try
+        {
+            var connString = new NpgsqlConnectionStringBuilder
+            {
+                Host = connection.Host,
+                Port = connection.Port,
+                Username = connection.Username,
+                Password = connection.Password,
+                Database = "postgres",
+                TcpKeepAlive = true,
+                KeepAlive = 30,
+            }.ToString();
+
+            var raw = await PostgresQueryRetry.ExecuteAsync(
+                _logger, "SHOW max_wal_senders", connection.Name,
+                async innerCt =>
+                {
+                    await using var conn = new NpgsqlConnection(connString);
+                    await conn.OpenAsync(innerCt);
+                    await using var cmd = new NpgsqlCommand("SHOW max_wal_senders;", conn);
+                    return (string?)await cmd.ExecuteScalarAsync(innerCt) ?? string.Empty;
+                }, ct);
+
+            if (int.TryParse(raw, out var senders) && senders < 2)
+                _logger.LogWarning(
+                    "PostgreSQL max_wal_senders={Value} on '{Connection}'. " +
+                    "Backupster requires --wal-method=stream which needs at least 2 wal senders " +
+                    "(one for base, one for WAL). pg_basebackup is likely to fail. " +
+                    "Set max_wal_senders >= 2 in postgresql.conf and reload.",
+                    senders, connection.Name);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "Failed to probe max_wal_senders for '{Connection}' — proceeding with pg_basebackup, " +
+                "any insufficient-senders condition will surface as a pg_basebackup error.",
+                connection.Name);
         }
     }
 

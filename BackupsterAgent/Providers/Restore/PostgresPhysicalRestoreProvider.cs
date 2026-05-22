@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -67,7 +68,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         {
             _logger.LogInformation(
                 "Extracting base archive '{ArchivePath}' to staging '{StagingPath}'", restoreFilePath, stagingPath);
-            await ExtractTarGzAsync(restoreFilePath, stagingPath, populateCt);
+            await ExtractDumpAsync(restoreFilePath, stagingPath, populateCt);
         }, ct);
 
     internal async Task ExecuteRestoreAsync(
@@ -443,6 +444,42 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
                 catch (Exception ex) { _logger.LogWarning(ex, "Failed to kill pg_ctl process"); }
             }
             throw;
+        }
+    }
+
+    internal async Task ExtractDumpAsync(string dumpPath, string targetDir, CancellationToken ct)
+    {
+        var format = await PgBaseFormatDetector.DetectByContentAsync(dumpPath, ct);
+
+        if (format == PgBaseDumpFormat.LegacySingleTarGz)
+        {
+            _logger.LogInformation(
+                "Detected legacy single-tar PostgreSQL dump (gzip magic) at '{Path}'. Extracting directly into '{TargetDir}'.",
+                dumpPath, targetDir);
+            await ExtractTarGzAsync(dumpPath, targetDir, ct);
+            return;
+        }
+
+        _logger.LogInformation(
+            "Detected pgbase container (ustar magic) at '{Path}'. Unpacking container, then extracting base and pg_wal into '{TargetDir}'.",
+            dumpPath, targetDir);
+
+        var workDir = Path.Combine(Path.GetTempPath(), $"backupster-pgbase-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+
+        try
+        {
+            var entries = await PgBaseContainer.ExtractAsync(dumpPath, workDir, ct);
+
+            await ExtractTarGzAsync(entries.BaseTarGzPath, targetDir, ct);
+
+            var pgWalDir = Path.Combine(targetDir, "pg_wal");
+            Directory.CreateDirectory(pgWalDir);
+            await ExtractTarGzAsync(entries.PgWalTarGzPath, pgWalDir, ct);
+        }
+        finally
+        {
+            TryDeleteDirectory(workDir);
         }
     }
 

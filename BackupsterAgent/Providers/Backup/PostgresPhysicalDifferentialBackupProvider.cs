@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 
@@ -55,8 +56,10 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
 
         var binary = await _binaryResolver.ResolveAsync(connection, "pg_basebackup", ct);
 
+        await _fullProvider.WarnIfInsufficientWalSendersAsync(connection, ct);
+
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var fileName = $"{config.Database}_{timestamp}_diff.tar.gz";
+        var fileName = $"{config.Database}_{timestamp}_diff{PgBaseFormatDetector.ContainerExtension}";
         var manifestFileName = $"{config.Database}_{timestamp}_diff.backup_manifest";
         var tempDir = Path.Combine(config.OutputPath, $"pgbase-diff-{Guid.NewGuid():N}");
         var outputFile = Path.Combine(config.OutputPath, fileName);
@@ -65,7 +68,7 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
         Directory.CreateDirectory(config.OutputPath);
 
         _logger.LogInformation(
-            "Starting PostgreSQL differential backup (pg_basebackup --incremental). Host: '{Host}:{Port}', Output: '{OutputFile}', BaseManifest: '{BaseManifest}', Binary: '{Binary}'",
+            "Starting PostgreSQL differential backup (pg_basebackup --incremental --wal-method=stream). Host: '{Host}:{Port}', Output: '{OutputFile}', BaseManifest: '{BaseManifest}', Binary: '{Binary}'",
             connection.Host, connection.Port, outputFile, context.BasePgBaseManifestPath, binary);
 
         var request = new ExternalProcessRequest
@@ -77,7 +80,7 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
                 "-p", connection.Port.ToString(),
                 "-U", connection.Username,
                 "--format=tar",
-                "--wal-method=fetch",
+                "--wal-method=stream",
                 "--checkpoint=fast",
                 "--gzip",
                 $"--incremental={context.BasePgBaseManifestPath}",
@@ -110,16 +113,18 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
             }
 
             var baseTar = Path.Combine(tempDir, "base.tar.gz");
-            if (!File.Exists(baseTar))
+            var pgWalTar = Path.Combine(tempDir, "pg_wal.tar.gz");
+
+            if (!File.Exists(baseTar) || !File.Exists(pgWalTar))
             {
                 var found = Directory.Exists(tempDir)
                     ? string.Join(", ", Directory.GetFiles(tempDir).Select(Path.GetFileName))
                     : "(directory missing)";
                 throw new InvalidOperationException(
-                    $"pg_basebackup --incremental не создал ожидаемый файл 'base.tar.gz'. Найдено: {found}");
+                    $"pg_basebackup --incremental не создал ожидаемые файлы 'base.tar.gz' и 'pg_wal.tar.gz'. Найдено: {found}");
             }
 
-            File.Move(baseTar, outputFile, overwrite: true);
+            await PgBaseContainer.WriteAsync(outputFile, baseTar, pgWalTar, ct);
 
             var manifestSource = Path.Combine(tempDir, "backup_manifest");
             string? manifestPath = null;

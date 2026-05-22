@@ -7,6 +7,7 @@ using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
+using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -161,7 +162,7 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
 
         Assert.That(diffResult.Success, Is.True);
         Assert.That(File.Exists(diffResult.FilePath), Is.True);
-        Assert.That(Path.GetFileName(diffResult.FilePath), Does.Contain("_diff.tar.gz"));
+        Assert.That(Path.GetFileName(diffResult.FilePath), Does.Contain("_diff.pgbase.tar"));
         Assert.That(diffResult.PgBaseManifestPath, Is.Not.Null,
             "DIFF provider must capture a fresh backup_manifest for next-tier incremental");
         Assert.That(File.Exists(diffResult.PgBaseManifestPath!), Is.True);
@@ -192,10 +193,10 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
         Directory.CreateDirectory(fullStaging);
         Directory.CreateDirectory(diffStaging);
 
-        await ExtractTarGzAsync(fullResult.FilePath, fullStaging, _cts.Token);
-        await ExtractTarGzAsync(diffResult.FilePath, diffStaging, _cts.Token);
+        await ExtractPgBaseContainerAsync(fullResult.FilePath, fullStaging, _cts.Token);
+        await ExtractPgBaseContainerAsync(diffResult.FilePath, diffStaging, _cts.Token);
 
-        // pg_basebackup splits archive (base.tar.gz) and backup_manifest into two outputs;
+        // pg_basebackup splits the cluster archive and backup_manifest into separate outputs;
         // pg_combinebackup needs the manifest *inside* each input cluster directory.
         File.Copy(fullResult.PgBaseManifestPath!, Path.Combine(fullStaging, "backup_manifest"), overwrite: true);
         File.Copy(diffResult.PgBaseManifestPath!, Path.Combine(diffStaging, "backup_manifest"), overwrite: true);
@@ -704,6 +705,32 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
         await using var fileStream = File.OpenRead(archivePath);
         await using var gz = new GZipStream(fileStream, CompressionMode.Decompress);
         await TarFile.ExtractToDirectoryAsync(gz, targetDir, overwriteFiles: true, ct);
+    }
+
+    private static async Task ExtractPgBaseContainerAsync(string containerPath, string targetDir, CancellationToken ct)
+    {
+        Directory.CreateDirectory(targetDir);
+
+        var workDir = Path.Combine(Path.GetTempPath(), "backupster-pgbase-itest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var entries = await PgBaseContainer.ExtractAsync(containerPath, workDir, ct);
+
+            await ExtractTarGzAsync(entries.BaseTarGzPath, targetDir, ct);
+
+            var pgWalDir = Path.Combine(targetDir, "pg_wal");
+            Directory.CreateDirectory(pgWalDir);
+            await ExtractTarGzAsync(entries.PgWalTarGzPath, pgWalDir, ct);
+        }
+        finally
+        {
+            try { if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true); }
+            catch (Exception ex)
+            {
+                TestContext.Progress.WriteLine($"pgbase work dir cleanup failed for '{workDir}': {ex.Message}");
+            }
+        }
     }
 
     private static int FindFreeLoopbackPort()

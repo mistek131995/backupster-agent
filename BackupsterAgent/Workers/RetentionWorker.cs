@@ -131,6 +131,7 @@ public sealed class RetentionWorker : BackgroundService
                 StorageName = record.StorageName,
                 DumpObjectKey = record.DumpObjectKey,
                 ManifestKey = record.ManifestKey,
+                PgBaseManifestKey = record.PgBaseManifestKey,
             };
 
             BackupDeleteResult result;
