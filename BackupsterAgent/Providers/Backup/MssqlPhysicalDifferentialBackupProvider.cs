@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 
@@ -12,13 +13,16 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
 
     private readonly ILogger<MssqlPhysicalDifferentialBackupProvider> _logger;
     private readonly MssqlPhysicalBackupProvider _fullProvider;
+    private readonly MssqlDifferentialChainGuard _chainGuard;
 
     public MssqlPhysicalDifferentialBackupProvider(
         ILogger<MssqlPhysicalDifferentialBackupProvider> logger,
-        MssqlPhysicalBackupProvider fullProvider)
+        MssqlPhysicalBackupProvider fullProvider,
+        MssqlDifferentialChainGuard chainGuard)
     {
         _logger = logger;
         _fullProvider = fullProvider;
+        _chainGuard = chainGuard;
     }
 
     public Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct) =>
@@ -144,74 +148,37 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
                 "Обновите дашборд до версии 1.4.0 или новее.");
         }
 
-        const string sql = @"
-DECLARE @parent_backup_set_id INT;
+        var checkResult = await _chainGuard.InspectAsync(conn, database, parentBackupFileName, ct);
 
-SELECT TOP (1)
-    @parent_backup_set_id = bs.backup_set_id
-FROM msdb.dbo.backupset bs
-INNER JOIN msdb.dbo.backupmediafamily bmf
-    ON bmf.media_set_id = bs.media_set_id
-WHERE bs.database_name = @db
-  AND bs.type = 'D'
-  AND bs.is_copy_only = 0
-  AND RIGHT(bmf.physical_device_name, LEN(@parentFileName)) = @parentFileName
-ORDER BY bs.backup_set_id DESC;
-
-SELECT
-    CASE WHEN @parent_backup_set_id IS NULL THEN 0 ELSE 1 END AS parent_count,
-    CASE
-        WHEN @parent_backup_set_id IS NULL THEN CAST(0 AS BIGINT)
-        ELSE (
-            SELECT COUNT_BIG(*)
-            FROM msdb.dbo.backupset
-            WHERE database_name = @db
-              AND type IN ('D', 'F', 'P')
-              AND is_copy_only = 0
-              AND backup_set_id > @parent_backup_set_id
-        )
-    END AS foreign_count;";
-
-        int parentCount;
-        long foreignCount;
-        await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 30 };
-        cmd.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = database });
-        cmd.Parameters.Add(new SqlParameter("@parentFileName", System.Data.SqlDbType.NVarChar, 260) { Value = parentBackupFileName });
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
+        switch (checkResult)
         {
-            parentCount = 0;
-            foreignCount = 0;
-        }
-        else
-        {
-            parentCount = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
-            foreignCount = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
-        }
+            case MssqlDifferentialChainCheck.Ok:
+                return;
 
-        if (parentCount == 0)
-        {
-            _logger.LogWarning(
-                "MSSQL differential chain check refused for '{Database}': parent FULL file '{ParentFile}' not found in msdb.",
-                database, parentBackupFileName);
+            case MssqlDifferentialChainCheck.ParentMissing:
+                _logger.LogWarning(
+                    "MSSQL differential chain check refused for '{Database}': parent FULL file '{ParentFile}' not found in msdb.",
+                    database, parentBackupFileName);
 
-            throw new InvalidOperationException(
-                $"Дифференциальный бэкап БД '{database}' отменён: на SQL Server пропала запись о родительском полном бэкапе Backupster. " +
-                "Скорее всего, историю бэкапов на сервере очистил maintenance plan или DBA — теперь нельзя проверить, что цепочка не сломалась. " +
-                "Запустите новый полный бэкап через Backupster, чтобы продолжить дифференциальные.");
-        }
+                throw new DifferentialChainBrokenException(
+                    $"Дифференциальный бэкап БД '{database}' отменён: на SQL Server пропала запись о родительском полном бэкапе Backupster. " +
+                    "Скорее всего, историю бэкапов на сервере очистил maintenance plan или DBA — теперь нельзя проверить, что цепочка не сломалась. " +
+                    "Запускаем новый полный бэкап автоматически, чтобы восстановить цепочку.");
 
-        if (foreignCount > 0)
-        {
-            _logger.LogError(
-                "MSSQL differential chain check failed for '{Database}': {Count} foreign full-like backup(s) detected in msdb after parent file '{ParentFile}'.",
-                database, foreignCount, parentBackupFileName);
+            case MssqlDifferentialChainCheck.ForeignFullDetected:
+                _logger.LogError(
+                    "MSSQL differential chain check failed for '{Database}': foreign full-like backup(s) detected in msdb after parent file '{ParentFile}'.",
+                    database, parentBackupFileName);
 
-            throw new InvalidOperationException(
-                $"Дифференциальный бэкап БД '{database}' отменён: на SQL Server обнаружен полный бэкап этой БД, сделанный не через Backupster, — " +
-                "его создал другой инструмент (например, штатный SQL Server maintenance plan, Veeam или DBA вручную). " +
-                "При попытке восстановления цепочка бы порвалась. " +
-                "Запустите новый полный бэкап через Backupster, чтобы продолжить дифференциальные.");
+                throw new DifferentialChainBrokenException(
+                    $"Дифференциальный бэкап БД '{database}' отменён: на SQL Server обнаружен полный бэкап этой БД, сделанный не через Backupster, — " +
+                    "его создал другой инструмент (например, штатный SQL Server maintenance plan, Veeam или DBA вручную). " +
+                    "При попытке восстановления цепочка бы порвалась. " +
+                    "Запускаем новый полный бэкап автоматически, чтобы восстановить цепочку.");
+
+            default:
+                throw new InvalidOperationException(
+                    $"Дифференциальный бэкап БД '{database}' отменён: неизвестный результат проверки цепочки MSSQL ({checkResult}).");
         }
     }
 

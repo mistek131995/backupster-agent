@@ -14,7 +14,7 @@ namespace BackupsterAgent.Workers;
 
 public sealed class BackupWorker : BackgroundService
 {
-    private readonly BackupJob _job;
+    private readonly IBackupJobRunner _job;
     private readonly ScheduleService _schedule;
     private readonly EncryptionService _encryption;
     private readonly ConnectionResolver _connections;
@@ -27,7 +27,7 @@ public sealed class BackupWorker : BackgroundService
     private readonly ILogger<BackupWorker> _logger;
 
     public BackupWorker(
-        BackupJob job,
+        IBackupJobRunner job,
         ScheduleService schedule,
         EncryptionService encryption,
         ConnectionResolver connections,
@@ -187,7 +187,7 @@ public sealed class BackupWorker : BackgroundService
         _logger.LogInformation("BackupWorker stopped");
     }
 
-    private async Task RunDueDatabasesAsync(
+    internal async Task RunDueDatabasesAsync(
         List<(DatabaseConfig Config, BackupMode Mode, string StorageName, DateTime NextRun)> due,
         CancellationToken stoppingToken)
     {
@@ -196,6 +196,7 @@ public sealed class BackupWorker : BackgroundService
 
         int succeeded = 0;
         int failed = 0;
+        var autoFullDone = new HashSet<(string Database, string Storage)>();
 
         for (int i = 0; i < due.Count; i++)
         {
@@ -206,6 +207,15 @@ public sealed class BackupWorker : BackgroundService
             _logger.LogInformation(
                 "[{Index}/{Total}] Starting backup. Database: '{Database}', Mode: {Mode}, Storage: '{Storage}', Connection: '{Connection}', NextRun: {NextRun:u}",
                 i + 1, due.Count, config.Database, mode, storageName, config.ConnectionName, nextRun);
+
+            if (mode == BackupMode.Physical && autoFullDone.Contains((config.Database, storageName)))
+            {
+                _logger.LogInformation(
+                    "[{Index}/{Total}] Skipping scheduled Physical for '{Database}' on '{Storage}': already covered by auto-rebase this tick.",
+                    i + 1, due.Count, config.Database, storageName);
+                succeeded++;
+                continue;
+            }
 
             if (!_storages.TryResolve(storageName, out var storage))
             {
@@ -253,6 +263,33 @@ public sealed class BackupWorker : BackgroundService
                 using (await _activityLock.AcquireAsync($"backup:{config.Database}:{mode}:{storageName}", stoppingToken))
                 {
                     result = await _job.RunAsync(config, storage, mode, stoppingToken, baseBackupRecordId);
+
+                    if (result.ChainBroken)
+                    {
+                        _logger.LogWarning(
+                            "[{Index}/{Total}] Auto-rebase: DIFF for '{Database}' on '{Storage}' failed due to broken chain (failed DIFF record {DiffRecordId}). Running auto-FULL within the same lock scope.",
+                            i + 1, due.Count, config.Database, storageName, result.BackupRecordId?.ToString() ?? "-");
+
+                        var autoFullResult = await _job.RunAsync(
+                            config, storage, BackupMode.Physical, stoppingToken, baseBackupRecordId: null);
+
+                        if (autoFullResult.Success)
+                        {
+                            autoFullDone.Add((config.Database, storageName));
+                            _logger.LogInformation(
+                                "[{Index}/{Total}] Auto-rebase FULL succeeded. Database: '{Database}', Storage: '{Storage}', NewRecordId: {RecordId}, OriginalDiffRecordId: {DiffRecordId}",
+                                i + 1, due.Count, config.Database, storageName,
+                                autoFullResult.BackupRecordId?.ToString() ?? "-",
+                                result.BackupRecordId?.ToString() ?? "-");
+                        }
+                        else
+                        {
+                            _logger.LogError(
+                                "[{Index}/{Total}] Auto-rebase FULL failed. Database: '{Database}', Storage: '{Storage}', OriginalDiffRecordId: {DiffRecordId}, Error: {ErrorMessage}. Scheduled Physical (if any) for the same pair in this batch will still run as a recovery attempt.",
+                                i + 1, due.Count, config.Database, storageName,
+                                result.BackupRecordId?.ToString() ?? "-", autoFullResult.ErrorMessage);
+                        }
+                    }
                 }
 
                 if (result.Success)

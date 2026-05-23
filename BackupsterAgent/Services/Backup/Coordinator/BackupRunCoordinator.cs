@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Services.Common.Outbox;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Dashboard;
@@ -90,6 +91,13 @@ public sealed class BackupRunCoordinator
             outcome = PipelineOutcome.Failed("Бэкап прерван: агент остановлен.");
             cancelled = true;
         }
+        catch (DifferentialChainBrokenException ex)
+        {
+            _logger.LogWarning(
+                "{Name}: differential chain broken — marking DIFF record as failed; caller should auto-rebase via FULL. Reason: {Reason}",
+                descriptor.DisplayName, ex.Message);
+            outcome = PipelineOutcome.ChainBrokenFailure(ex.Message);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "{Name} failed", descriptor.DisplayName);
@@ -130,6 +138,7 @@ public sealed class BackupRunCoordinator
             ErrorMessage = outcome.ErrorMessage,
             DumpObjectKey = outcome.DumpObjectKey,
             BackupRecordId = recordId,
+            ChainBroken = outcome.ChainBroken,
         };
     }
 

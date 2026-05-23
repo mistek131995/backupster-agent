@@ -13,7 +13,11 @@ public sealed record PipelineOutcome
     public FileBackupMetrics? FileMetrics { get; init; }
     public string? FileBackupError { get; init; }
     public string? PgBaseManifestKey { get; init; }
+    public bool ChainBroken { get; init; }
 
     public static PipelineOutcome Failed(string errorMessage) =>
         new() { Success = false, ErrorMessage = errorMessage };
+
+    public static PipelineOutcome ChainBrokenFailure(string errorMessage) =>
+        new() { Success = false, ErrorMessage = errorMessage, ChainBroken = true };
 }

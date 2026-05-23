@@ -157,6 +157,8 @@ builder.Services.AddSingleton<BackupRunCoordinator>();
 builder.Services.AddSingleton<DatabaseBackupPipeline>();
 builder.Services.AddSingleton<FileSetBackupPipeline>();
 builder.Services.AddSingleton<BackupJob>();
+builder.Services.AddSingleton<IBackupJobRunner>(sp => sp.GetRequiredService<BackupJob>());
+builder.Services.AddSingleton<MssqlDifferentialChainGuard>();
 builder.Services.AddSingleton<FileSetBackupJob>();
 builder.Services.AddSingleton<IAgentTaskHandler, RestoreTaskHandler>();
 builder.Services.AddSingleton<IAgentTaskHandler, DeleteTaskHandler>();

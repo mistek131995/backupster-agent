@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Backup;
@@ -203,6 +204,30 @@ public sealed class BackupJobRunTests
 
         Assert.That(Directory.GetFiles(_tempRoot), Is.Empty,
             "dump and .enc files must be deleted even on upload failure");
+    }
+
+    [Test]
+    public async Task RunAsync_DifferentialChainBroken_FinalizesAsFailedAndReturnsChainBrokenFlag()
+    {
+        var serverId = Guid.NewGuid();
+        _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.Ok, serverId);
+        _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
+        _provider.ThrowOnBackup = new DifferentialChainBrokenException(
+            "Цепочка сломана: на SQL Server обнаружен чужой полный бэкап");
+
+        var result = await BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.ChainBroken, Is.True, "BackupResult must carry ChainBroken=true so caller can rebase");
+            Assert.That(result.BackupRecordId, Is.EqualTo(serverId),
+                "Failed DIFF record id must still be returned so caller can log the link");
+            Assert.That(_recordClient.FinalizeCalls, Is.EqualTo(1),
+                "DIFF record must be finalized as failed so the alert fires");
+            Assert.That(_recordClient.LastFinalize!.Status, Is.EqualTo(BackupStatus.Failed));
+            Assert.That(_recordClient.LastFinalize!.ErrorMessage, Does.Contain("Цепочка сломана"));
+        });
     }
 
     [Test]

@@ -65,7 +65,8 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
         var fullProvider = new MssqlPhysicalBackupProvider(NullLogger<MssqlPhysicalBackupProvider>.Instance);
         var diffProvider = new MssqlPhysicalDifferentialBackupProvider(
             NullLogger<MssqlPhysicalDifferentialBackupProvider>.Instance,
-            fullProvider);
+            fullProvider,
+            new MssqlDifferentialChainGuard());
 
         var config = MakeConfig();
 
@@ -120,7 +121,8 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
         var fullProvider = new MssqlPhysicalBackupProvider(NullLogger<MssqlPhysicalBackupProvider>.Instance);
         var diffProvider = new MssqlPhysicalDifferentialBackupProvider(
             NullLogger<MssqlPhysicalDifferentialBackupProvider>.Instance,
-            fullProvider);
+            fullProvider,
+            new MssqlDifferentialChainGuard());
         var fullRestoreProvider = new MssqlPhysicalRestoreProvider(
             NullLogger<MssqlPhysicalRestoreProvider>.Instance);
         var diffRestoreProvider = new MssqlPhysicalDifferentialRestoreProvider(
@@ -188,7 +190,8 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
         var fullProvider = new MssqlPhysicalBackupProvider(NullLogger<MssqlPhysicalBackupProvider>.Instance);
         var diffProvider = new MssqlPhysicalDifferentialBackupProvider(
             NullLogger<MssqlPhysicalDifferentialBackupProvider>.Instance,
-            fullProvider);
+            fullProvider,
+            new MssqlDifferentialChainGuard());
 
         var config = MakeConfig();
         var ctx = new DifferentialBackupContext

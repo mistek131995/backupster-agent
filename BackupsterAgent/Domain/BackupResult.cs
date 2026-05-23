@@ -10,4 +10,5 @@ public sealed class BackupResult
     public string? DumpObjectKey { get; init; }
     public Guid? BackupRecordId { get; init; }
     public string? PgBaseManifestPath { get; init; }
+    public bool ChainBroken { get; init; }
 }

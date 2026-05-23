@@ -5,7 +5,7 @@ using BackupsterAgent.Services.Backup.Coordinator;
 
 namespace BackupsterAgent.Services.Backup;
 
-public sealed class BackupJob
+public class BackupJob : IBackupJobRunner
 {
     private readonly BackupRunCoordinator _coordinator;
     private readonly DatabaseBackupPipeline _pipeline;
@@ -16,7 +16,7 @@ public sealed class BackupJob
         _pipeline = pipeline;
     }
 
-    public Task<BackupResult> RunAsync(
+    public virtual Task<BackupResult> RunAsync(
         DatabaseConfig config,
         StorageConfig storage,
         BackupMode mode,

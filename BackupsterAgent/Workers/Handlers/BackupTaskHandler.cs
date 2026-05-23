@@ -12,14 +12,14 @@ namespace BackupsterAgent.Workers.Handlers;
 
 public sealed class BackupTaskHandler : IAgentTaskHandler
 {
-    private readonly BackupJob _backupJob;
+    private readonly IBackupJobRunner _backupJob;
     private readonly IBackupRunTracker _runTracker;
     private readonly StorageResolver _storages;
     private readonly List<DatabaseConfig> _databases;
     private readonly ILogger<BackupTaskHandler> _logger;
 
     public BackupTaskHandler(
-        BackupJob backupJob,
+        IBackupJobRunner backupJob,
         IBackupRunTracker runTracker,
         StorageResolver storages,
         IOptions<List<DatabaseConfig>> databases,
@@ -103,6 +103,32 @@ public sealed class BackupTaskHandler : IAgentTaskHandler
         try
         {
             result = await _backupJob.RunAsync(config, storage, mode, ct, task.Backup.BaseBackupRecordId);
+
+            if (result.ChainBroken)
+            {
+                _logger.LogWarning(
+                    "BackupTaskHandler: task {TaskId} DIFF for '{Database}' on '{Storage}' failed due to broken chain (failed DIFF record {DiffRecordId}). Running auto-FULL within the same lock scope (held by AgentTaskPollingService).",
+                    task.Id, databaseName, storage.Name, result.BackupRecordId?.ToString() ?? "-");
+
+                var autoFullResult = await _backupJob.RunAsync(
+                    config, storage, BackupMode.Physical, ct, baseBackupRecordId: null);
+
+                if (autoFullResult.Success)
+                {
+                    _logger.LogInformation(
+                        "BackupTaskHandler: auto-rebase FULL succeeded for task {TaskId}. Database: '{Database}', Storage: '{Storage}', NewRecordId: {RecordId}, OriginalDiffRecordId: {DiffRecordId}",
+                        task.Id, databaseName, storage.Name,
+                        autoFullResult.BackupRecordId?.ToString() ?? "-",
+                        result.BackupRecordId?.ToString() ?? "-");
+                }
+                else
+                {
+                    _logger.LogError(
+                        "BackupTaskHandler: auto-rebase FULL failed for task {TaskId}. Database: '{Database}', Storage: '{Storage}', OriginalDiffRecordId: {DiffRecordId}, Error: {ErrorMessage}",
+                        task.Id, databaseName, storage.Name,
+                        result.BackupRecordId?.ToString() ?? "-", autoFullResult.ErrorMessage);
+                }
+            }
         }
         catch (OperationCanceledException)
         {
