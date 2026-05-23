@@ -1,5 +1,6 @@
 # ── build stage ──────────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+ARG VERSION=0.0.0
 WORKDIR /repo
 
 # Restore is cached separately from the rest of the source
@@ -10,6 +11,8 @@ COPY BackupsterAgent/ ./BackupsterAgent/
 COPY appsettings.json ./
 RUN dotnet publish ./BackupsterAgent/BackupsterAgent.csproj \
       -c Release \
+      -p:Version=${VERSION} \
+      -p:InformationalVersion=${VERSION} \
       -o /app/publish \
       --no-restore
 

@@ -25,7 +25,7 @@ X-Agent-Token: <AgentSettings.Token>
 Каждый запрос к дашборду дополнительно содержит заголовок:
 
 ```
-X-Agent-Version: <agent semver, например 1.2.3 или 1.2.3e>
+X-Agent-Version: <agent semver, например 1.2.3>
 ```
 
 Значение читается из `AssemblyInformationalVersionAttribute` ассембли агента (см. `Configuration/AgentVersion`). Header выставляется централизованно через `DefaultRequestHeaders` всех типизированных `HttpClient`'ов в `Program.cs` (`ConfigureDashboardClient`) — все 8 агентских клиентов отправляют его автоматически.
