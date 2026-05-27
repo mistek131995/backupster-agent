@@ -7,8 +7,8 @@
     <RootNamespace>BackupsterAgent</RootNamespace>
     <AssemblyName>BackupsterAgent</AssemblyName>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
-    <Version>1.4.0</Version>
-    <InformationalVersion>1.4.0</InformationalVersion>
+    <Version>1.4.2</Version>
+    <InformationalVersion>1.4.2</InformationalVersion>
     <UserSecretsId>682cede7-c276-4c32-a9ba-2eb01fa9759a</UserSecretsId>
   </PropertyGroup>
 
