@@ -96,7 +96,7 @@ END";
                 "Восстановление невозможно — файл повреждён или это не full backup.");
     }
 
-    public Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct) =>
+    public Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string sourceDatabaseName, string restoreFilePath, CancellationToken ct) =>
         RestoreFromBakAsync(connection, targetDatabase, restoreFilePath, withRecovery: true, ct);
 
     internal async Task RestoreFromBakAsync(

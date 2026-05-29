@@ -74,7 +74,7 @@ SELECT
         logger.LogInformation("MSSQL logical target database '{Database}' dropped before restore", targetDatabase);
     }
 
-    public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct)
+    public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string sourceDatabaseName, string restoreFilePath, CancellationToken ct)
     {
         logger.LogInformation(
             "Starting MSSQL logical restore. Database: '{Database}', Host: '{Host}:{Port}', Source: '{Source}'",

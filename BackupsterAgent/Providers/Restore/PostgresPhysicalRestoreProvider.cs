@@ -64,7 +64,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         return Task.CompletedTask;
     }
 
-    public Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct) =>
+    public Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string sourceDatabaseName, string restoreFilePath, CancellationToken ct) =>
         ExecuteRestoreAsync(connection, async (stagingPath, populateCt) =>
         {
             _logger.LogInformation(

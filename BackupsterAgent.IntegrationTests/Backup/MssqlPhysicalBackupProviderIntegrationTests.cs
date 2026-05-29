@@ -112,7 +112,7 @@ public sealed class MssqlPhysicalBackupProviderIntegrationTests
 
             await restoreProvider.ValidateRestoreSourceAsync(_connection, sqlBakPath, _cts.Token);
             await restoreProvider.PrepareTargetDatabaseAsync(_connection, _dstDb, _cts.Token);
-            await restoreProvider.RestoreAsync(_connection, _dstDb, sqlBakPath, _cts.Token);
+            await restoreProvider.RestoreAsync(_connection, _dstDb, _srcDb, sqlBakPath, _cts.Token);
 
             var restoredRows = await ReadItemsAsync(_connection, _dstDb, _cts.Token);
 

@@ -83,7 +83,7 @@ WHERE TABLE_SCHEMA = @db;";
         _logger.LogInformation("MySQL target database '{Database}' prepared (drop + create)", targetDatabase);
     }
 
-    public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct)
+    public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string sourceDatabaseName, string restoreFilePath, CancellationToken ct)
     {
         var mysql = _binaryResolver.Resolve(connection, "mysql");
 

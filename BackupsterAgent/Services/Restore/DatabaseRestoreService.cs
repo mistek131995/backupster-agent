@@ -63,6 +63,18 @@ public sealed class DatabaseRestoreService
             var connection = ResolveTargetConnection(payload);
             var backupMode = payload.BackupMode ?? InferDefaultMode(connection.DatabaseType);
 
+            if (connection.DatabaseType is DatabaseType.Postgres or DatabaseType.Mysql
+                && backupMode is BackupMode.Physical or BackupMode.PhysicalDifferential
+                && !string.Equals(targetDatabase, payload.SourceDatabaseName, StringComparison.Ordinal))
+            {
+                var engine = connection.DatabaseType == DatabaseType.Postgres ? "PostgreSQL" : "MySQL";
+                var detail = connection.DatabaseType == DatabaseType.Postgres
+                    ? "восстанавливается весь кластер с исходными именами БД"
+                    : "заменяется весь каталог данных (datadir)";
+                return DatabaseRestoreResult.Failed(
+                    $"Physical restore {engine} не поддерживает переименование БД — {detail}. Оставьте поле target-имени БД пустым.");
+            }
+
             if (backupMode == BackupMode.PhysicalDifferential)
             {
                 await ExecuteDifferentialRestoreAsync(
@@ -104,6 +116,10 @@ public sealed class DatabaseRestoreService
                 // base.tar.gz from pg_basebackup -z; passed as-is to PostgresPhysicalRestoreProvider
                 restoreFilePath = decryptedPath;
             }
+            else if (connection.DatabaseType == DatabaseType.Mysql && backupMode == BackupMode.Physical)
+            {
+                restoreFilePath = decryptedPath;
+            }
             else if (connection.DatabaseType is DatabaseType.Postgres or DatabaseType.Mysql)
             {
                 var sqlPath = Path.Combine(tempDir, "dump.sql");
@@ -111,6 +127,14 @@ public sealed class DatabaseRestoreService
                 await DecompressGzipAsync(decryptedPath, sqlPath, ct);
                 SafeDelete(decryptedPath);
                 restoreFilePath = sqlPath;
+            }
+            else if (connection.DatabaseType == DatabaseType.MongoDb)
+            {
+                var archivePath = Path.Combine(tempDir, "dump.archive");
+                reporter.Report(RestoreStage.DecompressingDump);
+                await DecompressGzipAsync(decryptedPath, archivePath, ct);
+                SafeDelete(decryptedPath);
+                restoreFilePath = archivePath;
             }
             else if (connection.DatabaseType == DatabaseType.Mssql && backupMode == BackupMode.Physical)
             {
@@ -137,7 +161,7 @@ public sealed class DatabaseRestoreService
             else
             {
                 throw new InvalidOperationException(
-                    $"Unsupported DatabaseType: '{connection.DatabaseType}'. Supported: Postgres, Mssql, Mysql.");
+                    $"Unsupported DatabaseType: '{connection.DatabaseType}'. Supported: Postgres, Mssql, Mysql, MongoDb.");
             }
 
             await provider.ValidateRestoreSourceAsync(connection, restoreFilePath, ct);
@@ -146,7 +170,7 @@ public sealed class DatabaseRestoreService
             await provider.PrepareTargetDatabaseAsync(connection, targetDatabase, ct);
 
             reporter.Report(RestoreStage.RestoringDatabase);
-            await provider.RestoreAsync(connection, targetDatabase, restoreFilePath, ct);
+            await provider.RestoreAsync(connection, targetDatabase, payload.SourceDatabaseName, restoreFilePath, ct);
 
             _logger.LogInformation(
                 "DatabaseRestoreService completed successfully. Task: {TaskId}, Target: '{Target}'",

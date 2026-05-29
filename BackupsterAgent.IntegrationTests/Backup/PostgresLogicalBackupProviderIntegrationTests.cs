@@ -136,7 +136,7 @@ public sealed class PostgresLogicalBackupProviderIntegrationTests
 
         await restoreProvider.ValidateRestoreSourceAsync(_connection, plainSqlPath, _cts.Token);
         await restoreProvider.PrepareTargetDatabaseAsync(_connection, _dstDb, _cts.Token);
-        await restoreProvider.RestoreAsync(_connection, _dstDb, plainSqlPath, _cts.Token);
+        await restoreProvider.RestoreAsync(_connection, _dstDb, _srcDb, plainSqlPath, _cts.Token);
 
         var restoredRows = await ReadItemsAsync(_connection, _dstDb, _cts.Token);
 

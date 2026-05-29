@@ -77,6 +77,7 @@ builder.Services.AddSingleton<MssqlPhysicalDifferentialBackupProvider>();
 builder.Services.AddSingleton<MssqlLogicalBackupProvider>();
 builder.Services.AddSingleton<MysqlLogicalBackupProvider>();
 builder.Services.AddSingleton<MysqlPhysicalBackupProvider>();
+builder.Services.AddSingleton<MongoLogicalBackupProvider>();
 builder.Services.AddSingleton<IBackupProviderFactory, BackupProviderFactory>();
 
 builder.Services.AddSingleton<PostgresRestoreProvider>();
@@ -87,6 +88,7 @@ builder.Services.AddSingleton<MssqlPhysicalDifferentialRestoreProvider>();
 builder.Services.AddSingleton<MssqlLogicalRestoreProvider>();
 builder.Services.AddSingleton<MysqlRestoreProvider>();
 builder.Services.AddSingleton<MysqlPhysicalRestoreProvider>();
+builder.Services.AddSingleton<MongoRestoreProvider>();
 builder.Services.AddSingleton<IRestoreProviderFactory, RestoreProviderFactory>();
 
 ActivitySource.AddActivityListener(new ActivityListener
@@ -111,6 +113,7 @@ builder.Services.AddSingleton<IOutboxStore>(sp =>
     new OutboxStore(outboxDir, sp.GetRequiredService<ILogger<OutboxStore>>()));
 builder.Services.AddSingleton<PostgresBinaryResolver>();
 builder.Services.AddSingleton<MysqlBinaryResolver>();
+builder.Services.AddSingleton<MongoBinaryResolver>();
 builder.Services.AddSingleton<IExternalProcessRunner, ExternalProcessRunner>();
 builder.Services.AddSingleton(sp =>
     new ConnectionResolver(sp.GetRequiredService<IOptions<List<ConnectionConfig>>>().Value));

@@ -89,7 +89,7 @@ FROM pg_roles WHERE rolname = current_user;";
         _logger.LogInformation("Postgres target database '{Database}' prepared (drop + create)", targetDatabase);
     }
 
-    public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string restoreFilePath, CancellationToken ct)
+    public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string sourceDatabaseName, string restoreFilePath, CancellationToken ct)
     {
         var binary = await _binaryResolver.ResolveAsync(connection, "psql", ct);
 

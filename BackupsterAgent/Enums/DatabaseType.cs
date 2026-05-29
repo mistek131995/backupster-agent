@@ -6,4 +6,5 @@ public enum DatabaseType
     Mssql,
     Mysql,
     FileSet,
+    MongoDb,
 }

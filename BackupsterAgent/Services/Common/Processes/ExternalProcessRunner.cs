@@ -86,33 +86,64 @@ public sealed class ExternalProcessRunner : IExternalProcessRunner
         if (stdoutHandlerTask is not null) pumpTasks.Add(stdoutHandlerTask);
         if (stdinTask is not null) pumpTasks.Add(stdinTask);
 
+        Exception? pumpFailure = null;
         try
         {
             await Task.WhenAll(pumpTasks);
-            await process.WaitForExitAsync(ct);
         }
-        catch
+        catch (OperationCanceledException)
         {
-            try
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to kill external process {FileName} (PID {Pid}) after error",
-                    request.FileName, process.Id);
-            }
+            KillProcessTree(process, request.FileName);
             throw;
         }
+        catch (Exception ex)
+        {
+            pumpFailure = ex;
+        }
+
+        try
+        {
+            await process.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            KillProcessTree(process, request.FileName);
+            throw;
+        }
+
+        var stderrText = await DrainAsync(stderrTask);
+        var stdoutText = stdoutTextTask is null ? string.Empty : await DrainAsync(stdoutTextTask);
+
+        if (pumpFailure is not null && process.ExitCode == 0)
+            throw pumpFailure;
 
         return new ExternalProcessResult
         {
             ExitCode = process.ExitCode,
-            Stdout = Sanitize(stdoutTextTask is null ? string.Empty : await stdoutTextTask),
-            Stderr = Sanitize(await stderrTask),
+            Stdout = Sanitize(stdoutText),
+            Stderr = Sanitize(stderrText),
         };
+    }
+
+    private static async Task<string> DrainAsync(Task<string> task)
+    {
+        try { return await task; }
+        catch { return string.Empty; }
+    }
+
+    private void KillProcessTree(Process process, string fileName)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to kill external process {FileName} (PID {Pid}) after error",
+                fileName, process.Id);
+        }
     }
 
     private static Encoding ResolveChildProcessEncoding()

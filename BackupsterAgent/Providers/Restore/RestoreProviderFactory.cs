@@ -12,6 +12,7 @@ public sealed class RestoreProviderFactory : IRestoreProviderFactory
     private readonly MssqlLogicalRestoreProvider _mssqlLogical;
     private readonly MysqlRestoreProvider _mysql;
     private readonly MysqlPhysicalRestoreProvider _mysqlPhysical;
+    private readonly MongoRestoreProvider _mongo;
 
     public RestoreProviderFactory(
         PostgresRestoreProvider postgresLogical,
@@ -21,7 +22,8 @@ public sealed class RestoreProviderFactory : IRestoreProviderFactory
         MssqlPhysicalDifferentialRestoreProvider mssqlPhysicalDiff,
         MssqlLogicalRestoreProvider mssqlLogical,
         MysqlRestoreProvider mysql,
-        MysqlPhysicalRestoreProvider mysqlPhysical)
+        MysqlPhysicalRestoreProvider mysqlPhysical,
+        MongoRestoreProvider mongo)
     {
         _postgresLogical = postgresLogical;
         _postgresPhysical = postgresPhysical;
@@ -31,6 +33,7 @@ public sealed class RestoreProviderFactory : IRestoreProviderFactory
         _mssqlLogical = mssqlLogical;
         _mysql = mysql;
         _mysqlPhysical = mysqlPhysical;
+        _mongo = mongo;
     }
 
     public IRestoreProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) =>
@@ -42,6 +45,7 @@ public sealed class RestoreProviderFactory : IRestoreProviderFactory
             (DatabaseType.Mysql,    BackupMode.Physical) => _mysqlPhysical,
             (DatabaseType.Mssql,    BackupMode.Physical) => _mssqlPhysical,
             (DatabaseType.Mssql,    BackupMode.Logical)  => _mssqlLogical,
+            (DatabaseType.MongoDb,  BackupMode.Logical)  => _mongo,
             _ => throw new NotSupportedException(
                 $"Restore provider is not implemented for DatabaseType='{databaseType}', BackupMode='{backupMode}'.")
         };

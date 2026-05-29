@@ -12,6 +12,7 @@ public sealed class BackupProviderFactory : IBackupProviderFactory
     private readonly MssqlLogicalBackupProvider _mssqlLogical;
     private readonly MysqlLogicalBackupProvider _mysqlLogical;
     private readonly MysqlPhysicalBackupProvider _mysqlPhysical;
+    private readonly MongoLogicalBackupProvider _mongoLogical;
 
     public BackupProviderFactory(
         PostgresLogicalBackupProvider postgresLogical,
@@ -21,7 +22,8 @@ public sealed class BackupProviderFactory : IBackupProviderFactory
         MssqlPhysicalDifferentialBackupProvider mssqlPhysicalDiff,
         MssqlLogicalBackupProvider mssqlLogical,
         MysqlLogicalBackupProvider mysqlLogical,
-        MysqlPhysicalBackupProvider mysqlPhysical)
+        MysqlPhysicalBackupProvider mysqlPhysical,
+        MongoLogicalBackupProvider mongoLogical)
     {
         _postgresLogical = postgresLogical;
         _postgresPhysical = postgresPhysical;
@@ -31,6 +33,7 @@ public sealed class BackupProviderFactory : IBackupProviderFactory
         _mssqlLogical = mssqlLogical;
         _mysqlLogical = mysqlLogical;
         _mysqlPhysical = mysqlPhysical;
+        _mongoLogical = mongoLogical;
     }
 
     public IBackupProvider GetProvider(DatabaseType databaseType, BackupMode backupMode) =>
@@ -42,6 +45,7 @@ public sealed class BackupProviderFactory : IBackupProviderFactory
             (DatabaseType.Mysql,    BackupMode.Physical) => _mysqlPhysical,
             (DatabaseType.Mssql,    BackupMode.Physical) => _mssqlPhysical,
             (DatabaseType.Mssql,    BackupMode.Logical)  => _mssqlLogical,
+            (DatabaseType.MongoDb,  BackupMode.Logical)  => _mongoLogical,
             _ => throw new NotSupportedException(
                 $"Backup provider is not implemented for DatabaseType='{databaseType}', BackupMode='{backupMode}'.")
         };

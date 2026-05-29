@@ -118,7 +118,7 @@ public sealed class MssqlLogicalBackupProviderIntegrationTests
 
         await restoreProvider.ValidateRestoreSourceAsync(_connection, result.FilePath, _cts.Token);
         await restoreProvider.PrepareTargetDatabaseAsync(_connection, _dstDb, _cts.Token);
-        await restoreProvider.RestoreAsync(_connection, _dstDb, result.FilePath, _cts.Token);
+        await restoreProvider.RestoreAsync(_connection, _dstDb, _srcDb, result.FilePath, _cts.Token);
 
         var restoredRows = await ReadItemsAsync(_connection, _dstDb, _cts.Token);
 
