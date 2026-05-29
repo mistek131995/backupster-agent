@@ -3,6 +3,7 @@ using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
+using BackupsterAgent.Extensions;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Backup.Coordinator;
 using BackupsterAgent.Providers.Upload;
@@ -87,7 +88,7 @@ builder.Services.AddSingleton<MssqlPhysicalRestoreProvider>();
 builder.Services.AddSingleton<MssqlPhysicalDifferentialRestoreProvider>();
 builder.Services.AddSingleton<MssqlLogicalRestoreProvider>();
 builder.Services.AddSingleton<MysqlRestoreProvider>();
-builder.Services.AddSingleton<MysqlPhysicalRestoreProvider>();
+builder.Services.AddMysqlPhysicalRestore();
 builder.Services.AddSingleton<MongoRestoreProvider>();
 builder.Services.AddSingleton<IRestoreProviderFactory, RestoreProviderFactory>();
 

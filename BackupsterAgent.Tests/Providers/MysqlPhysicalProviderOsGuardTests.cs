@@ -2,6 +2,7 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
+using BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
 using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -73,12 +74,33 @@ public sealed class MysqlPhysicalProviderOsGuardTests
             new MysqlBinaryResolver(NullLogger<MysqlBinaryResolver>.Instance),
             runner);
 
-    private static MysqlPhysicalRestoreProvider CreateRestoreProvider(ThrowingProcessRunner runner) =>
-        new(
-            NullLogger<MysqlPhysicalRestoreProvider>.Instance,
-            new MysqlBinaryResolver(NullLogger<MysqlBinaryResolver>.Instance),
-            runner,
+    private static MysqlPhysicalRestoreProvider CreateRestoreProvider(ThrowingProcessRunner runner)
+    {
+        var probe = new MysqlServerProbe(NullLogger<MysqlServerProbe>.Instance);
+        var binaryResolver = new MysqlBinaryResolver(NullLogger<MysqlBinaryResolver>.Instance);
+        var lifecycle = new MysqlLifecycleManager(
+            NullLogger<MysqlLifecycleManager>.Instance,
+            probe,
+            new MysqlSystemdController(NullLogger<MysqlSystemdController>.Instance),
+            binaryResolver);
+        var swapper = new MysqlDatadirSwapper(
+            NullLogger<MysqlDatadirSwapper>.Instance,
             Options.Create(new RestoreSettings()));
+
+        return new(
+            NullLogger<MysqlPhysicalRestoreProvider>.Instance,
+            binaryResolver,
+            probe,
+            new MysqlBackupExtractor(NullLogger<MysqlBackupExtractor>.Instance, runner),
+            new MysqlInstanceInspector(NullLogger<MysqlInstanceInspector>.Instance, probe),
+            lifecycle,
+            swapper,
+            new MysqlDatadirSwapCoordinator(
+                NullLogger<MysqlDatadirSwapCoordinator>.Instance,
+                swapper,
+                lifecycle,
+                probe));
+    }
 
     private static ConnectionConfig Connection() =>
         new()
