@@ -25,13 +25,25 @@ public sealed class MysqlLifecycleManager
         _binaryResolver = binaryResolver;
     }
 
-    public async Task StopMysqlAsync(ConnectionConfig connection, MysqlInstanceInfo instanceInfo, CancellationToken ct)
+    public async Task StopMysqlAsync(ConnectionConfig connection, MysqlInstanceInfo instanceInfo, CancellationToken ct,
+        bool unmaskServiceOnFailure = true)
     {
         if (instanceInfo.ServiceName is not null)
         {
-            await StopServiceAsync(instanceInfo.ServiceName, instanceInfo.Pid, ct);
-            if (!instanceInfo.Pid.HasValue)
-                await WaitForPortClosedAsync(connection.Host, connection.Port, ct);
+            try
+            {
+                await StopServiceAsync(instanceInfo.ServiceName, instanceInfo.Pid, ct);
+                if (!instanceInfo.Pid.HasValue)
+                    await WaitForPortClosedAsync(connection.Host, connection.Port, ct);
+            }
+            catch when (unmaskServiceOnFailure)
+            {
+                _logger.LogWarning(
+                    "Stopping MySQL service '{ServiceName}' failed after masking — unmasking to keep the service manageable",
+                    instanceInfo.ServiceName);
+                await _systemd.TryUnmaskAsync(instanceInfo.ServiceName);
+                throw;
+            }
             return;
         }
 
@@ -128,7 +140,7 @@ public sealed class MysqlLifecycleManager
 
     private async Task StopServiceAsync(string serviceName, int? pid, CancellationToken ct)
     {
-        await _systemd.MaskAsync(serviceName, ct);
+        await _systemd.MaskAsync(serviceName);
         await _systemd.StopAsync(serviceName, ct);
 
         if (pid.HasValue)

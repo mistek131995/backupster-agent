@@ -81,7 +81,8 @@ public sealed class MysqlPhysicalProviderOsGuardTests
         var lifecycle = new MysqlLifecycleManager(
             NullLogger<MysqlLifecycleManager>.Instance,
             probe,
-            new MysqlSystemdController(NullLogger<MysqlSystemdController>.Instance),
+            new MysqlSystemdController(NullLogger<MysqlSystemdController>.Instance, runner,
+                Options.Create(new RestoreSettings())),
             binaryResolver);
         var swapper = new MysqlDatadirSwapper(
             NullLogger<MysqlDatadirSwapper>.Instance,

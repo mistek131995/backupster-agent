@@ -84,7 +84,8 @@ public sealed class MysqlDatadirSwapCoordinator
             }
 
             _logger.LogInformation("Stopping MySQL before recovery");
-            await _lifecycle.StopMysqlAsync(connection, instanceInfo, CancellationToken.None);
+            await _lifecycle.StopMysqlAsync(connection, instanceInfo, CancellationToken.None,
+                unmaskServiceOnFailure: false);
         }
         catch (Exception stopEx)
         {
