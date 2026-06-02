@@ -14,7 +14,7 @@
 
 ## Документация
 
-- **[docs/installation.md](docs/installation.md)** — требования, Docker, systemd, Windows, dev-запуск, поведение при пустом конфиге.
+- **[docs/installation.md](docs/installation.md)** — требования, Linux-пакеты, ручная установка из zip, Windows, dev-запуск, поведение при пустом конфиге.
 - **[docs/configuration.md](docs/configuration.md)** — `Connections`, `Storages`, `Databases`, `FileSets`, шифрование, провайдеры хранилищ, путь к конфигу, структура файлов в хранилище.
 - **[docs/gc-and-retention.md](docs/gc-and-retention.md)** — сборщик мусора для чанков и очистка устаревших бэкапов с настройками.
 - **[docs/restore.md](docs/restore.md)** — восстановление: `RestoreSettings`, требуемые права, поведение при ошибках.

@@ -2,7 +2,7 @@
 
 Два режима бэкапа MySQL / MariaDB:
 
-- **Logical** — `mysqldump` → gzip → encrypt. Универсальный, работает удалённо, переносится между версиями и серверами.
+- **Logical** — `mysqldump` → gzip → encrypt. Универсальный формат, переносится между версиями; агент должен выполняться на том же хосте, что и MySQL/MariaDB.
 - **Physical** — Percona XtraBackup (`xtrabackup --backup --stream=xbstream`) → gzip → encrypt. Быстрее на больших БД, но требовательнее к инфраструктуре (см. ниже).
 
 ---
@@ -76,7 +76,7 @@ FLUSH PRIVILEGES;
 - Differential-режим для MySQL не поддерживается (только full physical).
 - XtraBackup не входит в стандартную поставку MySQL — его нужно установить отдельно.
 - Windows не поддерживается для физического MySQL-бэкапа и restore через XtraBackup — используйте logical-режим.
-- На удалённом сервере (агент и MySQL на разных хостах) физический бэкап невозможен — используйте logical.
+- Агент и MySQL должны выполняться на одном хосте.
 
 ---
 

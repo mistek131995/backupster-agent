@@ -305,7 +305,7 @@ AgentSettings__DashboardUrl=http://your-server:8080
 ## Путь к конфигу
 
 По умолчанию агент ищет `appsettings.json` в:
-- **Docker / Linux:** `/app/config/`
+- **Linux:** `/var/lib/backupster-agent/config/` для пакетной установки, `{директория exe}/config/` для ручной установки из zip
 - **Windows:** `{директория exe}\config\`
 
 Переопределяется через переменную окружения `CONFIG_PATH`.

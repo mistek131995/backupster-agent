@@ -1,7 +1,6 @@
 # Установка и запуск
 
 - [Требования](#требования)
-- [Docker](#docker)
 - [Linux (.deb / .rpm)](#linux-deb--rpm)
 - [Linux (ручная установка из zip)](#linux-ручная-установка-из-zip)
 - [Windows (служба)](#windows-служба)
@@ -12,49 +11,11 @@
 
 ## Требования
 
-- Готовые артефакты (`.deb`, `.rpm`, `linux-x64.zip`, `win-x64.zip`, Docker-образ) self-contained — .NET Runtime ставить не нужно. SDK нужен только для сборки из исходников.
+- Готовые артефакты (`.deb`, `.rpm`, `linux-x64.zip`, `win-x64.zip`) self-contained — .NET Runtime ставить не нужно. SDK нужен только для сборки из исходников.
 - `pg_dump` / `psql` в `PATH` — для PostgreSQL (backup + restore)
 - `mysqldump` / `mysql` в `PATH` — для MySQL/MariaDB (backup + restore)
 - Для MSSQL внешние утилиты не требуются — агент работает по TDS через `Microsoft.Data.SqlClient` и `Microsoft.SqlServer.DacFx` in-process (logical `.bacpac`, physical `BACKUP DATABASE`)
 - Зарегистрированный агент на [backupster.io](https://backupster.io/) (нужен токен)
-
----
-
-## Docker
-
-```bash
-docker run -d --name backupster-agent \
-  --restart unless-stopped \
-  -e AgentSettings__Token=<токен> \
-  -e AgentSettings__DashboardUrl=<url дашборда> \
-  -v /root/backupster-agent:/app/config \
-  ghcr.io/mistek131995/backupster-agent:latest
-```
-
-Volume `/root/backupster-agent:/app/config` сохраняет конфиг, расписание запусков (`runs/`) и очередь offline-бэкапов (`outbox/`). Без него данные пропадут при пересоздании контейнера.
-
-Если планируете использовать файловый бэкап (`FilePaths`), смонтируйте исходные директории в контейнер отдельными томами и пропишите их контейнерные пути в `FilePaths`:
-
-```bash
-docker run -d --name backupster-agent \
-  --restart unless-stopped \
-  -e AgentSettings__Token=<токен> \
-  -e AgentSettings__DashboardUrl=<url дашборда> \
-  -v /root/backupster-agent:/app/config \
-  -v /var/app/uploads:/app/data/uploads \
-  -v /etc/app:/app/data/config \
-  ghcr.io/mistek131995/backupster-agent:latest
-```
-
-В `appsettings.json`: `"FilePaths": ["/app/data/uploads", "/app/data/config"]`.
-
-При первом запуске агент создаст шаблон `/app/config/appsettings.json`. Заполните его и перезапустите контейнер:
-
-```bash
-docker restart backupster-agent
-```
-
----
 
 ## Linux (.deb / .rpm)
 
@@ -111,7 +72,7 @@ sudo dnf remove backupster-agent     # RHEL / Rocky / Fedora
 
 ## Linux (ручная установка из zip)
 
-Используйте, если пакетный путь не подходит — другая архитектура, кастомная директория, минималистичный образ без `systemd`. Self-contained zip публикуется в тех же [GitHub Releases](https://github.com/mistek131995/backupster-agent/releases/latest).
+Используйте, если пакетный путь не подходит — другая архитектура, кастомная директория или окружение без `systemd`. Self-contained zip публикуется в тех же [GitHub Releases](https://github.com/mistek131995/backupster-agent/releases/latest).
 
 ```bash
 sudo mkdir -p /opt/backupster-agent
