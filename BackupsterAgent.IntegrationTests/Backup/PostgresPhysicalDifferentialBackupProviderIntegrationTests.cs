@@ -251,7 +251,6 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             await RunInitDbAsync(_initDbBinary, sourcePgData, _cts.Token);
             AppendPostgresConfOverrides(sourcePgData, sourcePort);
             AppendSummarizeWalOverride(sourcePgData);
-            AppendLoggingOverride(sourcePgData);
 
             await StartClusterAsync(sourcePgData, sourceServerLog, _cts.Token);
             sourceStarted = true;
@@ -286,6 +285,7 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             // source's postgresql.conf and try to bind sourcePort itself.
             await StopClusterFastAsync(sourcePgData, _cts.Token);
             sourceStarted = false;
+            NpgsqlConnection.ClearAllPools();
 
             var chain = new[]
             {
@@ -321,26 +321,18 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             await diffRestoreProvider.PrepareTargetDatabaseAsync(targetConnection, _srcDb, _cts.Token);
             await diffRestoreProvider.RestoreAsync(targetConnection, _srcDb, chain, _cts.Token);
 
-            try
-            {
-                await WaitForServerReadyAsync(sourcePort, sourceConnection, _cts.Token);
+            await WaitForServerReadyAsync(sourcePort, sourceConnection, _cts.Token);
 
-                var rows = await ReadItemsAsync(sourceConnection, sourcePort, _srcDb, _cts.Token);
-                Assert.That(rows, Is.EquivalentTo(InitialRows.Concat(PostFullRows)));
+            var rows = await ReadItemsAsync(sourceConnection, sourcePort, _srcDb, _cts.Token);
+            Assert.That(rows, Is.EquivalentTo(InitialRows.Concat(PostFullRows)));
 
-                var combineWorkDir = Directory.GetParent(targetPgData)!.EnumerateDirectories(
-                    Path.GetFileName(targetPgData) + ".combine").FirstOrDefault();
-                Assert.That(combineWorkDir, Is.Null,
-                    "combineWorkDir must be cleaned up after successful restore");
+            var combineWorkDir = Directory.GetParent(targetPgData)!.EnumerateDirectories(
+                Path.GetFileName(targetPgData) + ".combine").FirstOrDefault();
+            Assert.That(combineWorkDir, Is.Null,
+                "combineWorkDir must be cleaned up after successful restore");
 
-                Assert.That(File.Exists(Path.Combine(targetPgData, "PG_VERSION")), Is.True,
-                    "swapped staging must be in place at targetPgData");
-            }
-            catch
-            {
-                DumpClusterLog(targetPgData);
-                throw;
-            }
+            Assert.That(File.Exists(Path.Combine(targetPgData, "PG_VERSION")), Is.True,
+                "swapped staging must be in place at targetPgData");
         }
         finally
         {
@@ -794,45 +786,6 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             string.Empty,
         ]);
         File.AppendAllText(confPath, overrides);
-    }
-
-    private static void AppendLoggingOverride(string pgData)
-    {
-        var confPath = Path.Combine(pgData, "postgresql.conf");
-        var overrides = string.Join(Environment.NewLine,
-        [
-            string.Empty,
-            "logging_collector = on",
-            "log_directory = 'log'",
-            "log_filename = 'postgresql.log'",
-            "log_min_messages = info",
-            string.Empty,
-        ]);
-        File.AppendAllText(confPath, overrides);
-    }
-
-    private static void DumpClusterLog(string pgData)
-    {
-        var logDir = Path.Combine(pgData, "log");
-        if (!Directory.Exists(logDir))
-        {
-            TestContext.Progress.WriteLine($"DumpClusterLog: no log directory at '{logDir}'");
-            return;
-        }
-
-        foreach (var file in Directory.EnumerateFiles(logDir))
-        {
-            try
-            {
-                var content = File.ReadAllText(file);
-                TestContext.Progress.WriteLine($"DumpClusterLog: ===== {file} =====");
-                TestContext.Progress.WriteLine(content);
-            }
-            catch (Exception ex)
-            {
-                TestContext.Progress.WriteLine($"DumpClusterLog: failed to read '{file}': {ex.Message}");
-            }
-        }
     }
 
     private static async Task WaitForServerReadyAsync(int port, ConnectionConfig connection, CancellationToken ct)
