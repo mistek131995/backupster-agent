@@ -732,7 +732,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         var stdout = await process.StandardOutput.ReadToEndAsync(ct);
         await process.WaitForExitAsync(ct);
 
-        var match = Regex.Match(stdout, @"(\d+)(?:\.\d+)?\s*$");
+        var match = Regex.Match(stdout, @"\(PostgreSQL\)\s+(\d+)");
         if (!match.Success)
             throw new InvalidOperationException(
                 $"Не удалось определить мажорную версию pg_ctl. Вывод '--version': '{stdout.Trim()}'.");
