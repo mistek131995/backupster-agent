@@ -158,6 +158,7 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
         {
             _restorePort = FindFreeLoopbackPort();
             AppendPostgresConfOverrides(_restoreDir, _restorePort);
+            EnsureLocalTrustHbaFile(_restoreDir);
 
             var exitCode = await RunPgCtlDirectAsync(
                 new[]
@@ -352,6 +353,22 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
             string.Empty,
         ]);
         File.AppendAllText(confPath, overrides);
+    }
+
+    private static void EnsureLocalTrustHbaFile(string pgData)
+    {
+        var hba = string.Join(Environment.NewLine,
+        [
+            "local   all   all                  trust",
+            "host    all   all   127.0.0.1/32   trust",
+            "host    all   all   ::1/128        trust",
+            string.Empty,
+        ]);
+        File.WriteAllText(Path.Combine(pgData, "pg_hba.conf"), hba);
+
+        var identPath = Path.Combine(pgData, "pg_ident.conf");
+        if (!File.Exists(identPath))
+            File.WriteAllText(identPath, string.Empty);
     }
 
     private static async Task WaitForServerReadyAsync(int port, ConnectionConfig connection, CancellationToken ct)
