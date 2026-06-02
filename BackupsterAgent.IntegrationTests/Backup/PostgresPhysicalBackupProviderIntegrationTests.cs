@@ -150,6 +150,10 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
 
     private async Task StartRestoreServerWithPortRetryAsync(int maxAttempts)
     {
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(_restoreDir,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             _restorePort = FindFreeLoopbackPort();
