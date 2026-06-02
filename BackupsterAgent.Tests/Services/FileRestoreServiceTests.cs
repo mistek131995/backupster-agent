@@ -583,8 +583,8 @@ public sealed class FileRestoreServiceTests
     [Test]
     public async Task RunAsync_V2Manifest_TargetWithMultipleRoots_BucketsBySubfolder()
     {
-        var rootA = @"C:\app\data";
-        var rootB = @"C:\app\logs";
+        var rootA = Path.Combine(Path.GetTempPath(), "app", "data");
+        var rootB = Path.Combine(Path.GetTempPath(), "app", "logs");
         var target = Path.Combine(_tempRoot, "target");
 
         var content1 = RandomNumberGenerator.GetBytes(20);
