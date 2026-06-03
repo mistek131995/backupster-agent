@@ -39,13 +39,8 @@ public sealed class S3BackupIntegrationTests
             IntegrationConfig.TryGetS3Settings(out var settings),
             Is.True,
             "S3:* not configured; set via dotnet user-secrets or BACKUPSTER_INTEGRATION_S3__* env vars.");
-        Assume.That(
-            IntegrationConfig.TryGetBackupSourcePath(out var src),
-            Is.True,
-            "Backup:SourcePath not configured or directory not found; set via dotnet user-secrets or BACKUPSTER_INTEGRATION_BACKUP__SOURCEPATH env var.");
 
         _baseSettings = settings;
-        _sourcePath = src;
         _encryptionKey = RandomNumberGenerator.GetBytes(32);
     }
 
@@ -70,6 +65,7 @@ public sealed class S3BackupIntegrationTests
 
         _testTempRoot = Path.Combine(Path.GetTempPath(), $"backupster-s3-itest-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_testTempRoot);
+        _sourcePath = IntegrationConfig.CreateBackupSourceDirectory(_testTempRoot);
 
         _encryption = new EncryptionService(
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_encryptionKey) }),

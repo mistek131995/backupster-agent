@@ -37,13 +37,8 @@ public sealed class SftpBackupIntegrationTests
             IntegrationConfig.TryGetSftpSettings(out var settings),
             Is.True,
             "Sftp:* not configured; set via dotnet user-secrets or BACKUPSTER_INTEGRATION_SFTP__* env vars.");
-        Assume.That(
-            IntegrationConfig.TryGetBackupSourcePath(out var src),
-            Is.True,
-            "Backup:SourcePath not configured or directory not found; set via dotnet user-secrets or BACKUPSTER_INTEGRATION_BACKUP__SOURCEPATH env var.");
 
         _baseSettings = settings;
-        _sourcePath = src;
         _encryptionKey = RandomNumberGenerator.GetBytes(32);
     }
 
@@ -66,6 +61,7 @@ public sealed class SftpBackupIntegrationTests
 
         _testTempRoot = Path.Combine(Path.GetTempPath(), $"backupster-sftp-itest-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_testTempRoot);
+        _sourcePath = IntegrationConfig.CreateBackupSourceDirectory(_testTempRoot);
 
         _encryption = new EncryptionService(
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_encryptionKey) }),

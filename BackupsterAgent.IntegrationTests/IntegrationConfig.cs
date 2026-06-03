@@ -28,12 +28,6 @@ public static class IntegrationConfig
             && !string.IsNullOrWhiteSpace(settings.RemotePath);
     }
 
-    public static bool TryGetBackupSourcePath(out string path)
-    {
-        path = Config.Value["Backup:SourcePath"] ?? string.Empty;
-        return !string.IsNullOrWhiteSpace(path) && Directory.Exists(path);
-    }
-
     public static bool TryGetSftpSettings(out SftpSettings settings)
     {
         settings = new SftpSettings();
@@ -244,6 +238,25 @@ public static class IntegrationConfig
 
     public static string MakeUniquePrefix(string testClass) =>
         $"integration-{testClass}-{Guid.NewGuid():N}";
+
+    public static string CreateBackupSourceDirectory(string parentPath)
+    {
+        var sourcePath = Path.Combine(parentPath, "source");
+        Directory.CreateDirectory(sourcePath);
+        Directory.CreateDirectory(Path.Combine(sourcePath, "nested"));
+
+        File.WriteAllText(
+            Path.Combine(sourcePath, "root.txt"),
+            "backupster integration source root\n");
+        File.WriteAllText(
+            Path.Combine(sourcePath, "nested", "child.txt"),
+            "backupster integration source child\n");
+        File.WriteAllBytes(
+            Path.Combine(sourcePath, "payload.bin"),
+            Enumerable.Range(0, 8192).Select(i => (byte)(i % 251)).ToArray());
+
+        return sourcePath;
+    }
 
     public static async Task CleanupPrefixAsync(IUploadProvider provider, string prefix, CancellationToken ct)
     {

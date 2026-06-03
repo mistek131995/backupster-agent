@@ -250,6 +250,10 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
                     "Set max_wal_senders >= 2 in postgresql.conf and reload.",
                     senders, connection.Name);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogDebug(ex,

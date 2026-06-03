@@ -37,13 +37,8 @@ public sealed class WebDavBackupIntegrationTests
             IntegrationConfig.TryGetWebDavSettings(out var settings),
             Is.True,
             "WebDav:* not configured; set via dotnet user-secrets or BACKUPSTER_INTEGRATION_WEBDAV__* env vars.");
-        Assume.That(
-            IntegrationConfig.TryGetBackupSourcePath(out var src),
-            Is.True,
-            "Backup:SourcePath not configured or directory not found; set via dotnet user-secrets or BACKUPSTER_INTEGRATION_BACKUP__SOURCEPATH env var.");
 
         _baseSettings = settings;
-        _sourcePath = src;
         _encryptionKey = RandomNumberGenerator.GetBytes(32);
     }
 
@@ -62,6 +57,7 @@ public sealed class WebDavBackupIntegrationTests
 
         _testTempRoot = Path.Combine(Path.GetTempPath(), $"backupster-itest-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_testTempRoot);
+        _sourcePath = IntegrationConfig.CreateBackupSourceDirectory(_testTempRoot);
 
         _encryption = new EncryptionService(
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_encryptionKey) }),
