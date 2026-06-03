@@ -10,7 +10,5 @@ public sealed class ConnectionConfig
     public int Port { get; init; } = 5432;
     public string Username { get; init; } = string.Empty;
     public string Password { get; init; } = string.Empty;
-    public string? SharedBackupPath { get; init; }
-    public string? AgentBackupPath { get; init; }
     public string? BinPath { get; init; }
 }

@@ -1,7 +1,6 @@
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
-using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -14,6 +13,7 @@ public sealed class MssqlPhysicalBackupProviderIntegrationTests
     private const string TestDbPrefix = "bp_itest_physical_";
 
     private ConnectionConfig _connection = null!;
+    private string _outputPath = null!;
     private string _srcDb = null!;
     private string _dstDb = null!;
     private DateTime _testStartUtc;
@@ -28,6 +28,10 @@ public sealed class MssqlPhysicalBackupProviderIntegrationTests
             "Mssql:* not configured; set via dotnet user-secrets or BACKUPSTER_INTEGRATION_MSSQL__* env vars.");
 
         _connection = connection;
+        Assume.That(
+            IntegrationConfig.TryGetMssqlOutputPath(out _outputPath),
+            Is.True,
+            "Mssql:OutputPath is required for MSSQL physical integration tests. It must be visible and writable to both the agent process and SQL Server.");
         using var bootCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         await DropLeftoverTestDatabasesAsync(_connection, bootCts.Token);
     }
@@ -79,7 +83,7 @@ public sealed class MssqlPhysicalBackupProviderIntegrationTests
             ConnectionName = _connection.Name,
             StorageName = "n/a",
             Database = _srcDb,
-            OutputPath = string.Empty,
+            OutputPath = _outputPath,
         };
 
         var result = await provider.BackupAsync(config, _connection, _cts.Token);
@@ -92,18 +96,16 @@ public sealed class MssqlPhysicalBackupProviderIntegrationTests
             Is.EqualTo(".bak").IgnoreCase,
             "BackupResult.FilePath must use the .bak extension");
 
-        var agentDir = await MssqlSharedPathResolver.GetAgentDirAsync(_connection, _cts.Token);
         Assert.That(
             Path.GetFullPath(Path.GetDirectoryName(result.FilePath)!).TrimEnd('\\', '/'),
-            Is.EqualTo(Path.GetFullPath(agentDir).TrimEnd('\\', '/')).IgnoreCase,
-            "Provider must write the bak under the agent-visible backup directory resolved by MssqlSharedPathResolver");
+            Is.EqualTo(Path.GetFullPath(_outputPath).TrimEnd('\\', '/')).IgnoreCase,
+            "Provider must write the bak under DatabaseConfig.OutputPath");
         Assert.That(
             File.GetLastWriteTimeUtc(result.FilePath),
             Is.GreaterThanOrEqualTo(_testStartUtc.AddSeconds(-2)),
             "Returned FilePath must point to a file produced by this run, not a leftover");
 
-        var sqlDir = await MssqlSharedPathResolver.GetSqlDirAsync(_connection, _cts.Token);
-        var sqlBakPath = MssqlSharedPathResolver.JoinSqlPath(sqlDir, Path.GetFileName(result.FilePath));
+        var sqlBakPath = result.FilePath;
 
         try
         {

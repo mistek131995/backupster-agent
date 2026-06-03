@@ -50,7 +50,7 @@ Poll task → Download → Decrypt → Restore DB → Restore Files → Report
 
 - **По умолчанию поле не задаётся** — и шаблон `appsettings.json` его не содержит. В этом случае используется хардкод `./temp`, который резолвится относительно директории исполняемого файла (**не** текущего каталога процесса — это важно для Windows-службы, у которой CWD по умолчанию `C:\Windows\System32`).
 - **Абсолютный путь** используется как есть. Полезно, если нужно выделить под temp отдельный volume с достаточным местом под многогигабайтные дампы.
-- **Для MSSQL** финальный `.bak` кладётся не в `TempPath`, а в `AgentBackupPath ?? SharedBackupPath` — это требование SQL Server (см. [mssql.md](mssql.md)).
+- **Для MSSQL physical** финальный `.bak` кладётся не в `TempPath`, а в `Databases[].OutputPath` исходной БД — SQL Server должен видеть этот каталог тем же путём (см. [mssql.md](mssql.md)).
 
 ### `FileRestoreBasePath`
 

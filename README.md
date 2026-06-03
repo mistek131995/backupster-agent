@@ -23,7 +23,7 @@
 
 **Физический и логический бэкап по СУБД:**
 - **[docs/postgres.md](docs/postgres.md)** — логический бэкап (`pg_dump`/`psql`) и физический (`pg_basebackup`): права, сценарии развёртывания, ограничения.
-- **[docs/mssql.md](docs/mssql.md)** — логический бэкап (`.bacpac` через DacFx, без внешних бинарников) и физический (`.bak`, `SharedBackupPath`/`AgentBackupPath`): права, сценарии, ограничения.
+- **[docs/mssql.md](docs/mssql.md)** — логический бэкап (`.bacpac` через DacFx, без внешних бинарников) и физический (`.bak` через `OutputPath`): права, сценарии, ограничения.
 - **[docs/mysql.md](docs/mysql.md)** — логический бэкап (`mysqldump`) и физический (Percona XtraBackup): права, требования к инфраструктуре, ограничения.
 
 ---

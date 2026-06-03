@@ -96,30 +96,16 @@
 
 ### Бэкап
 
-Агент выполняет `BACKUP DATABASE ... TO DISK = '<SharedBackupPath>/...'` через TDS-соединение. SQL Server записывает `.bak` в указанный каталог. Затем агент читает файл по пути `AgentBackupPath` (или `SharedBackupPath`, если они совпадают) и прогоняет через стандартный pipeline: шифрование AES-256-GCM → загрузка в S3/SFTP. Временный `.bak` удаляется.
+Агент выполняет `BACKUP DATABASE ... TO DISK = '<OutputPath>/...'` через TDS-соединение. SQL Server записывает `.bak` в `Databases[].OutputPath`. Затем агент читает этот же файл и прогоняет через стандартный pipeline: шифрование AES-256-GCM → загрузка в хранилище. Временный `.bak` удаляется.
 
-**Общий каталог**
+**Рабочий каталог**
 
-Агенту и SQL Server нужен **один физический каталог**, доступный обеим сторонам. Путь к нему с каждой из сторон может быть разным — для этого в конфиге два поля:
-
-- `SharedBackupPath` — путь так, как его видит **SQL Server**. Уходит в команду `BACKUP`/`RESTORE`.
-- `AgentBackupPath` — путь к **той же папке** так, как её видит **агент**. Если пути совпадают — оставить пустым.
-
-**Если `SharedBackupPath` не задан**, агент запрашивает у SQL Server `SERVERPROPERTY('InstanceDefaultBackupPath')` и использует его (на Windows по умолчанию это `C:\Program Files\Microsoft SQL Server\MSSQL<ver>.<instance>\MSSQL\Backup\`). Сценарий рассчитан на то, что агент и SQL Server работают на одном хосте и оба видят этот каталог одинаково.
-
-| Сценарий | `SharedBackupPath` | `AgentBackupPath` |
-|---|---|---|
-| Агент и SQL Server на одном хосте | *(не задано — возьмётся `InstanceDefaultBackupPath`)* | *(не задано)* |
-| Одинаковый хост, но другой каталог для `.bak` | `C:\mssql-backups` | *(не задано)* |
-
-Агент **не** настраивает SMB/CIFS-монтирование или NFS — он только читает и пишет по указанным путям. Проверьте права на запись/чтение с обеих сторон до попытки бэкапа.
-
-> `DatabaseConfig.OutputPath` для MSSQL physical **не используется**. Временным/общим каталогом всегда управляет пара `SharedBackupPath`/`AgentBackupPath` или `InstanceDefaultBackupPath` из SQL Server.
+MSSQL physical использует `Databases[].OutputPath`. Агент и SQL Server должны работать на одном хосте и видеть этот каталог одним и тем же путём. Backupster не мапит разные файловые namespace'ы и не настраивает SMB/CIFS или NFS.
 
 **Требования**
 
-- SQL Server должен иметь право **писать** в `SharedBackupPath` (для backup) и **читать** оттуда (для restore).
-- Агент должен иметь право **читать** из `AgentBackupPath` (для upload) и **писать** туда (для restore — он кладёт туда расшифрованный `.bak` перед `RESTORE`).
+- SQL Server должен иметь право **писать** в `OutputPath` (для backup) и **читать** оттуда (для restore).
+- Агент должен иметь право **читать** из `OutputPath` (для upload) и **писать** туда (для restore — он кладёт туда расшифрованный `.bak` перед `RESTORE`).
 - Локальный TDS-доступ к SQL Server.
 - Пользователь в `ConnectionConfig` входит в одну из ролей: `sysadmin` (server-level), `db_owner` или `db_backupoperator` (database-level целевой БД). Любого одного достаточно.
 
@@ -137,13 +123,13 @@
 
 Агент последовательно:
 
-1. Скачивает и расшифровывает `*.bak` в каталог `AgentBackupPath`.
-2. Выполняет `RESTORE DATABASE <target> FROM DISK = '<SharedBackupPath>/...' WITH REPLACE` через TDS-соединение.
+1. Скачивает и расшифровывает `*.bak` в каталог `OutputPath` исходной БД.
+2. Выполняет `RESTORE DATABASE <target> FROM DISK = '<OutputPath>/...' WITH REPLACE` через TDS-соединение.
 3. Удаляет временный `.bak` из каталога.
 
 **Требования**
 
-- Тот же общий каталог, что и для бэкапа (см. выше).
+- Тот же `OutputPath`, что и для бэкапа (см. выше).
 - Для **создания** target-БД: `sysadmin` (server-level) или `dbcreator` (server-level).
 - Для **DROP существующей** target-БД: `sysadmin`, владение БД (`db_owner`), либо `CONTROL` permission. Если target ещё не существует — снимается автоматически. Примеры команд — те же, что для logical restore выше.
 
@@ -157,18 +143,13 @@
 ### Трудности и ограничения
 
 **Агент и SQL Server должны быть на одном хосте.**
-Physical backup использует `.bak` на диске SQL Server. При backup SQL Server пишет файл в локальный каталог, а агент читает его для шифрования и загрузки; при restore агент кладёт расшифрованный `.bak` в тот же локальный каталог, а SQL Server читает его через `RESTORE DATABASE ... FROM DISK = ...`.
+Physical backup использует `.bak` на диске SQL Server. При backup SQL Server пишет файл в `OutputPath`, а агент читает его для шифрования и загрузки; при restore агент кладёт расшифрованный `.bak` в `OutputPath`, а SQL Server читает его через `RESTORE DATABASE ... FROM DISK = ...`.
 
 **Восстановление разрушает данные целевой базы.**
 `RESTORE ... WITH REPLACE` перезаписывает существующую базу. Активные соединения к ней разрываются SQL Server автоматически. Отменить операцию после начала `RESTORE` невозможно без отдельной копии.
 
 **Восстановление на более старую версию невозможно.**
 Файл `.bak` привязан к версии SQL Server — восстановить его на более старой версии сервер откажется. Для миграции на другую версию используйте логический режим.
-
-**Ответственность за монтирование — на пользователе.**
-Агент не настраивает SMB/CIFS или NFS. Если общий каталог вынесен на сетевую шару, смонтируйте её на том же хосте заранее и укажите пути так, как их видят SQL Server и агент.
-
----
 
 ## Дифференциальный бэкап
 
@@ -184,7 +165,7 @@ Physical backup использует `.bak` на диске SQL Server. При b
 
 1. **Резолв родителя.** По cron-расписанию `physicalDifferential` агент сначала дёргает `GET /api/v1/agent/backup-records/last-successful?database=…&storage=…&mode=physical` (см. [NETWORK.md](../NETWORK.md), секция 9.5). Дашборд возвращает ID последнего успешного полного бэкапа. Нет родителя — DIFF на этом тике пропускается с предупреждением в лог.
 2. **Открытие записи.** `POST /api/v1/agent/backup-record` с `backupMode=physicalDifferential` и `baseBackupRecordId=<id>`. Дашборд валидирует цепочку и возвращает ключи родителя.
-3. **Снятие архива.** SQL Server пишет `.bak` в `SharedBackupPath`. Имя файла несёт суффикс `_diff` — `{database}_{yyyyMMdd_HHmmss}_diff.bak`. Дальше — стандартный pipeline: шифрование AES-256-GCM → загрузка в хранилище.
+3. **Снятие архива.** SQL Server пишет `.bak` в `OutputPath`. Имя файла несёт суффикс `_diff` — `{database}_{yyyyMMdd_HHmmss}_diff.bak`. Дальше — стандартный pipeline: шифрование AES-256-GCM → загрузка в хранилище.
 
 В отличие от PostgreSQL, дополнительных файлов рядом с дампом не появляется — все цепочки SQL Server держит в `msdb` сам. `pgBaseManifestKey` для MSSQL всегда `null`.
 
@@ -194,7 +175,7 @@ Physical backup использует `.bak` на диске SQL Server. При b
 
 Агент:
 
-1. Скачивает и расшифровывает каждое звено цепочки (`.bak` файлы) в `AgentBackupPath`.
+1. Скачивает и расшифровывает каждое звено цепочки (`.bak` файлы) в `OutputPath`.
 2. Применяет цепочку через две T-SQL-команды:
    - `RESTORE DATABASE [target] FROM DISK = N'<full>.bak' WITH FILE = 1, REPLACE, NORECOVERY, MOVE ...` — раскатывает корневой полный с `MOVE`-клозами на дефолтные пути SQL Server и оставляет БД в режиме «восстанавливается, не открыта».
    - `RESTORE DATABASE [target] FROM DISK = N'<diff>.bak' WITH FILE = 1, RECOVERY;` — применяет последний дифференциал и открывает БД.
@@ -207,7 +188,7 @@ Physical backup использует `.bak` на диске SQL Server. При b
 
 - **Дифференциальный бэкап требует существующего FULL в `msdb`.** Если перед `BACKUP DATABASE ... WITH DIFFERENTIAL` сервер не нашёл записи о предыдущем FULL для этой БД, он возвращает ошибку 3035. Агент перехватывает её и выдаёт понятное сообщение «не найден ни один полный бэкап». Обычно достаточно, что FULL был снят этим же Backupster — но если кто-то делал `BACKUP ... WITH INIT` через SSMS и обнулил `msdb`-историю, придётся снять новый FULL.
 - **Recovery model.** Дифференциальный бэкап работает на любой recovery model (FULL, BULK_LOGGED, SIMPLE). Никаких дополнительных требований по сравнению с FULL physical нет.
-- **Тот же общий каталог, что у FULL.** `SharedBackupPath`/`AgentBackupPath` — как для обычного physical. Цепочка живёт в одном хранилище: если у БД сменилось `StorageName`, на новом хранилище сначала нужно снять FULL.
+- **Тот же `OutputPath`, что у FULL.** Цепочка живёт в одном хранилище: если у БД сменилось `StorageName`, на новом хранилище сначала нужно снять FULL.
 - **Без живого FULL дифференциалы не запускаются.** Если для пары `(БД, хранилище)` нет ни одного успешного `Physical`-бэкапа — `physicalDifferential`-расписание молча пропускается с предупреждением в лог. В UI расписание подсвечивается соответствующим предупреждением.
 - **Retention защищает FULL с живыми DIFF.** Полный бэкап нельзя удалить (ни вручную, ни автоматически по retention), пока на нём висит хоть один живой Successful дифференциальный. Сначала истекают и удаляются дифференциалы (листья), потом — корень.
 - **Версия SQL Server — любая поддерживаемая.** Дифференциал — штатный механизм SQL Server, не требует специальных версий.

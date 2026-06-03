@@ -16,6 +16,7 @@ namespace BackupsterAgent.IntegrationTests.Backup;
 public sealed class S3BackupIntegrationTests
 {
     private const string ChunksPrefix = "chunks/";
+    private static readonly byte[] CurrentEncryptedFileMagic = [(byte)'B', (byte)'K', (byte)'0', (byte)'3'];
 
     private S3Settings _baseSettings = null!;
     private string _sourcePath = null!;
@@ -145,6 +146,39 @@ public sealed class S3BackupIntegrationTests
             Assert.That(newChunks, Is.GreaterThan(0), "fresh bucket should upload at least one chunk");
             Assert.That(chunkCount, Is.GreaterThan(0));
         });
+    }
+
+    [Test]
+    public async Task ManifestObject_RawBytesUseCurrentEncryptedFileMagic()
+    {
+        var reporter = new NullProgressReporter<BackupStage>();
+
+        string manifestKey;
+        await using (var writer = _manifestStore.OpenWriter("itest-db", dumpObjectKey: string.Empty))
+        {
+            await _fileBackup.CaptureAsync([_sourcePath], _provider, writer, reporter, _cts.Token);
+            manifestKey = await writer.CompleteAsync(_provider, "raw-manifest-magic", _cts.Token);
+        }
+
+        var rawManifest = await _provider.DownloadBytesAsync(manifestKey, _cts.Token);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rawManifest.Length, Is.GreaterThanOrEqualTo(CurrentEncryptedFileMagic.Length));
+            Assert.That(rawManifest.Take(CurrentEncryptedFileMagic.Length).ToArray(), Is.EqualTo(CurrentEncryptedFileMagic));
+        });
+    }
+
+    [Test]
+    public async Task ManifestV2_MultipleRootsWithSameRelativePath_RestoresToOriginalRoots()
+    {
+        await FileManifestV2IntegrationAssert.RunAsync(
+            _manifestStore,
+            _fileBackup,
+            _fileRestore,
+            _provider,
+            _testTempRoot,
+            _cts.Token);
     }
 
     [Test]

@@ -107,8 +107,6 @@ public static class IntegrationConfig
         var portRaw = section["Port"];
         var username = section["Username"] ?? string.Empty;
         var password = section["Password"] ?? string.Empty;
-        var sharedPath = section["SharedBackupPath"];
-        var agentPath = section["AgentBackupPath"];
 
         var port = ParsePortOrDefault(portRaw, defaultPort: 1433, sectionName: "Mssql");
 
@@ -120,13 +118,22 @@ public static class IntegrationConfig
             Port = port,
             Username = username,
             Password = password,
-            SharedBackupPath = string.IsNullOrWhiteSpace(sharedPath) ? null : sharedPath,
-            AgentBackupPath = string.IsNullOrWhiteSpace(agentPath) ? null : agentPath,
         };
 
         return !string.IsNullOrWhiteSpace(host)
             && !string.IsNullOrWhiteSpace(username)
             && !string.IsNullOrWhiteSpace(password);
+    }
+
+    public static bool TryGetMssqlOutputPath(out string path)
+    {
+        path = Config.Value["Mssql:OutputPath"] ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        Directory.CreateDirectory(path);
+        TryMakeDirectoryWritable(path);
+        return true;
     }
 
     public static bool TryGetS3Settings(out S3Settings settings)
@@ -248,6 +255,23 @@ public static class IntegrationConfig
         {
             try { await provider.DeleteAsync(key, ct); }
             catch { /* best-effort */ }
+        }
+    }
+
+    private static void TryMakeDirectoryWritable(string path)
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        try
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+        }
+        catch
+        {
         }
     }
 }

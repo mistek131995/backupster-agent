@@ -139,18 +139,17 @@ public sealed class DatabaseRestoreService
             else if (connection.DatabaseType == DatabaseType.Mssql && backupMode == BackupMode.Physical)
             {
                 var fileName = $"{targetDatabase}_{taskId:N}.bak";
-                var sqlDir = await MssqlSharedPathResolver.GetSqlDirAsync(connection, ct);
-                var agentDir = await MssqlSharedPathResolver.GetAgentDirAsync(connection, ct);
-                Directory.CreateDirectory(agentDir);
+                var outputPath = ResolveMssqlOutputPath(payload);
+                Directory.CreateDirectory(outputPath);
 
-                EnsureFreeSpace(decryptedPath, agentDir);
+                EnsureFreeSpace(decryptedPath, outputPath);
 
-                var mssqlBakAgentPath = Path.Combine(agentDir, fileName);
+                var mssqlBakAgentPath = Path.Combine(outputPath, fileName);
                 mssqlBakAgentPaths.Add(mssqlBakAgentPath);
                 await CopyFileAsync(decryptedPath, mssqlBakAgentPath, ct);
                 SafeDelete(decryptedPath);
 
-                restoreFilePath = MssqlSharedPathResolver.JoinSqlPath(sqlDir, fileName);
+                restoreFilePath = mssqlBakAgentPath;
             }
             else if (connection.DatabaseType == DatabaseType.Mssql && backupMode == BackupMode.Logical)
             {
@@ -277,8 +276,7 @@ public sealed class DatabaseRestoreService
         await diffProvider.ValidatePermissionsAsync(connection, targetDatabase, ct);
 
         var localChain = new List<DifferentialRestoreChainItem>(payload.Chain.Count);
-        string? mssqlSqlDir = null;
-        string? mssqlAgentDir = null;
+        string? mssqlOutputPath = null;
 
         for (var i = 0; i < payload.Chain.Count; i++)
         {
@@ -301,22 +299,21 @@ public sealed class DatabaseRestoreService
             string dumpPath;
             if (connection.DatabaseType == DatabaseType.Mssql)
             {
-                mssqlSqlDir ??= await MssqlSharedPathResolver.GetSqlDirAsync(connection, ct);
-                if (mssqlAgentDir is null)
+                if (mssqlOutputPath is null)
                 {
-                    mssqlAgentDir = await MssqlSharedPathResolver.GetAgentDirAsync(connection, ct);
-                    Directory.CreateDirectory(mssqlAgentDir);
+                    mssqlOutputPath = ResolveMssqlOutputPath(payload);
+                    Directory.CreateDirectory(mssqlOutputPath);
                 }
 
-                EnsureFreeSpace(decryptedPath, mssqlAgentDir);
+                EnsureFreeSpace(decryptedPath, mssqlOutputPath);
 
                 var fileName = $"{targetDatabase}_{taskId:N}_chain{i}.bak";
-                var agentPath = Path.Combine(mssqlAgentDir, fileName);
+                var agentPath = Path.Combine(mssqlOutputPath, fileName);
                 mssqlBakAgentPaths.Add(agentPath);
                 await CopyFileAsync(decryptedPath, agentPath, ct);
                 SafeDelete(decryptedPath);
 
-                dumpPath = MssqlSharedPathResolver.JoinSqlPath(mssqlSqlDir, fileName);
+                dumpPath = agentPath;
             }
             else
             {
@@ -375,6 +372,28 @@ public sealed class DatabaseRestoreService
         }
 
         return _connections.Resolve(dbConfig.ConnectionName);
+    }
+
+    private string ResolveMssqlOutputPath(RestoreTaskPayload payload)
+    {
+        var dbConfig = _databases.FirstOrDefault(
+            d => string.Equals(d.Database, payload.SourceDatabaseName, StringComparison.Ordinal));
+
+        if (dbConfig is null)
+        {
+            throw new InvalidOperationException(
+                $"БД '{payload.SourceDatabaseName}' не найдена в конфиге агента. " +
+                "Для MSSQL physical restore настройте Databases[].OutputPath у исходной БД.");
+        }
+
+        if (string.IsNullOrWhiteSpace(dbConfig.OutputPath))
+        {
+            throw new InvalidOperationException(
+                $"Для БД '{payload.SourceDatabaseName}' не задан OutputPath. " +
+                "Для MSSQL physical restore укажите Databases[].OutputPath — каталог, доступный агенту и SQL Server.");
+        }
+
+        return Path.GetFullPath(dbConfig.OutputPath);
     }
 
     internal string ResolveTempDir(Guid taskId) =>

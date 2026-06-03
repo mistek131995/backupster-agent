@@ -49,9 +49,7 @@
     "Host": "localhost",
     "Port": 1433,
     "Username": "sa",
-    "Password": "secret",
-    "SharedBackupPath": "/var/opt/mssql/backups",
-    "AgentBackupPath": null
+    "Password": "secret"
   }
 ],
 "Storages": [
@@ -98,9 +96,8 @@
 
 - `Name` подключения и `Name` хранилища должны быть уникальны в пределах своих списков.
 - `ConnectionName` и `StorageName` у БД обязаны ссылаться на существующие записи — иначе эта БД будет пропущена с ошибкой в логе, остальные продолжат работать.
-- `OutputPath` — папка для временных файлов дампа. Файлы удаляются после загрузки.
+- `OutputPath` — папка для временных файлов дампа. Для MSSQL physical этот же путь передаётся SQL Server в `BACKUP DATABASE ... TO DISK` / `RESTORE DATABASE ... FROM DISK`, поэтому агент и SQL Server должны видеть каталог одинаково. Файлы удаляются после загрузки или restore.
 - `FilePaths` — список путей к файлам или директориям для файлового бэкапа. Директории обходятся рекурсивно. Файлы режутся на content-defined chunks (FastCDC, ~4 МиБ) и дедуплицируются внутри одного хранилища. Работает на S3, Azure Blob и LocalFs (везде, где есть дешёвый `HEAD`/листинг для дедупа). На SFTP и WebDAV дамп загрузится, файлы пропустятся с warning. Поле необязательное.
-- `SharedBackupPath` / `AgentBackupPath` — **только для MSSQL**, подробнее — в [mssql.md](mssql.md). Для Postgres и MySQL поля не используются.
 - `BinPath` — **для PostgreSQL и MySQL**, необязательное. Каталог с клиентскими бинарниками: `pg_dump`/`pg_basebackup`/`psql`/`pg_ctl` для PG, `mysqldump`/`mysql` для MySQL. Override авто-резолва. По умолчанию агент сам ищет клиент: для PG — под мажорную версию сервера (реестр Windows + стандартные каталоги установки → `PATH`); для MySQL — `C:\Program Files\MySQL\MySQL Server *\bin` (высшая версия) / `/usr/local/mysql/bin` → `PATH`. Задавайте поле только при нестандартной установке, когда авто-резолв не находит нужный каталог, либо когда `PATH` Windows-службы не содержит MySQL/PG bin (типичный случай — инсталлятор положил каталог только в `User PATH`). Для MSSQL поле не используется. Подробнее — [postgres.md](postgres.md), [mysql.md](mysql.md).
 
 ---

@@ -2,7 +2,6 @@ using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
-using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 
 namespace BackupsterAgent.Providers.Backup;
@@ -37,13 +36,18 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         var fileName = $"{config.Database}_{timestamp}_diff.bak";
 
-        var sqlDir = await MssqlSharedPathResolver.GetSqlDirAsync(connection, ct);
-        var agentDir = await MssqlSharedPathResolver.GetAgentDirAsync(connection, ct);
+        if (string.IsNullOrWhiteSpace(config.OutputPath))
+        {
+            throw new InvalidOperationException(
+                $"Для БД '{config.Database}' не задан OutputPath. " +
+                "Для MSSQL differential backup укажите Databases[].OutputPath — каталог, доступный агенту и SQL Server.");
+        }
 
-        Directory.CreateDirectory(agentDir);
+        var outputPath = Path.GetFullPath(config.OutputPath);
+        Directory.CreateDirectory(outputPath);
 
-        var sqlFilePath = MssqlSharedPathResolver.JoinSqlPath(sqlDir, fileName);
-        var agentFilePath = Path.Combine(agentDir, fileName);
+        var sqlFilePath = Path.Combine(outputPath, fileName);
+        var agentFilePath = sqlFilePath;
 
         _logger.LogInformation(
             "Starting MSSQL differential backup. Database: '{Database}', Host: '{Host}:{Port}', " +
@@ -92,7 +96,7 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
             {
                 throw new InvalidOperationException(
                     $"Файл дифференциального бэкапа '{agentFilePath}' недоступен на хосте агента. " +
-                    "Проверьте, что SharedBackupPath и AgentBackupPath указывают на один и тот же каталог.");
+                    "Проверьте, что OutputPath указывает на каталог, доступный агенту и SQL Server.");
             }
 
             var sizeBytes = new FileInfo(agentFilePath).Length;

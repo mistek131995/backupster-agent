@@ -3,7 +3,6 @@ using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
-using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -16,6 +15,7 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
     private const string TestDbPrefix = "bp_itest_diff_mssql_";
 
     private ConnectionConfig _connection = null!;
+    private string _outputPath = null!;
     private string _srcDb = null!;
     private string _dstDb = null!;
     private DateTime _testStartUtc;
@@ -30,6 +30,10 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
             "Mssql:* not configured; set via dotnet user-secrets or BACKUPSTER_INTEGRATION_MSSQL__* env vars.");
 
         _connection = connection;
+        Assume.That(
+            IntegrationConfig.TryGetMssqlOutputPath(out _outputPath),
+            Is.True,
+            "Mssql:OutputPath is required for MSSQL physical integration tests. It must be visible and writable to both the agent process and SQL Server.");
         using var bootCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         await DropLeftoverTestDatabasesAsync(_connection, bootCts.Token);
     }
@@ -94,11 +98,10 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
                     Does.Contain("_diff.bak"),
                     "diff backup file name must carry the _diff.bak suffix");
 
-                var agentDir = await MssqlSharedPathResolver.GetAgentDirAsync(_connection, _cts.Token);
                 Assert.That(
                     Path.GetFullPath(Path.GetDirectoryName(diffResult.FilePath)!).TrimEnd('\\', '/'),
-                    Is.EqualTo(Path.GetFullPath(agentDir).TrimEnd('\\', '/')).IgnoreCase,
-                    "Diff provider must write the bak under the agent-visible backup directory");
+                    Is.EqualTo(Path.GetFullPath(_outputPath).TrimEnd('\\', '/')).IgnoreCase,
+                    "Diff provider must write the bak under DatabaseConfig.OutputPath");
                 Assert.That(
                     File.GetLastWriteTimeUtc(diffResult.FilePath),
                     Is.GreaterThanOrEqualTo(_testStartUtc.AddSeconds(-2)),
@@ -144,9 +147,8 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
             var diffResult = await diffProvider.BackupAsync(config, _connection, diffCtx, _cts.Token);
             try
             {
-                var sqlDir = await MssqlSharedPathResolver.GetSqlDirAsync(_connection, _cts.Token);
-                var fullSqlPath = MssqlSharedPathResolver.JoinSqlPath(sqlDir, Path.GetFileName(fullResult.FilePath));
-                var diffSqlPath = MssqlSharedPathResolver.JoinSqlPath(sqlDir, Path.GetFileName(diffResult.FilePath));
+                var fullSqlPath = fullResult.FilePath;
+                var diffSqlPath = diffResult.FilePath;
 
                 var chain = new[]
                 {
@@ -213,7 +215,7 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
         ConnectionName = _connection.Name,
         StorageName = "n/a",
         Database = _srcDb,
-        OutputPath = string.Empty,
+        OutputPath = _outputPath,
     };
 
     private static readonly (int Id, string Name)[] InitialRows =
@@ -313,12 +315,10 @@ END";
         using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         try
         {
-            var sqlDir = await MssqlSharedPathResolver.GetSqlDirAsync(connection, cleanupCts.Token);
-            var sqlPath = MssqlSharedPathResolver.JoinSqlPath(sqlDir, Path.GetFileName(agentPath));
             await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
             await conn.OpenAsync(cleanupCts.Token);
             await using var cmd = new SqlCommand(
-                $"EXEC master.sys.xp_delete_files N'{EscapeForString(sqlPath)}';", conn)
+                $"EXEC master.sys.xp_delete_files N'{EscapeForString(agentPath)}';", conn)
             { CommandTimeout = 30 };
             await cmd.ExecuteNonQueryAsync(cleanupCts.Token);
         }
