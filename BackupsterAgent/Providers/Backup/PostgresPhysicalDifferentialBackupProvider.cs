@@ -5,6 +5,7 @@ using BackupsterAgent.Exceptions;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
+using Npgsql;
 
 namespace BackupsterAgent.Providers.Backup;
 
@@ -32,6 +33,7 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
     public async Task ValidatePermissionsAsync(ConnectionConfig connection, string database, CancellationToken ct)
     {
         await EnsureMinimumVersionAsync(connection, ct);
+        await EnsureWalSummarizationEnabledAsync(connection, ct);
         await _fullProvider.ValidatePermissionsAsync(connection, database, ct);
     }
 
@@ -42,6 +44,7 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
         CancellationToken ct)
     {
         await EnsureMinimumVersionAsync(connection, ct);
+        await EnsureWalSummarizationEnabledAsync(connection, ct);
 
         if (string.IsNullOrWhiteSpace(context.BasePgBaseManifestPath))
             throw new InvalidOperationException(
@@ -108,8 +111,7 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
                 _logger.LogError(
                     "pg_basebackup --incremental failed. ExitCode: {ExitCode}. Stderr: {Stderr}",
                     result.ExitCode, stderr);
-                throw new InvalidOperationException(
-                    $"pg_basebackup --incremental завершился с кодом {result.ExitCode}: {stderr}");
+                throw BuildPgBasebackupFailure(result.ExitCode, stderr);
             }
 
             var baseTar = Path.Combine(tempDir, "base.tar.gz");
@@ -171,6 +173,54 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
                 $"но кластер '{connection.Name}' работает на версии {major}. " +
                 "Используйте полный (physical) бэкап или обновите PostgreSQL.");
     }
+
+    private async Task EnsureWalSummarizationEnabledAsync(ConnectionConfig connection, CancellationToken ct)
+    {
+        var raw = await PostgresQueryRetry.ExecuteAsync(
+            _logger, "SHOW summarize_wal", connection.Name,
+            async innerCt =>
+            {
+                await using var conn = new NpgsqlConnection(BuildConnectionString(connection));
+                await conn.OpenAsync(innerCt);
+                await using var cmd = new NpgsqlCommand("SHOW summarize_wal;", conn);
+                return (string?)await cmd.ExecuteScalarAsync(innerCt) ?? string.Empty;
+            }, ct);
+
+        if (!string.Equals(raw, "on", StringComparison.OrdinalIgnoreCase))
+            throw new BackupPermissionException(
+                $"Дифференциальный бэкап PostgreSQL требует включенного WAL summarizer на подключении '{connection.Name}' (summarize_wal=on). " +
+                "Выполните от имени администратора PostgreSQL: ALTER SYSTEM SET summarize_wal = 'on'; SELECT pg_reload_conf(); " +
+                "После включения дождитесь появления WAL summaries и повторите бэкап.");
+    }
+
+    private static InvalidOperationException BuildPgBasebackupFailure(int exitCode, string stderr)
+    {
+        if (IsWalSummaryFailure(stderr))
+            return new InvalidOperationException(
+                "Дифференциальный бэкап PostgreSQL не может быть снят: серверу не хватает WAL summaries для диапазона между родительским бэкапом и текущим бэкапом. " +
+                "Проверьте, что summarize_wal=on, WAL summarizer успел догнать текущий WAL, а wal_summary_keep_time не удалил summaries, нужные для родительского backup_manifest. " +
+                $"Ошибка pg_basebackup: {stderr}");
+
+        return new InvalidOperationException(
+            $"pg_basebackup --incremental завершился с кодом {exitCode}: {stderr}");
+    }
+
+    internal static bool IsWalSummaryFailure(string stderr) =>
+        stderr.Contains("WAL summaries", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("wal summaries", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("wal summar", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildConnectionString(ConnectionConfig connection) =>
+        new NpgsqlConnectionStringBuilder
+        {
+            Host = connection.Host,
+            Port = connection.Port,
+            Username = connection.Username,
+            Password = connection.Password,
+            Database = "postgres",
+            TcpKeepAlive = true,
+            KeepAlive = 30,
+        }.ToString();
 
     private void TryDeleteDirectory(string path)
     {
