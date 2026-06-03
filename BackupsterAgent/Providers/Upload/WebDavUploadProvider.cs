@@ -279,7 +279,7 @@ public sealed class WebDavUploadProvider : IUploadProvider, IDisposable
 
     private async Task<XDocument?> PropfindDirectoryAsync(string dir, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(new HttpMethod("PROPFIND"), BuildUri(dir));
+        using var request = new HttpRequestMessage(new HttpMethod("PROPFIND"), BuildUri(dir, trailingSlash: true));
         request.Headers.TryAddWithoutValidation("Depth", "1");
 
         using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, ct);
@@ -344,7 +344,7 @@ public sealed class WebDavUploadProvider : IUploadProvider, IDisposable
             ct.ThrowIfCancellationRequested();
             current += "/" + part;
 
-            using var request = new HttpRequestMessage(Mkcol, BuildUri(current));
+            using var request = new HttpRequestMessage(Mkcol, BuildUri(current, trailingSlash: true));
             using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, ct);
 
             if (response.IsSuccessStatusCode)
@@ -436,12 +436,16 @@ public sealed class WebDavUploadProvider : IUploadProvider, IDisposable
         catch (Exception ex) { _logger.LogDebug(ex, "Failed to delete WebDAV download tmp file '{TmpPath}'", tmpPath); }
     }
 
-    private Uri BuildUri(string absolutePath)
+    private Uri BuildUri(string absolutePath, bool trailingSlash = false)
     {
         var encoded = string.Join('/', absolutePath
             .Split('/', StringSplitOptions.RemoveEmptyEntries)
             .Select(Uri.EscapeDataString));
-        return new Uri(_baseUri, "/" + encoded);
+        var path = "/" + encoded;
+        if (trailingSlash && path.Length > 1)
+            path += "/";
+
+        return new Uri(_baseUri, path);
     }
 
     private static string GetParentPath(string path)
