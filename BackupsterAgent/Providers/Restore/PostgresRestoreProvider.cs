@@ -33,7 +33,7 @@ FROM pg_roles WHERE rolname = current_user;";
             _logger, "SELECT pg_roles restore permissions", connection.Name,
             async innerCt =>
             {
-                await using var conn = new NpgsqlConnection(BuildAdminConnectionString(connection));
+                await using var conn = new NpgsqlConnection(PostgresConnectionFactory.BuildAdminConnectionString(connection));
                 await conn.OpenAsync(innerCt);
 
                 await using var cmd = new NpgsqlCommand(sql, conn);
@@ -66,7 +66,7 @@ FROM pg_roles WHERE rolname = current_user;";
     {
         var quoted = QuoteIdentifier(targetDatabase);
 
-        await using var conn = new NpgsqlConnection(BuildAdminConnectionString(connection));
+        await using var conn = new NpgsqlConnection(PostgresConnectionFactory.BuildAdminConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using (var terminate = new NpgsqlCommand(
@@ -126,18 +126,6 @@ FROM pg_roles WHERE rolname = current_user;";
 
         _logger.LogInformation("Postgres restore completed for database '{Database}'", targetDatabase);
     }
-
-    private static string BuildAdminConnectionString(ConnectionConfig connection) =>
-        new NpgsqlConnectionStringBuilder
-        {
-            Host = connection.Host,
-            Port = connection.Port,
-            Username = connection.Username,
-            Password = connection.Password,
-            Database = "postgres",
-            TcpKeepAlive = true,
-            KeepAlive = 30,
-        }.ToString();
 
     private static string QuoteIdentifier(string name)
     {

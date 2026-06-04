@@ -36,16 +36,7 @@ SELECT rolsuper,
        has_schema_privilege(current_user, 'public', 'USAGE') AS can_use_public
 FROM pg_roles WHERE rolname = current_user;";
 
-        var connString = new NpgsqlConnectionStringBuilder
-        {
-            Host = connection.Host,
-            Port = connection.Port,
-            Username = connection.Username,
-            Password = connection.Password,
-            Database = database,
-            TcpKeepAlive = true,
-            KeepAlive = 30,
-        }.ToString();
+        var connString = PostgresConnectionFactory.BuildDatabaseConnectionString(connection, database);
 
         var (isSuperuser, canConnect, canUsePublic) = await PostgresQueryRetry.ExecuteAsync(
             _logger, "SELECT pg_roles permissions", connection.Name,

@@ -50,6 +50,21 @@
     "Port": 1433,
     "Username": "sa",
     "Password": "secret"
+  },
+  {
+    "Name": "local-mongo",
+    "DatabaseType": "MongoDb",
+    "Host": "mongo.internal",
+    "Port": 27017,
+    "Username": "backup",
+    "Password": "secret",
+    "BinPath": "/usr/bin"
+  },
+  {
+    "Name": "atlas-mongo",
+    "DatabaseType": "MongoDb",
+    "ConnectionUri": "mongodb+srv://backup:<password>@cluster.example.net/?tls=true",
+    "BinPath": "/usr/bin"
   }
 ],
 "Storages": [
@@ -98,7 +113,8 @@
 - `ConnectionName` и `StorageName` у БД обязаны ссылаться на существующие записи — иначе эта БД будет пропущена с ошибкой в логе, остальные продолжат работать.
 - `OutputPath` — папка для временных файлов дампа. Для MSSQL physical этот же путь передаётся SQL Server в `BACKUP DATABASE ... TO DISK` / `RESTORE DATABASE ... FROM DISK`, поэтому агент и SQL Server должны видеть каталог одинаково. Файлы удаляются после загрузки или restore.
 - `FilePaths` — список путей к файлам или директориям для файлового бэкапа. Директории обходятся рекурсивно. Файлы режутся на content-defined chunks (FastCDC, ~4 МиБ) и дедуплицируются внутри одного хранилища. Работает на S3, Azure Blob и LocalFs (везде, где есть дешёвый `HEAD`/листинг для дедупа). На SFTP и WebDAV дамп загрузится, файлы пропустятся с warning. Поле необязательное.
-- `BinPath` — **для PostgreSQL и MySQL**, необязательное. Каталог с клиентскими бинарниками: `pg_dump`/`pg_basebackup`/`psql`/`pg_ctl` для PG, `mysqldump`/`mysql` для MySQL. Override авто-резолва. По умолчанию агент сам ищет клиент: для PG — под мажорную версию сервера (реестр Windows + стандартные каталоги установки → `PATH`); для MySQL — `C:\Program Files\MySQL\MySQL Server *\bin` (высшая версия) / `/usr/local/mysql/bin` → `PATH`. Задавайте поле только при нестандартной установке, когда авто-резолв не находит нужный каталог, либо когда `PATH` Windows-службы не содержит MySQL/PG bin (типичный случай — инсталлятор положил каталог только в `User PATH`). Для MSSQL поле не используется. Подробнее — [postgres.md](postgres.md), [mysql.md](mysql.md).
+- Для MongoDB используйте **либо** `ConnectionUri`, **либо** `Host` + `Port` + `Username` + `Password`. Смешанный вариант не синхронизируется на дашборд и не используется для backup/restore.
+- `BinPath` — **для PostgreSQL, MySQL и MongoDB**, необязательное. Каталог с клиентскими бинарниками: `pg_dump`/`pg_basebackup`/`psql`/`pg_ctl` для PG, `mysqldump`/`mysql` для MySQL, `mongodump`/`mongorestore` для MongoDB. Override авто-резолва. По умолчанию агент сам ищет клиент: для PG — под мажорную версию сервера (реестр Windows + стандартные каталоги установки → `PATH`); для MySQL — `C:\Program Files\MySQL\MySQL Server *\bin` (высшая версия) / `/usr/local/mysql/bin` → `PATH`; для MongoDB — стандартные каталоги MongoDB Database Tools / MongoDB Server → `PATH`. Задавайте поле только при нестандартной установке, когда авто-резолв не находит нужный каталог, либо когда `PATH` службы не содержит нужный bin-каталог. Для MSSQL поле не используется. Подробнее — [postgres.md](postgres.md), [mysql.md](mysql.md).
 
 ---
 

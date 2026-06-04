@@ -136,13 +136,13 @@ Backup и restore/delete на одном агенте не идут паралл
 
 | Список | Что уходит | Эндпоинт |
 |---|---|---|
-| Подключения | `Name`, `DatabaseType`, `Host`, `Port` | `POST /api/v1/agent/connections` |
+| Подключения | `Name`, `DatabaseType`, `Host`, `Port`; для MongoDB с `ConnectionUri` — только безопасные host/port из URI | `POST /api/v1/agent/connections` |
 | Базы данных | `Name`, `DatabaseType` (резолвится из `Connections`) | `POST /api/v1/agent/databases` |
 | Наборы файлов | `Name`, `StorageName` | `POST /api/v1/agent/filesets` |
 
 Благодаря этому регистрация агента на дашборде — это одно поле «Название»: после создания получаете токен, вставляете его в `appsettings.json` на хосте агента, и все сущности появятся в UI автоматически при старте.
 
-**Credentials никогда не покидают хост агента.** `Username` и `Password` из `Connections[]`, ключ шифрования, ключи S3/SFTP/Azure Blob/WebDAV (у LocalFs credentials нет — только путь) — всё живёт только в `appsettings.json` и используется локально при вызове `pg_dump` / `mysqldump`, подключении к MSSQL по TDS (`SqlClient` + DacFx) и загрузке в хранилище.
+**Credentials никогда не покидают хост агента.** `Username`, `Password` и MongoDB `ConnectionUri` из `Connections[]`, ключ шифрования, ключи S3/SFTP/Azure Blob/WebDAV (у LocalFs credentials нет — только путь) — всё живёт только в `appsettings.json` и используется локально при вызове `pg_dump` / `mysqldump` / `mongodump`, подключении к MSSQL по TDS (`SqlClient` + DacFx) и загрузке в хранилище.
 
 Каждый sync выполняется один раз на старте. Если дашборд недоступен — агент ретраит с экспоненциальным backoff (до 5 минут между попытками). После успеха sync-worker останавливается. Чтобы повторить синхронизацию (например, после добавления новой БД или переименования file-set'а в `appsettings.json`), перезапустите агент.
 

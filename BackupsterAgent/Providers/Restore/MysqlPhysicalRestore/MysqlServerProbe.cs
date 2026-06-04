@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Resolvers;
 using MySqlConnector;
 
 namespace BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
@@ -23,7 +24,7 @@ public sealed class MysqlServerProbe
 
     public async Task<string> QueryDataDirectoryAsync(ConnectionConfig connection, CancellationToken ct)
     {
-        await using var conn = new MySqlConnection(BuildConnectionString(connection));
+        await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildServerConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using var cmd = new MySqlCommand("SELECT @@datadir;", conn);
@@ -39,7 +40,7 @@ public sealed class MysqlServerProbe
 
     public async Task EnsureShutdownPrivilegeAsync(ConnectionConfig connection, CancellationToken ct)
     {
-        await using var conn = new MySqlConnection(BuildConnectionString(connection));
+        await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildServerConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using var cmd = new MySqlCommand(
@@ -61,7 +62,7 @@ public sealed class MysqlServerProbe
     {
         try
         {
-            await using var conn = new MySqlConnection(BuildConnectionString(connection));
+            await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildServerConnectionString(connection));
             await conn.OpenAsync(ct);
 
             await using var cmd = new MySqlCommand("SELECT @@pid_file;", conn);
@@ -82,7 +83,7 @@ public sealed class MysqlServerProbe
 
     public async Task IssueShutdownAsync(ConnectionConfig connection, CancellationToken ct)
     {
-        await using var conn = new MySqlConnection(BuildConnectionString(connection));
+        await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildServerConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using var cmd = new MySqlCommand("SHUTDOWN;", conn);
@@ -102,7 +103,7 @@ public sealed class MysqlServerProbe
     {
         try
         {
-            await using var conn = new MySqlConnection(BuildConnectionString(connection));
+            await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildServerConnectionString(connection));
             await conn.OpenAsync(ct);
             return MysqlConnectionProbeResult.Reachable;
         }
@@ -133,12 +134,4 @@ public sealed class MysqlServerProbe
         return false;
     }
 
-    private static string BuildConnectionString(ConnectionConfig connection) =>
-        new MySqlConnectionStringBuilder
-        {
-            Server = connection.Host,
-            Port = (uint)connection.Port,
-            UserID = connection.Username,
-            Password = connection.Password,
-        }.ToString();
 }

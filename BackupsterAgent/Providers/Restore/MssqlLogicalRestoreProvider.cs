@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Dac;
 
@@ -23,7 +24,7 @@ SELECT
         ELSE 0
     END AS bit) AS can_drop_existing;";
 
-        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
+        await using var conn = new SqlConnection(MssqlConnectionFactory.BuildMasterConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using var cmd = new SqlCommand(sql, conn);
@@ -80,7 +81,7 @@ SELECT
             "Starting MSSQL logical restore. Database: '{Database}', Host: '{Host}:{Port}', Source: '{Source}'",
             targetDatabase, connection.Host, connection.Port, restoreFilePath);
 
-        var dac = new DacServices(BuildMasterConnectionString(connection));
+        var dac = new DacServices(MssqlConnectionFactory.BuildMasterConnectionString(connection));
         dac.Message += OnDacMessage;
         dac.ProgressChanged += OnDacProgress;
 
@@ -145,23 +146,12 @@ BEGIN
     DROP DATABASE {quoted};
 END";
 
-        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
+        await using var conn = new SqlConnection(MssqlConnectionFactory.BuildMasterConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 60 };
         await cmd.ExecuteNonQueryAsync(ct);
     }
-
-    private static string BuildMasterConnectionString(ConnectionConfig connection) =>
-        new SqlConnectionStringBuilder
-        {
-            DataSource = $"{connection.Host},{connection.Port}",
-            InitialCatalog = "master",
-            UserID = connection.Username,
-            Password = connection.Password,
-            TrustServerCertificate = true,
-            Encrypt = true,
-        }.ToString();
 
     private static string QuoteIdentifier(string name)
     {

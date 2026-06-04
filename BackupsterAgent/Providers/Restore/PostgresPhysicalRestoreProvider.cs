@@ -382,7 +382,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
             _logger, "SHOW data_directory", connection.Name,
             async innerCt =>
             {
-                await using var conn = new NpgsqlConnection(BuildConnectionString(connection));
+                await using var conn = new NpgsqlConnection(PostgresConnectionFactory.BuildAdminConnectionString(connection));
                 await conn.OpenAsync(innerCt);
 
                 await using var cmd = new NpgsqlCommand("SHOW data_directory;", conn);
@@ -771,18 +771,6 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         Directory.CreateDirectory(root);
         return Path.Combine(root, $"{prefix}-{Guid.NewGuid():N}");
     }
-
-    private static string BuildConnectionString(ConnectionConfig connection) =>
-        new NpgsqlConnectionStringBuilder
-        {
-            Host = connection.Host,
-            Port = connection.Port,
-            Username = connection.Username,
-            Password = connection.Password,
-            Database = "postgres",
-            TcpKeepAlive = true,
-            KeepAlive = 30,
-        }.ToString();
 
     private async Task EnsureClusterIsNotServiceManagedAsync(string pgDataPath, CancellationToken ct)
     {

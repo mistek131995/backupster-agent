@@ -36,6 +36,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="BackupsterAgent.Tests" />
+    <InternalsVisibleTo Include="BackupsterAgent.IntegrationTests" />
   </ItemGroup>
 
 </Project>

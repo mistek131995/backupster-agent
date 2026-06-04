@@ -30,16 +30,7 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
         var binary = await _binaryResolver.ResolveAsync(connection, "pg_basebackup", ct);
         await EnsureBinaryAvailableAsync(binary, ct);
 
-        var connString = new NpgsqlConnectionStringBuilder
-        {
-            Host = connection.Host,
-            Port = connection.Port,
-            Username = connection.Username,
-            Password = connection.Password,
-            Database = "postgres",
-            TcpKeepAlive = true,
-            KeepAlive = 30,
-        }.ToString();
+        var connString = PostgresConnectionFactory.BuildAdminConnectionString(connection);
 
         var (isSuperuser, hasReplication) = await PostgresQueryRetry.ExecuteAsync(
             _logger, "SELECT rolsuper, rolreplication", connection.Name,
@@ -239,16 +230,7 @@ public sealed class PostgresPhysicalBackupProvider : IBackupProvider
     {
         try
         {
-            var connString = new NpgsqlConnectionStringBuilder
-            {
-                Host = connection.Host,
-                Port = connection.Port,
-                Username = connection.Username,
-                Password = connection.Password,
-                Database = "postgres",
-                TcpKeepAlive = true,
-                KeepAlive = 30,
-            }.ToString();
+            var connString = PostgresConnectionFactory.BuildAdminConnectionString(connection);
 
             var raw = await PostgresQueryRetry.ExecuteAsync(
                 _logger, "SHOW max_wal_senders", connection.Name,

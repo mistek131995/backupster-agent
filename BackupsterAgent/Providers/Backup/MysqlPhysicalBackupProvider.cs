@@ -42,7 +42,7 @@ FROM information_schema.USER_PRIVILEGES
 WHERE GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''',
                         SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''');";
 
-        await using var conn = new MySqlConnection(BuildConnectionString(connection));
+        await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildServerConnectionString(connection));
         await conn.OpenAsync(ct);
 
         bool hasReload, hasProcess, hasRepl, hasBackupAdmin;
@@ -208,15 +208,6 @@ WHERE GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''',
         var result = await cmd.ExecuteScalarAsync(ct);
         return result as string ?? string.Empty;
     }
-
-    private static string BuildConnectionString(ConnectionConfig connection) =>
-        new MySqlConnectionStringBuilder
-        {
-            Server = connection.Host,
-            Port = (uint)connection.Port,
-            UserID = connection.Username,
-            Password = connection.Password,
-        }.ToString();
 
     private void TryDeleteFile(string path)
     {

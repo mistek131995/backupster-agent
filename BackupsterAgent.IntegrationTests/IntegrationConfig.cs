@@ -94,6 +94,34 @@ public static class IntegrationConfig
             && !string.IsNullOrWhiteSpace(password);
     }
 
+    public static bool TryGetMongoConnection(out ConnectionConfig connection)
+    {
+        var section = Config.Value.GetSection("Mongo");
+        var host = section["Host"] ?? string.Empty;
+        var portRaw = section["Port"];
+        var username = section["Username"] ?? string.Empty;
+        var password = section["Password"] ?? string.Empty;
+        var connectionUri = section["ConnectionUri"];
+        var binPath = section["BinPath"];
+
+        var port = ParsePortOrDefault(portRaw, defaultPort: 27017, sectionName: "Mongo");
+
+        connection = new ConnectionConfig
+        {
+            Name = "mongo-itest",
+            DatabaseType = DatabaseType.MongoDb,
+            ConnectionUri = string.IsNullOrWhiteSpace(connectionUri) ? null : connectionUri,
+            Host = host,
+            Port = port,
+            Username = username,
+            Password = password,
+            BinPath = string.IsNullOrWhiteSpace(binPath) ? null : binPath,
+        };
+
+        return !string.IsNullOrWhiteSpace(host)
+            || !string.IsNullOrWhiteSpace(connectionUri);
+    }
+
     public static bool TryGetMssqlConnection(out ConnectionConfig connection)
     {
         var section = Config.Value.GetSection("Mssql");

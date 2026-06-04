@@ -1,6 +1,7 @@
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 
 namespace BackupsterAgent.Providers.Restore;
@@ -29,7 +30,7 @@ SELECT
         ELSE 0
     END AS bit) AS can_drop_existing;";
 
-        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
+        await using var conn = new SqlConnection(MssqlConnectionFactory.BuildMasterConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using var cmd = new SqlCommand(sql, conn);
@@ -72,7 +73,7 @@ BEGIN
     DROP DATABASE {quoted};
 END";
 
-        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
+        await using var conn = new SqlConnection(MssqlConnectionFactory.BuildMasterConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 60 };
@@ -120,7 +121,7 @@ END";
             "Executing RESTORE DATABASE '{Database}' FROM '{Path}' with {MoveCount} MOVE clause(s), {Recovery}",
             targetDatabase, restoreFilePath, fileList.Count, recoveryClause);
 
-        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
+        await using var conn = new SqlConnection(MssqlConnectionFactory.BuildMasterConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 0 };
@@ -137,7 +138,7 @@ END";
         var escapedPath = restoreFilePath.Replace("'", "''");
         var sql = $"RESTORE FILELISTONLY FROM DISK = N'{escapedPath}' WITH FILE = 1;";
 
-        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
+        await using var conn = new SqlConnection(MssqlConnectionFactory.BuildMasterConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 0 };
@@ -160,7 +161,7 @@ END";
 SELECT CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS nvarchar(260)) AS DataPath,
        CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS nvarchar(260)) AS LogPath;";
 
-        await using var conn = new SqlConnection(BuildMasterConnectionString(connection));
+        await using var conn = new SqlConnection(MssqlConnectionFactory.BuildMasterConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using var cmd = new SqlCommand(sql, conn);
@@ -244,17 +245,6 @@ SELECT CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS nvarchar(260)) AS DataP
         var sep = usesBackslash ? "\\" : "/";
         return trimmed + sep + fileName;
     }
-
-    private static string BuildMasterConnectionString(ConnectionConfig connection) =>
-        new SqlConnectionStringBuilder
-        {
-            DataSource = $"{connection.Host},{connection.Port}",
-            InitialCatalog = "master",
-            UserID = connection.Username,
-            Password = connection.Password,
-            TrustServerCertificate = true,
-            Encrypt = true,
-        }.ToString();
 
     private static string QuoteIdentifier(string name)
     {

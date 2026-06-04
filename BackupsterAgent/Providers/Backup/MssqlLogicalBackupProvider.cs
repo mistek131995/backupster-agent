@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Dac;
 
@@ -22,7 +23,7 @@ SELECT IS_MEMBER('db_owner')     AS is_owner,
        HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION')      AS can_view_def,
        HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DATABASE STATE')  AS can_view_state;";
 
-        await using var conn = new SqlConnection(BuildConnectionString(connection, database));
+        await using var conn = new SqlConnection(MssqlConnectionFactory.BuildDatabaseConnectionString(connection, database));
         await conn.OpenAsync(ct);
 
         await using var cmd = new SqlCommand(sql, conn);
@@ -54,15 +55,7 @@ SELECT IS_MEMBER('db_owner')     AS is_owner,
 
         Directory.CreateDirectory(config.OutputPath);
 
-        var connectionString = new SqlConnectionStringBuilder
-        {
-            DataSource = $"{connection.Host},{connection.Port}",
-            InitialCatalog = config.Database,
-            UserID = connection.Username,
-            Password = connection.Password,
-            Encrypt = true,
-            TrustServerCertificate = true,
-        }.ConnectionString;
+        var connectionString = MssqlConnectionFactory.BuildDatabaseConnectionString(connection, config.Database);
 
         logger.LogInformation(
             "Starting MSSQL logical backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{Output}'",
@@ -148,14 +141,4 @@ SELECT IS_MEMBER('db_owner')     AS is_owner,
         catch (Exception ex) { logger.LogWarning(ex, "Could not delete partial file '{Path}'", path); }
     }
 
-    private static string BuildConnectionString(ConnectionConfig connection, string database) =>
-        new SqlConnectionStringBuilder
-        {
-            DataSource = $"{connection.Host},{connection.Port}",
-            InitialCatalog = database,
-            UserID = connection.Username,
-            Password = connection.Password,
-            Encrypt = true,
-            TrustServerCertificate = true,
-        }.ConnectionString;
 }

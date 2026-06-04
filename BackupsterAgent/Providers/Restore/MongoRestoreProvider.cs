@@ -1,4 +1,3 @@
-using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Services.Common.Processes;
@@ -29,7 +28,7 @@ public sealed class MongoRestoreProvider : IRestoreProvider
         var mongorestore = _binaryResolver.Resolve(connection, "mongorestore");
         await EnsureBinaryAvailableAsync(mongorestore, "mongorestore", ct);
 
-        var settings = BuildClientSettings(connection);
+        var settings = MongoConnectionFactory.BuildClientSettings(connection);
         var client = new MongoClient(settings);
 
         try
@@ -44,15 +43,19 @@ public sealed class MongoRestoreProvider : IRestoreProvider
         {
             throw new RestorePermissionException(
                 $"Не удалось аутентифицироваться в MongoDB. " +
-                $"Проверьте логин и пароль пользователя '{connection.Username}' подключения '{connection.Name}'.");
+                $"Проверьте параметры подключения '{connection.Name}' ({MongoConnectionFactory.DescribeUser(connection)}).");
         }
         catch (MongoCommandException ex) when (ex.CodeName == "Unauthorized")
         {
+            var grantHint = MongoConnectionFactory.HasConnectionUri(connection)
+                ? $"Выдайте пользователю из ConnectionUri роль dbOwner на БД '{targetDatabase}'."
+                : $"Выдайте роль: use admin; db.grantRolesToUser('{connection.Username}', " +
+                  $"[{{role: 'dbOwner', db: '{targetDatabase}'}}])";
+
             throw new RestorePermissionException(
-                $"Пользователь '{connection.Username}' подключения '{connection.Name}' " +
+                $"{MongoConnectionFactory.DescribeUser(connection)} подключения '{connection.Name}' " +
                 $"не имеет прав для восстановления БД '{targetDatabase}'. " +
-                $"Выдайте роль: use admin; db.grantRolesToUser('{connection.Username}', " +
-                $"[{{role: 'dbOwner', db: '{targetDatabase}'}}])");
+                grantHint);
         }
     }
 
@@ -72,7 +75,7 @@ public sealed class MongoRestoreProvider : IRestoreProvider
 
     public async Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
     {
-        var settings = BuildClientSettings(connection);
+        var settings = MongoConnectionFactory.BuildClientSettings(connection);
         var client = new MongoClient(settings);
 
         try
@@ -81,12 +84,16 @@ public sealed class MongoRestoreProvider : IRestoreProvider
         }
         catch (MongoCommandException ex) when (ex.CodeName == "Unauthorized")
         {
+            var grantHint = MongoConnectionFactory.HasConnectionUri(connection)
+                ? $"Для восстановления пользователю из ConnectionUri требуется роль dbOwner на БД '{targetDatabase}'."
+                : $"Для восстановления требуется роль dbOwner: " +
+                  $"use admin; db.grantRolesToUser('{connection.Username}', " +
+                  $"[{{role: 'dbOwner', db: '{targetDatabase}'}}])";
+
             throw new RestorePermissionException(
-                $"Пользователь '{connection.Username}' подключения '{connection.Name}' " +
+                $"{MongoConnectionFactory.DescribeUser(connection)} подключения '{connection.Name}' " +
                 $"не имеет прав на удаление БД '{targetDatabase}'. " +
-                $"Для восстановления требуется роль dbOwner: " +
-                $"use admin; db.grantRolesToUser('{connection.Username}', " +
-                $"[{{role: 'dbOwner', db: '{targetDatabase}'}}])");
+                grantHint);
         }
 
         _logger.LogInformation("MongoDB target database '{Database}' prepared (dropped)", targetDatabase);
@@ -100,8 +107,7 @@ public sealed class MongoRestoreProvider : IRestoreProvider
 
         try
         {
-            var uri = BuildMongoUri(connection);
-            var configPath = await WriteTempConfigAsync(uri, configDir, ct);
+            var configPath = await MongoConnectionFactory.WriteToolConfigAsync(connection, configDir, ct);
 
             var args = new List<string>
             {
@@ -141,8 +147,8 @@ public sealed class MongoRestoreProvider : IRestoreProvider
 
             if (result.ExitCode != 0)
             {
-                var stderr = result.Stderr.Trim();
-                var stdout = result.Stdout.Trim();
+                var stderr = MongoConnectionFactory.Redact(result.Stderr.Trim());
+                var stdout = MongoConnectionFactory.Redact(result.Stdout.Trim());
                 var detail = string.IsNullOrEmpty(stderr) ? stdout : stderr;
                 throw new InvalidOperationException($"mongorestore завершился с ошибкой (код {result.ExitCode}): {detail}");
             }
@@ -181,48 +187,6 @@ public sealed class MongoRestoreProvider : IRestoreProvider
                 $"{binary} --version вернул код {result.ExitCode}. " +
                 "Убедитесь, что MongoDB Database Tools установлены и " + name + " находится в PATH " +
                 "(или задайте ConnectionConfig.BinPath).");
-    }
-
-    private static MongoClientSettings BuildClientSettings(ConnectionConfig connection)
-    {
-        var settings = new MongoClientSettings
-        {
-            Server = new MongoServerAddress(connection.Host, connection.Port),
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-            ServerSelectionTimeout = TimeSpan.FromSeconds(10),
-        };
-
-        if (!string.IsNullOrEmpty(connection.Username))
-        {
-            settings.Credential = MongoCredential.CreateCredential(
-                "admin", connection.Username, connection.Password);
-        }
-
-        return settings;
-    }
-
-    private static string BuildMongoUri(ConnectionConfig connection)
-    {
-        var host = $"{connection.Host}:{connection.Port}";
-        if (string.IsNullOrEmpty(connection.Username))
-            return $"mongodb://{host}/?authSource=admin";
-
-        var user = Uri.EscapeDataString(connection.Username);
-        var pass = Uri.EscapeDataString(connection.Password);
-        return $"mongodb://{user}:{pass}@{host}/?authSource=admin";
-    }
-
-    private static async Task<string> WriteTempConfigAsync(string uri, string dir, CancellationToken ct)
-    {
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, "config.yaml");
-        var escaped = uri.Replace("'", "''");
-        await File.WriteAllTextAsync(path, $"uri: '{escaped}'\n", Encoding.UTF8, ct);
-
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-
-        return path;
     }
 
     private void TryDeleteDirectory(string path)

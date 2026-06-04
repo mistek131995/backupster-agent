@@ -1,7 +1,7 @@
 using System.Net.Http.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
-using BackupsterAgent.Services.Common;
+using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Extensions.Options;
 using Polly;
@@ -43,7 +43,7 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
             if (payload.Connections.Count == 0)
             {
                 _logger.LogWarning(
-                    "ConnectionSyncService: no fully configured connections to sync (all entries have empty Host). Skipping.");
+                    "ConnectionSyncService: no fully configured connections to sync. Skipping.");
                 return true;
             }
 
@@ -91,8 +91,30 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
         foreach (var name in _connections.Names)
         {
             var conn = _connections.Resolve(name);
+            var host = conn.Host;
+            var port = conn.Port;
 
-            if (string.IsNullOrWhiteSpace(conn.Host))
+            if (conn.DatabaseType == DatabaseType.MongoDb && MongoConnectionFactory.HasConnectionUri(conn))
+            {
+                try
+                {
+                    var endpoint = MongoConnectionFactory.BuildTopologyEndpoint(conn);
+                    if (endpoint is not null)
+                    {
+                        host = endpoint.Host;
+                        port = endpoint.Port;
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    _logger.LogWarning(
+                        "ConnectionSyncService: skipping MongoDB connection '{Name}' because ConnectionUri is invalid. Check MongoDB connection settings.",
+                        conn.Name);
+                    continue;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(host))
             {
                 _logger.LogWarning(
                     "ConnectionSyncService: skipping connection '{Name}' — Host is empty.",
@@ -100,11 +122,11 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
                 continue;
             }
 
-            if (conn.Port <= 0 || conn.Port > 65535)
+            if (port <= 0 || port > 65535)
             {
                 _logger.LogWarning(
                     "ConnectionSyncService: skipping connection '{Name}' — Port {Port} is out of range.",
-                    conn.Name, conn.Port);
+                    conn.Name, port);
                 continue;
             }
 
@@ -112,8 +134,8 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
             {
                 Name = conn.Name,
                 DatabaseType = conn.DatabaseType.ToString(),
-                Host = conn.Host,
-                Port = conn.Port,
+                Host = host,
+                Port = port,
             });
         }
 

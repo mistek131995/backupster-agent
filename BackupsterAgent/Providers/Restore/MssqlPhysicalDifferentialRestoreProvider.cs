@@ -1,6 +1,7 @@
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 
 namespace BackupsterAgent.Providers.Restore;
@@ -77,7 +78,7 @@ public sealed class MssqlPhysicalDifferentialRestoreProvider : IDifferentialRest
         _logger.LogInformation(
             "Step 2/2: RESTORE DIFFERENTIAL '{Path}' WITH RECOVERY", lastDiffItem.DumpFilePath);
 
-        await using (var conn = new SqlConnection(BuildMasterConnectionString(connection)))
+        await using (var conn = new SqlConnection(MssqlConnectionFactory.BuildMasterConnectionString(connection)))
         {
             await conn.OpenAsync(ct);
             await using var cmd = new SqlCommand(diffSql, conn) { CommandTimeout = 0 };
@@ -86,17 +87,6 @@ public sealed class MssqlPhysicalDifferentialRestoreProvider : IDifferentialRest
 
         _logger.LogInformation("MSSQL differential restore completed for database '{Database}'", targetDatabase);
     }
-
-    private static string BuildMasterConnectionString(ConnectionConfig connection) =>
-        new SqlConnectionStringBuilder
-        {
-            DataSource = $"{connection.Host},{connection.Port}",
-            InitialCatalog = "master",
-            UserID = connection.Username,
-            Password = connection.Password,
-            TrustServerCertificate = true,
-            Encrypt = true,
-        }.ToString();
 
     private static string QuoteIdentifier(string name)
     {

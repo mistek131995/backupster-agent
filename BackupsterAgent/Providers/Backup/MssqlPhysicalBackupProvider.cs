@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 
 namespace BackupsterAgent.Providers.Backup;
@@ -27,7 +28,7 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
        IS_MEMBER('db_owner')             AS is_owner,
        IS_MEMBER('db_backupoperator')    AS is_backupoperator;";
 
-        await using var conn = new SqlConnection(BuildConnectionString(connection, database));
+        await using var conn = new SqlConnection(MssqlConnectionFactory.BuildDatabaseConnectionString(connection, database));
         await conn.OpenAsync(ct);
 
         await using var cmd = new SqlCommand(sql, conn);
@@ -75,15 +76,7 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
         var escapedPath = sqlFilePath.Replace("'", "''");
         var tsql = $"BACKUP DATABASE [{escapedDb}] TO DISK = N'{escapedPath}' WITH FORMAT, INIT, STATS = 10;";
 
-        var connectionString = new SqlConnectionStringBuilder
-        {
-            DataSource = $"{connection.Host},{connection.Port}",
-            InitialCatalog = "master",
-            UserID = connection.Username,
-            Password = connection.Password,
-            TrustServerCertificate = true,
-            Encrypt = true,
-        }.ConnectionString;
+        var connectionString = MssqlConnectionFactory.BuildMasterConnectionString(connection);
 
         var sw = Stopwatch.StartNew();
 
@@ -134,17 +127,6 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
             throw;
         }
     }
-
-    private static string BuildConnectionString(ConnectionConfig connection, string database) =>
-        new SqlConnectionStringBuilder
-        {
-            DataSource = $"{connection.Host},{connection.Port}",
-            InitialCatalog = database,
-            UserID = connection.Username,
-            Password = connection.Password,
-            TrustServerCertificate = true,
-            Encrypt = true,
-        }.ToString();
 
     private void TryDeleteFile(string path)
     {

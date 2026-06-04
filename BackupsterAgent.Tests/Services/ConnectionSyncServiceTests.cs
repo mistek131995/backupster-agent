@@ -3,11 +3,10 @@ using System.Text.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
-using BackupsterAgent.Services;
-using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Services.Dashboard.Sync;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -118,6 +117,149 @@ public sealed class ConnectionSyncServiceTests
     }
 
     [Test]
+    public async Task SyncAsync_MongoConnectionUri_SendsSanitizedTopology()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.NoContent);
+        var service = Build(handler,
+        [
+            new ConnectionConfig
+            {
+                Name = "atlas",
+                DatabaseType = DatabaseType.MongoDb,
+                ConnectionUri = "mongodb://user:secret@cluster.example.net:27019/?tls=true&tlsCAFile=/etc/ca.pem",
+            },
+        ]);
+
+        var ok = await service.SyncAsync();
+
+        Assert.That(ok, Is.True);
+        Assert.That(handler.Calls, Has.Count.EqualTo(1));
+
+        var payload = handler.Calls[0].DeserializeBody<ConnectionSyncRequestDto>();
+        Assert.That(payload, Is.Not.Null);
+        Assert.That(payload!.Connections, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(payload.Connections[0].Name, Is.EqualTo("atlas"));
+            Assert.That(payload.Connections[0].DatabaseType, Is.EqualTo("MongoDb"));
+            Assert.That(payload.Connections[0].Host, Is.EqualTo("cluster.example.net"));
+            Assert.That(payload.Connections[0].Port, Is.EqualTo(27019));
+        });
+
+        var body = System.Text.Encoding.UTF8.GetString(handler.Calls[0].Body);
+        Assert.Multiple(() =>
+        {
+            Assert.That(body, Does.Not.Contain("secret"));
+            Assert.That(body, Does.Not.Contain("tlsCAFile"));
+            Assert.That(body, Does.Not.Contain("/etc/ca.pem"));
+        });
+    }
+
+    [Test]
+    public async Task SyncAsync_InvalidMongoConnectionUri_DoesNotLogSensitiveUriParts()
+    {
+        var handler = new CapturingHandler();
+        var logger = new CapturingLogger<ConnectionSyncService>();
+        var service = Build(handler,
+        [
+            new ConnectionConfig
+            {
+                Name = "atlas",
+                DatabaseType = DatabaseType.MongoDb,
+                ConnectionUri = "mongodb://user:secret@cluster.example.net:bad/?tls=true&tlsCAFile=/etc/ca.pem",
+            },
+        ],
+        logger: logger);
+
+        var ok = await service.SyncAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Is.Empty);
+        });
+
+        var logText = string.Join(Environment.NewLine, logger.Messages);
+        Assert.Multiple(() =>
+        {
+            Assert.That(logText, Does.Contain("ConnectionUri is invalid"));
+            Assert.That(logText, Does.Not.Contain("secret"));
+            Assert.That(logText, Does.Not.Contain("tlsCAFile"));
+            Assert.That(logText, Does.Not.Contain("/etc/ca.pem"));
+        });
+    }
+
+    [Test]
+    public async Task SyncAsync_MongoConnectionUriWithZeroPort_SkipsHttp()
+    {
+        var handler = new CapturingHandler();
+        var logger = new CapturingLogger<ConnectionSyncService>();
+        var service = Build(handler,
+        [
+            new ConnectionConfig
+            {
+                Name = "atlas",
+                DatabaseType = DatabaseType.MongoDb,
+                ConnectionUri = "mongodb://user:secret@cluster.example.net:0/?tls=true&tlsCAFile=/etc/ca.pem",
+            },
+        ],
+        logger: logger);
+
+        var ok = await service.SyncAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Is.Empty);
+        });
+
+        var logText = string.Join(Environment.NewLine, logger.Messages);
+        Assert.Multiple(() =>
+        {
+            Assert.That(logText, Does.Contain("ConnectionUri is invalid"));
+            Assert.That(logText, Does.Not.Contain("secret"));
+            Assert.That(logText, Does.Not.Contain("tlsCAFile"));
+            Assert.That(logText, Does.Not.Contain("/etc/ca.pem"));
+        });
+    }
+
+    [Test]
+    public async Task SyncAsync_MongoConnectionUriMixedWithLegacyFields_SkipsHttp()
+    {
+        var handler = new CapturingHandler();
+        var logger = new CapturingLogger<ConnectionSyncService>();
+        var service = Build(handler,
+        [
+            new ConnectionConfig
+            {
+                Name = "atlas",
+                DatabaseType = DatabaseType.MongoDb,
+                ConnectionUri = "mongodb://user:secret@cluster.example.net:27017/?tls=true&tlsCAFile=/etc/ca.pem",
+                Host = "legacy-host",
+            },
+        ],
+        logger: logger);
+
+        var ok = await service.SyncAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Is.Empty);
+        });
+
+        var logText = string.Join(Environment.NewLine, logger.Messages);
+        Assert.Multiple(() =>
+        {
+            Assert.That(logText, Does.Contain("ConnectionUri is invalid"));
+            Assert.That(logText, Does.Not.Contain("secret"));
+            Assert.That(logText, Does.Not.Contain("tlsCAFile"));
+            Assert.That(logText, Does.Not.Contain("/etc/ca.pem"));
+            Assert.That(logText, Does.Not.Contain("legacy-host"));
+        });
+    }
+
+    [Test]
     public async Task SyncAsync_EmptyToken_SkipsHttpAndReturnsFalse()
     {
         var handler = new CapturingHandler();
@@ -158,7 +300,8 @@ public sealed class ConnectionSyncServiceTests
         HttpMessageHandler handler,
         IReadOnlyList<ConnectionConfig> connections,
         string token = "secret-token",
-        string dashboardUrl = "http://dashboard.local:8080")
+        string dashboardUrl = "http://dashboard.local:8080",
+        ILogger<ConnectionSyncService>? logger = null)
     {
         var http = new HttpClient(handler);
         var resolver = new ConnectionResolver(connections);
@@ -169,7 +312,7 @@ public sealed class ConnectionSyncServiceTests
         });
         return new ConnectionSyncService(http, resolver, settings,
             new NullAuthGuard(),
-            NullLogger<ConnectionSyncService>.Instance);
+            logger ?? NullLogger<ConnectionSyncService>.Instance);
     }
 
     private sealed class NullAuthGuard : IDashboardAuthGuard
@@ -210,5 +353,28 @@ public sealed class ConnectionSyncServiceTests
     {
         public T? DeserializeBody<T>() => JsonSerializer.Deserialize<T>(Body,
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            if (exception is not null)
+                message += Environment.NewLine + exception;
+
+            Messages.Add(message);
+        }
     }
 }

@@ -38,7 +38,7 @@ SELECT
 FROM information_schema.SCHEMA_PRIVILEGES
 WHERE TABLE_SCHEMA = @db;";
 
-        await using var conn = new MySqlConnection(BuildAdminConnectionString(connection));
+        await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildAdminConnectionString(connection));
         await conn.OpenAsync(ct);
 
         var (globalCreate, globalDrop) = await ReadPrivilegePairAsync(conn, globalSql, null, ct);
@@ -66,7 +66,7 @@ WHERE TABLE_SCHEMA = @db;";
     {
         var quoted = QuoteIdentifier(targetDatabase);
 
-        await using var conn = new MySqlConnection(BuildAdminConnectionString(connection));
+        await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildAdminConnectionString(connection));
         await conn.OpenAsync(ct);
 
         await using (var drop = new MySqlCommand($"DROP DATABASE IF EXISTS {quoted};", conn))
@@ -191,16 +191,6 @@ WHERE TABLE_SCHEMA = @db;";
         var after = i + second.Length;
         return after == line.Length || !char.IsLetterOrDigit(line[after]) && line[after] != '_';
     }
-
-    private static string BuildAdminConnectionString(ConnectionConfig connection) =>
-        new MySqlConnectionStringBuilder
-        {
-            Server = connection.Host,
-            Port = (uint)connection.Port,
-            UserID = connection.Username,
-            Password = connection.Password,
-            Database = "information_schema",
-        }.ToString();
 
     private static string QuoteIdentifier(string name)
     {

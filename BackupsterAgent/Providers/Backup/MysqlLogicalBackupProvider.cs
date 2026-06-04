@@ -42,7 +42,7 @@ SELECT
 FROM information_schema.SCHEMA_PRIVILEGES
 WHERE TABLE_SCHEMA = @db;";
 
-        await using var conn = new MySqlConnection(BuildConnectionString(connection));
+        await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildServerConnectionString(connection));
         await conn.OpenAsync(ct);
 
         bool globalSelect, globalProcess;
@@ -188,15 +188,6 @@ WHERE TABLE_SCHEMA = @db;";
                 "Убедитесь, что пакет mysql-client установлен и mysqldump находится в PATH " +
                 "(или задайте ConnectionConfig.BinPath).");
     }
-
-    private static string BuildConnectionString(ConnectionConfig connection) =>
-        new MySqlConnectionStringBuilder
-        {
-            Server = connection.Host,
-            Port = (uint)connection.Port,
-            UserID = connection.Username,
-            Password = connection.Password,
-        }.ToString();
 
     private void TryDeleteFile(string path)
     {

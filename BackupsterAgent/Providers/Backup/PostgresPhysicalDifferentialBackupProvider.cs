@@ -198,7 +198,7 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
             _logger, "SHOW summarize_wal", connection.Name,
             async innerCt =>
             {
-                await using var conn = new NpgsqlConnection(BuildConnectionString(connection));
+                await using var conn = new NpgsqlConnection(PostgresConnectionFactory.BuildAdminConnectionString(connection));
                 await conn.OpenAsync(innerCt);
                 await using var cmd = new NpgsqlCommand("SHOW summarize_wal;", conn);
                 return (string?)await cmd.ExecuteScalarAsync(innerCt) ?? string.Empty;
@@ -227,18 +227,6 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
         stderr.Contains("WAL summaries", StringComparison.OrdinalIgnoreCase)
         || stderr.Contains("wal summaries", StringComparison.OrdinalIgnoreCase)
         || stderr.Contains("wal summar", StringComparison.OrdinalIgnoreCase);
-
-    private static string BuildConnectionString(ConnectionConfig connection) =>
-        new NpgsqlConnectionStringBuilder
-        {
-            Host = connection.Host,
-            Port = connection.Port,
-            Username = connection.Username,
-            Password = connection.Password,
-            Database = "postgres",
-            TcpKeepAlive = true,
-            KeepAlive = 30,
-        }.ToString();
 
     private void TryDeleteDirectory(string path)
     {

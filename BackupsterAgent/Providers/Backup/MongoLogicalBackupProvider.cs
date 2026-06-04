@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
@@ -31,7 +30,7 @@ public sealed class MongoLogicalBackupProvider : IBackupProvider
         var mongodump = _binaryResolver.Resolve(connection, "mongodump");
         await EnsureBinaryAvailableAsync(mongodump, ct);
 
-        var settings = BuildClientSettings(connection);
+        var settings = MongoConnectionFactory.BuildClientSettings(connection);
         var client = new MongoClient(settings);
 
         try
@@ -44,15 +43,19 @@ public sealed class MongoLogicalBackupProvider : IBackupProvider
         {
             throw new BackupPermissionException(
                 $"Не удалось аутентифицироваться в MongoDB. " +
-                $"Проверьте логин и пароль пользователя '{connection.Username}' подключения '{connection.Name}'.");
+                $"Проверьте параметры подключения '{connection.Name}' ({MongoConnectionFactory.DescribeUser(connection)}).");
         }
         catch (MongoCommandException ex) when (ex.CodeName == "Unauthorized")
         {
+            var grantHint = MongoConnectionFactory.HasConnectionUri(connection)
+                ? $"Выдайте пользователю из ConnectionUri роль read на БД '{database}'."
+                : $"Выдайте роль: db.grantRolesToUser('{connection.Username}', " +
+                  $"[{{role: 'read', db: '{database}'}}])";
+
             throw new BackupPermissionException(
-                $"Пользователь '{connection.Username}' подключения '{connection.Name}' " +
+                $"{MongoConnectionFactory.DescribeUser(connection)} подключения '{connection.Name}' " +
                 $"не имеет прав на чтение БД '{database}'. " +
-                $"Выдайте роль: db.grantRolesToUser('{connection.Username}', " +
-                $"[{{role: 'read', db: '{database}'}}])");
+                grantHint);
         }
     }
 
@@ -75,8 +78,7 @@ public sealed class MongoLogicalBackupProvider : IBackupProvider
 
         try
         {
-            var uri = BuildMongoUri(connection);
-            configPath = await WriteTempConfigAsync(uri, configDir, ct);
+            configPath = await MongoConnectionFactory.WriteToolConfigAsync(connection, configDir, ct);
 
             var request = new ExternalProcessRequest
             {
@@ -117,7 +119,7 @@ public sealed class MongoLogicalBackupProvider : IBackupProvider
             if (result.ExitCode != 0)
             {
                 TryDeleteFile(outputFile);
-                var stderr = result.Stderr.Trim();
+                var stderr = MongoConnectionFactory.Redact(result.Stderr.Trim());
                 _logger.LogError("mongodump failed. ExitCode: {ExitCode}. Stderr: {Stderr}", result.ExitCode, stderr);
                 throw new InvalidOperationException($"mongodump завершился с кодом {result.ExitCode}: {stderr}");
             }
@@ -167,48 +169,6 @@ public sealed class MongoLogicalBackupProvider : IBackupProvider
                 $"{binary} --version вернул код {result.ExitCode}. " +
                 "Убедитесь, что пакет mongodb-database-tools установлен и mongodump находится в PATH " +
                 "(или задайте ConnectionConfig.BinPath).");
-    }
-
-    private static MongoClientSettings BuildClientSettings(ConnectionConfig connection)
-    {
-        var settings = new MongoClientSettings
-        {
-            Server = new MongoServerAddress(connection.Host, connection.Port),
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-            ServerSelectionTimeout = TimeSpan.FromSeconds(10),
-        };
-
-        if (!string.IsNullOrEmpty(connection.Username))
-        {
-            settings.Credential = MongoCredential.CreateCredential(
-                "admin", connection.Username, connection.Password);
-        }
-
-        return settings;
-    }
-
-    private static string BuildMongoUri(ConnectionConfig connection)
-    {
-        var host = $"{connection.Host}:{connection.Port}";
-        if (string.IsNullOrEmpty(connection.Username))
-            return $"mongodb://{host}/?authSource=admin";
-
-        var user = Uri.EscapeDataString(connection.Username);
-        var pass = Uri.EscapeDataString(connection.Password);
-        return $"mongodb://{user}:{pass}@{host}/?authSource=admin";
-    }
-
-    private static async Task<string> WriteTempConfigAsync(string uri, string dir, CancellationToken ct)
-    {
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, "config.yaml");
-        var escaped = uri.Replace("'", "''");
-        await File.WriteAllTextAsync(path, $"uri: '{escaped}'\n", Encoding.UTF8, ct);
-
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-
-        return path;
     }
 
     private void TryDeleteFile(string path)

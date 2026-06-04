@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 
 namespace BackupsterAgent.Providers.Backup;
@@ -58,15 +59,7 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
         var escapedPath = sqlFilePath.Replace("'", "''");
         var tsql = $"BACKUP DATABASE [{escapedDb}] TO DISK = N'{escapedPath}' WITH DIFFERENTIAL, FORMAT, INIT, STATS = 10;";
 
-        var connectionString = new SqlConnectionStringBuilder
-        {
-            DataSource = $"{connection.Host},{connection.Port}",
-            InitialCatalog = "master",
-            UserID = connection.Username,
-            Password = connection.Password,
-            TrustServerCertificate = true,
-            Encrypt = true,
-        }.ConnectionString;
+        var connectionString = MssqlConnectionFactory.BuildMasterConnectionString(connection);
 
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(ct);

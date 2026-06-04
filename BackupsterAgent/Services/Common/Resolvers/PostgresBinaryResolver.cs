@@ -96,7 +96,7 @@ public sealed class PostgresBinaryResolver
     private async Task<int?> QueryServerMajorAsync(ConnectionConfig connection, CancellationToken ct) =>
         await PostgresQueryRetry.ExecuteAsync(_logger, "SHOW server_version_num", connection.Name, async innerCt =>
         {
-            await using var conn = new NpgsqlConnection(BuildConnectionString(connection));
+            await using var conn = new NpgsqlConnection(PostgresConnectionFactory.BuildAdminConnectionString(connection));
             await conn.OpenAsync(innerCt);
 
             await using var cmd = new NpgsqlCommand("SHOW server_version_num;", conn);
@@ -107,18 +107,6 @@ public sealed class PostgresBinaryResolver
 
             return null;
         }, ct);
-
-    private static string BuildConnectionString(ConnectionConfig connection) =>
-        new NpgsqlConnectionStringBuilder
-        {
-            Host = connection.Host,
-            Port = connection.Port,
-            Username = connection.Username,
-            Password = connection.Password,
-            Database = "postgres",
-            TcpKeepAlive = true,
-            KeepAlive = 30,
-        }.ToString();
 
     private static string? FindBinDirForMajor(int major)
     {
