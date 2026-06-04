@@ -77,7 +77,7 @@ FROM pg_roles WHERE rolname = current_user;";
         var binary = await _binaryResolver.ResolveAsync(connection, "pg_dump", ct);
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var fileName = $"{config.Database}_{timestamp}.sql.gz";
+        var fileName = $"{config.DatabasePathSegment}_{timestamp}.sql.gz";
         var outputFile = Path.Combine(config.OutputPath, fileName);
 
         Directory.CreateDirectory(config.OutputPath);

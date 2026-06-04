@@ -52,6 +52,7 @@ public sealed class DatabaseBackupPipeline
         string? pgManifestFile = null;
         string? encryptedPgManifest = null;
         string? decryptedBaseManifest = null;
+        string? decryptedBaseManifestWorkDir = null;
         string? dumpObjectKey = null;
         string? pgBaseManifestKey = null;
         string? backupFolder = null;
@@ -63,7 +64,7 @@ public sealed class DatabaseBackupPipeline
         {
             var connection = _connections.Resolve(config.ConnectionName);
             uploader = _uploadFactory.GetProvider(storage.Name);
-            backupFolder = $"{config.Database}/{startedAt:yyyy-MM-dd_HH-mm-ss}";
+            backupFolder = $"{config.DatabasePathSegment}/{startedAt:yyyy-MM-dd_HH-mm-ss}";
 
             BackupResult dumpResult;
             if (mode == BackupMode.PhysicalDifferential)
@@ -86,8 +87,10 @@ public sealed class DatabaseBackupPipeline
                         throw new InvalidOperationException(
                             "Дифференциальный бэкап PostgreSQL невозможен: дашборд не передал ключ backup_manifest родительского бэкапа.");
 
-                    decryptedBaseManifest = await DownloadAndDecryptManifestAsync(
+                    var baseManifest = await DownloadAndDecryptManifestAsync(
                         uploader, exec.BasePgBaseManifestKey, config, ct);
+                    decryptedBaseManifest = baseManifest.DecryptedPath;
+                    decryptedBaseManifestWorkDir = baseManifest.WorkDir;
                 }
 
                 var context = new DifferentialBackupContext
@@ -155,6 +158,7 @@ public sealed class DatabaseBackupPipeline
             TryDelete(pgManifestFile);
             TryDelete(encryptedPgManifest);
             TryDelete(decryptedBaseManifest);
+            TryDeleteDirectory(decryptedBaseManifestWorkDir);
         }
 
         var (fileMetrics, fileError) = await CaptureFilesSafelyAsync(
@@ -223,7 +227,7 @@ public sealed class DatabaseBackupPipeline
         }
     }
 
-    private async Task<string> DownloadAndDecryptManifestAsync(
+    private async Task<(string DecryptedPath, string WorkDir)> DownloadAndDecryptManifestAsync(
         IUploadProvider uploader,
         string objectKey,
         DatabaseConfig config,
@@ -251,7 +255,7 @@ public sealed class DatabaseBackupPipeline
             _logger.LogWarning(ex, "Failed to delete encrypted parent manifest '{Path}'", encryptedPath);
         }
 
-        return decryptedPath;
+        return (decryptedPath, workDir);
     }
 
     private void TryDelete(string? path)
@@ -268,6 +272,23 @@ public sealed class DatabaseBackupPipeline
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not delete local file '{Path}'", path);
+        }
+    }
+
+    private void TryDeleteDirectory(string? path)
+    {
+        if (path is null) return;
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+                _logger.LogDebug("Deleted local directory '{Path}'", path);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not delete local directory '{Path}'", path);
         }
     }
 

@@ -40,6 +40,22 @@ public static class PgBaseContainer
         }
     }
 
+    public static string[] FindUnsupportedPgBasebackupArchives(string directory)
+    {
+        if (!Directory.Exists(directory)) return Array.Empty<string>();
+
+        return Directory.EnumerateFiles(directory)
+            .Select(Path.GetFileName)
+            .Where(name => name is not null)
+            .Cast<string>()
+            .Where(IsTarArchive)
+            .Where(name =>
+                !string.Equals(name, BaseEntryName, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(name, WalEntryName, StringComparison.OrdinalIgnoreCase))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     public static void MoveFileIntoPlace(string sourcePath, string outputPath)
     {
         if (!File.Exists(sourcePath))
@@ -114,6 +130,11 @@ public static class PgBaseContainer
 
     private static string BuildTmpPath(string outputPath) =>
         $"{outputPath}.tmp-{Guid.NewGuid():N}";
+
+    private static bool IsTarArchive(string fileName) =>
+        fileName.EndsWith(".tar", StringComparison.OrdinalIgnoreCase)
+        || fileName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
+        || fileName.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase);
 
     private static void TryDeleteFile(string path)
     {

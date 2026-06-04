@@ -86,7 +86,7 @@ WHERE GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''',
         var xtrabackup = _binaryResolver.Resolve(connection, "xtrabackup");
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var fileName = $"{config.Database}_{timestamp}.xbstream.gz";
+        var fileName = $"{config.DatabasePathSegment}_{timestamp}.xbstream.gz";
         var outputFile = Path.Combine(config.OutputPath, fileName);
         var tempDir = Path.Combine(config.OutputPath, $"xtra-{Guid.NewGuid():N}");
 

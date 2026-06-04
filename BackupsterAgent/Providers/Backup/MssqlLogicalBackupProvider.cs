@@ -49,7 +49,7 @@ SELECT IS_MEMBER('db_owner')     AS is_owner,
     public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
     {
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var fileName = $"{config.Database}_{timestamp}.bacpac";
+        var fileName = $"{config.DatabasePathSegment}_{timestamp}.bacpac";
         var outputFile = Path.Combine(config.OutputPath, fileName);
 
         Directory.CreateDirectory(config.OutputPath);

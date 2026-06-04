@@ -1,3 +1,4 @@
+using BackupsterAgent.Configuration;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Resolvers;
 
@@ -58,5 +59,53 @@ public sealed class DatabaseNameValidatorTests
     {
         Assert.That(DatabaseNameValidator.IsValid(name, out var reason), Is.False);
         Assert.That(reason, Does.Contain("недопустимый символ"));
+    }
+
+    [Test]
+    public void ToSafePathSegment_SafeName_ReturnsName()
+    {
+        Assert.That(DatabaseNameValidator.ToSafePathSegment("customers_2026"), Is.EqualTo("customers_2026"));
+    }
+
+    [Test]
+    public void ToSafePathSegment_UnsafeName_ReturnsBase64UrlSegment()
+    {
+        var segment = DatabaseNameValidator.ToSafePathSegment("../prod");
+
+        Assert.That(segment, Is.EqualTo("db-Li4vcHJvZA"));
+        Assert.That(segment, Does.Not.Contain("/"));
+        Assert.That(segment, Does.Not.Contain("\\"));
+        Assert.That(segment, Does.Not.Contain(".."));
+    }
+
+    [Test]
+    public void ToSafePathSegment_LongUnsafeName_ReturnsHashSegment()
+    {
+        var segment = DatabaseNameValidator.ToSafePathSegment(new string('Ж', 200));
+
+        Assert.That(segment, Does.StartWith("db-"));
+        Assert.That(segment.Length, Is.EqualTo(67));
+    }
+
+    [Test]
+    public void ToSafePathSegment_EmptyName_Throws()
+    {
+        Assert.Throws<InvalidOperationException>(() => DatabaseNameValidator.ToSafePathSegment(string.Empty));
+    }
+
+    [Test]
+    public void DatabasePathSegment_SafeDatabaseName_ReturnsDatabaseName()
+    {
+        var config = new DatabaseConfig { Database = "customers" };
+
+        Assert.That(config.DatabasePathSegment, Is.EqualTo("customers"));
+    }
+
+    [Test]
+    public void DatabasePathSegment_UnsafeDatabaseName_ReturnsGeneratedSegment()
+    {
+        var config = new DatabaseConfig { Database = "../prod" };
+
+        Assert.That(config.DatabasePathSegment, Is.EqualTo("db-Li4vcHJvZA"));
     }
 }

@@ -51,7 +51,7 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
     public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
     {
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var fileName = $"{config.Database}_{timestamp}.bak";
+        var fileName = $"{config.DatabasePathSegment}_{timestamp}.bak";
 
         if (string.IsNullOrWhiteSpace(config.OutputPath))
         {

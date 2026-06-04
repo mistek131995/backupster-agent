@@ -62,8 +62,8 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
         await _fullProvider.WarnIfInsufficientWalSendersAsync(connection, ct);
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var fileName = $"{config.Database}_{timestamp}_diff{PgBaseFormatDetector.ContainerExtension}";
-        var manifestFileName = $"{config.Database}_{timestamp}_diff.backup_manifest";
+        var fileName = $"{config.DatabasePathSegment}_{timestamp}_diff{PgBaseFormatDetector.ContainerExtension}";
+        var manifestFileName = $"{config.DatabasePathSegment}_{timestamp}_diff.backup_manifest";
         var tempDir = Path.Combine(config.OutputPath, $"pgbase-diff-{Guid.NewGuid():N}");
         var outputFile = Path.Combine(config.OutputPath, fileName);
         var manifestOutputFile = Path.Combine(config.OutputPath, manifestFileName);
@@ -99,6 +99,8 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
 
         var sw = Stopwatch.StartNew();
 
+        var completed = false;
+
         try
         {
             var result = await _processRunner.RunAsync(request, handleStdout: null, handleStdin: null, ct);
@@ -126,6 +128,13 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
                     $"pg_basebackup --incremental не создал ожидаемые файлы 'base.tar.gz' и 'pg_wal.tar.gz'. Найдено: {found}");
             }
 
+            var unsupportedArchives = PgBaseContainer.FindUnsupportedPgBasebackupArchives(tempDir);
+            if (unsupportedArchives.Length > 0)
+                throw new InvalidOperationException(
+                    $"pg_basebackup --incremental создал дополнительные tar-архивы ({string.Join(", ", unsupportedArchives)}). " +
+                    "Дифференциальный physical-режим Backupster не поддерживает tablespaces: эти файлы не могут быть безопасно восстановлены. " +
+                    "Уберите tablespaces или используйте logical-режим (BackupMode=Logical).");
+
             await PgBaseContainer.WriteAsync(outputFile, baseTar, pgWalTar, ct);
 
             var manifestSource = Path.Combine(tempDir, "backup_manifest");
@@ -149,7 +158,7 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
                 "PostgreSQL differential backup completed. File: '{FilePath}', Size: {SizeBytes} bytes, Duration: {DurationMs} ms",
                 outputFile, sizeBytes, sw.ElapsedMilliseconds);
 
-            return new BackupResult
+            var backupResult = new BackupResult
             {
                 FilePath = outputFile,
                 SizeBytes = sizeBytes,
@@ -157,9 +166,18 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
                 Success = true,
                 PgBaseManifestPath = manifestPath,
             };
+
+            completed = true;
+            return backupResult;
         }
         finally
         {
+            if (!completed)
+            {
+                TryDeleteFile(outputFile);
+                TryDeleteFile(manifestOutputFile);
+            }
+
             TryDeleteDirectory(tempDir);
         }
     }
@@ -231,6 +249,18 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to delete temp directory '{Path}'", path);
+        }
+    }
+
+    private void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete backup artifact '{Path}'", path);
         }
     }
 }

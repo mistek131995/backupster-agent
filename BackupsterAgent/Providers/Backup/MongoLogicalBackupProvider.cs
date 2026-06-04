@@ -61,7 +61,7 @@ public sealed class MongoLogicalBackupProvider : IBackupProvider
         var mongodump = _binaryResolver.Resolve(connection, "mongodump");
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var fileName = $"{config.Database}_{timestamp}.archive.gz";
+        var fileName = $"{config.DatabasePathSegment}_{timestamp}.archive.gz";
         var outputFile = Path.Combine(config.OutputPath, fileName);
 
         Directory.CreateDirectory(config.OutputPath);

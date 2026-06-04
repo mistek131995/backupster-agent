@@ -34,7 +34,7 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
         CancellationToken ct)
     {
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var fileName = $"{config.Database}_{timestamp}_diff.bak";
+        var fileName = $"{config.DatabasePathSegment}_{timestamp}_diff.bak";
 
         if (string.IsNullOrWhiteSpace(config.OutputPath))
         {
