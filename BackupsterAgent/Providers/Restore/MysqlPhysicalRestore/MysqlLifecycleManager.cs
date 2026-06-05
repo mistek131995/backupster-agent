@@ -6,7 +6,7 @@ using BackupsterAgent.Services.Common.Resolvers;
 
 namespace BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
 
-public sealed class MysqlLifecycleManager
+public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
 {
     private readonly ILogger<MysqlLifecycleManager> _logger;
     private readonly MysqlServerProbe _probe;

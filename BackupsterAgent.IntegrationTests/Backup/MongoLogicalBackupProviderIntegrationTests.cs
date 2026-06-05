@@ -1,9 +1,14 @@
 using BackupsterAgent.Configuration;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
 using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Extensions.Logging.Abstractions;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using System.Net;
+using System.Net.Sockets;
 
 namespace BackupsterAgent.IntegrationTests.Backup;
 
@@ -145,5 +150,274 @@ public sealed class MongoLogicalBackupProviderIntegrationTests
         var restoredSnapshot = await MongoIntegrationTestSupport.ReadSnapshotAsync(_connection, _dstDb, _cts.Token);
 
         Assert.That(restoredSnapshot, Is.EqualTo(sourceSnapshot));
+    }
+
+    [Test]
+    public async Task RestoreAsync_SameDatabase_RestoresOriginalSnapshot()
+    {
+        var backupProvider = new MongoLogicalBackupProvider(
+            NullLogger<MongoLogicalBackupProvider>.Instance,
+            _resolver,
+            _runner);
+        var restoreProvider = new MongoRestoreProvider(
+            NullLogger<MongoRestoreProvider>.Instance,
+            _resolver,
+            _runner);
+        var config = CreateDatabaseConfig(_srcDb);
+
+        var originalSnapshot = await MongoIntegrationTestSupport.ReadSnapshotAsync(_connection, _srcDb, _cts.Token);
+        var result = await backupProvider.BackupAsync(config, _connection, _cts.Token);
+
+        await InsertMutationDocumentAsync(_connection, _srcDb, _cts.Token);
+        var mutatedSnapshot = await MongoIntegrationTestSupport.ReadSnapshotAsync(_connection, _srcDb, _cts.Token);
+        Assert.That(mutatedSnapshot, Is.Not.EqualTo(originalSnapshot));
+
+        var archivePath = Path.Combine(_outputDir, "restore-same-db.archive");
+        await MongoIntegrationTestSupport.DecompressGzAsync(result.FilePath, archivePath, _cts.Token);
+
+        await restoreProvider.ValidateRestoreSourceAsync(_connection, archivePath, _cts.Token);
+        await restoreProvider.ValidatePermissionsAsync(_connection, _srcDb, _cts.Token);
+        await restoreProvider.PrepareTargetDatabaseAsync(_connection, _srcDb, _cts.Token);
+        await restoreProvider.RestoreAsync(_connection, _srcDb, _srcDb, archivePath, _cts.Token);
+
+        var restoredSnapshot = await MongoIntegrationTestSupport.ReadSnapshotAsync(_connection, _srcDb, _cts.Token);
+        Assert.That(restoredSnapshot, Is.EqualTo(originalSnapshot));
+    }
+
+    [Test]
+    public async Task ValidatePermissions_MissingBackupReadRole_FailsClearly()
+    {
+        Assume.That(
+            string.IsNullOrWhiteSpace(_connection.ConnectionUri),
+            Is.True,
+            "Negative MongoDB permission integration tests require Mongo:Host/Port/Username/Password configuration.");
+
+        var username = MongoIntegrationTestSupport.TestDbPrefix + "no_read_" + Guid.NewGuid().ToString("N")[..8];
+        var password = "Backupster-" + Guid.NewGuid().ToString("N");
+
+        Assume.That(
+            await TryCreateAdminUserAsync(username, password, roles: [], _cts.Token),
+            Is.True,
+            "Configured MongoDB user cannot create limited integration test users.");
+
+        try
+        {
+            var limitedConnection = CopyLegacyConnectionWithCredentials(_connection, username, password);
+            var provider = new MongoLogicalBackupProvider(
+                NullLogger<MongoLogicalBackupProvider>.Instance,
+                _resolver,
+                _runner);
+
+            BackupPermissionException? ex = null;
+            try
+            {
+                await provider.ValidatePermissionsAsync(limitedConnection, _srcDb, _cts.Token);
+            }
+            catch (BackupPermissionException caught)
+            {
+                ex = caught;
+            }
+
+            Assume.That(ex, Is.Not.Null,
+                "MongoDB authorization is not enabled or the limited user can read the source database.");
+            Assert.That(ex!.Message, Does.Contain("read").IgnoreCase);
+            Assert.That(ex.Message, Does.Contain(_srcDb));
+        }
+        finally
+        {
+            await DropAdminUserIfExistsAsync(username, CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task ValidatePermissions_MissingRestoreDbOwnerRole_FailsClearly()
+    {
+        Assume.That(
+            string.IsNullOrWhiteSpace(_connection.ConnectionUri),
+            Is.True,
+            "Negative MongoDB permission integration tests require Mongo:Host/Port/Username/Password configuration.");
+
+        var username = MongoIntegrationTestSupport.TestDbPrefix + "no_restore_" + Guid.NewGuid().ToString("N")[..8];
+        var password = "Backupster-" + Guid.NewGuid().ToString("N");
+        var roles = new BsonArray
+        {
+            new BsonDocument
+            {
+                ["role"] = "read",
+                ["db"] = _srcDb,
+            },
+        };
+
+        Assume.That(
+            await TryCreateAdminUserAsync(username, password, roles, _cts.Token),
+            Is.True,
+            "Configured MongoDB user cannot create limited integration test users.");
+
+        try
+        {
+            var limitedConnection = CopyLegacyConnectionWithCredentials(_connection, username, password);
+            var provider = new MongoRestoreProvider(
+                NullLogger<MongoRestoreProvider>.Instance,
+                _resolver,
+                _runner);
+
+            RestorePermissionException? ex = null;
+            try
+            {
+                await provider.ValidatePermissionsAsync(limitedConnection, _dstDb, _cts.Token);
+            }
+            catch (RestorePermissionException caught)
+            {
+                ex = caught;
+            }
+
+            Assume.That(ex, Is.Not.Null,
+                "MongoDB authorization is not enabled or the limited user can write the target database.");
+            Assert.That(ex!.Message, Does.Contain("dbOwner").IgnoreCase);
+            Assert.That(ex.Message, Does.Contain(_dstDb));
+        }
+        finally
+        {
+            await DropAdminUserIfExistsAsync(username, CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task BackupAsync_WhenMongodumpFails_CleansPartialArchiveAndToolConfig()
+    {
+        var beforeConfigDirs = SnapshotMongoToolConfigDirs();
+        var provider = new MongoLogicalBackupProvider(
+            NullLogger<MongoLogicalBackupProvider>.Instance,
+            _resolver,
+            _runner);
+        var config = CreateDatabaseConfig(_srcDb);
+        var unavailableConnection = CreateUnavailableMongoConnection();
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(() =>
+            provider.BackupAsync(config, unavailableConnection, _cts.Token));
+
+        Assert.That(ex!.Message, Does.Contain("mongodump"));
+        Assert.That(Directory.GetFiles(_outputDir, "*.archive.gz"), Is.Empty);
+
+        var leakedConfigDirs = SnapshotMongoToolConfigDirs().Except(beforeConfigDirs).ToArray();
+        Assert.That(leakedConfigDirs, Is.Empty,
+            "Provider must delete temporary MongoDB tool config directories after mongodump failure.");
+    }
+
+    private DatabaseConfig CreateDatabaseConfig(string database) =>
+        new()
+        {
+            ConnectionName = _connection.Name,
+            StorageName = "n/a",
+            Database = database,
+            OutputPath = _outputDir,
+        };
+
+    private static async Task InsertMutationDocumentAsync(
+        ConnectionConfig connection,
+        string dbName,
+        CancellationToken ct)
+    {
+        var db = MongoIntegrationTestSupport.CreateClient(connection).GetDatabase(dbName);
+        await db.GetCollection<BsonDocument>("items").InsertOneAsync(
+            new BsonDocument
+            {
+                ["_id"] = 999,
+                ["name"] = "after-backup",
+            },
+            cancellationToken: ct);
+    }
+
+    private async Task<bool> TryCreateAdminUserAsync(
+        string username,
+        string password,
+        BsonArray roles,
+        CancellationToken ct)
+    {
+        try
+        {
+            await DropAdminUserIfExistsAsync(username, ct);
+            var adminDb = MongoIntegrationTestSupport.CreateClient(_connection).GetDatabase("admin");
+            var command = new BsonDocument
+            {
+                ["createUser"] = username,
+                ["pwd"] = password,
+                ["roles"] = roles,
+            };
+
+            await adminDb.RunCommandAsync<BsonDocument>(command, cancellationToken: ct);
+            return true;
+        }
+        catch (Exception ex) when (ex is MongoCommandException or MongoAuthenticationException or MongoConnectionException or TimeoutException)
+        {
+            TestContext.Progress.WriteLine($"Limited MongoDB user setup skipped: {ex.Message}");
+            return false;
+        }
+    }
+
+    private async Task DropAdminUserIfExistsAsync(string username, CancellationToken ct)
+    {
+        try
+        {
+            var adminDb = MongoIntegrationTestSupport.CreateClient(_connection).GetDatabase("admin");
+            await adminDb.RunCommandAsync<BsonDocument>(new BsonDocument("dropUser", username), cancellationToken: ct);
+        }
+        catch (MongoCommandException ex) when (ex.CodeName == "UserNotFound" || ex.Code == 11)
+        {
+        }
+        catch (Exception ex)
+        {
+            TestContext.Progress.WriteLine($"Limited MongoDB user cleanup failed: {ex.Message}");
+        }
+    }
+
+    private static ConnectionConfig CopyLegacyConnectionWithCredentials(
+        ConnectionConfig source,
+        string username,
+        string password) =>
+        new()
+        {
+            Name = source.Name,
+            DatabaseType = source.DatabaseType,
+            Host = source.Host,
+            Port = source.Port,
+            Username = username,
+            Password = password,
+            BinPath = source.BinPath,
+        };
+
+    private ConnectionConfig CreateUnavailableMongoConnection()
+    {
+        var port = GetUnusedLoopbackPort();
+        return new ConnectionConfig
+        {
+            Name = _connection.Name + "-unavailable",
+            DatabaseType = _connection.DatabaseType,
+            ConnectionUri = $"mongodb://127.0.0.1:{port}/?serverSelectionTimeoutMS=1000",
+            BinPath = _connection.BinPath,
+        };
+    }
+
+    private static int GetUnusedLoopbackPort()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+
+    private static HashSet<string> SnapshotMongoToolConfigDirs()
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(Path.GetTempPath(), "backupster-mongo-*")
+                .Select(Path.GetFullPath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return [];
+        }
     }
 }

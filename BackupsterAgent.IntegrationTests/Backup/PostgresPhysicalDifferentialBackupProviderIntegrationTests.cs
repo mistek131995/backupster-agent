@@ -7,6 +7,7 @@ using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
+using BackupsterAgent.Providers.Restore.PostgresPhysicalRestore;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
@@ -378,8 +379,10 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
     private (PostgresPhysicalRestoreProvider Full, PostgresPhysicalDifferentialRestoreProvider Diff) BuildRestoreProviders()
     {
         var restoreSettings = Microsoft.Extensions.Options.Options.Create(new RestoreSettings());
+        var lifecycle = new PostgresClusterLifecycle(
+            NullLogger<PostgresClusterLifecycle>.Instance, _runner, restoreSettings);
         var full = new PostgresPhysicalRestoreProvider(
-            NullLogger<PostgresPhysicalRestoreProvider>.Instance, _resolver, restoreSettings);
+            NullLogger<PostgresPhysicalRestoreProvider>.Instance, _resolver, restoreSettings, lifecycle);
         var diff = new PostgresPhysicalDifferentialRestoreProvider(
             NullLogger<PostgresPhysicalDifferentialRestoreProvider>.Instance, full, _resolver, _runner);
         return (full, diff);

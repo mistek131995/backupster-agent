@@ -5,15 +5,15 @@ namespace BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
 public sealed class MysqlDatadirSwapCoordinator
 {
     private readonly ILogger<MysqlDatadirSwapCoordinator> _logger;
-    private readonly MysqlDatadirSwapper _swapper;
-    private readonly MysqlLifecycleManager _lifecycle;
-    private readonly MysqlServerProbe _probe;
+    private readonly IMysqlDatadirSwapper _swapper;
+    private readonly IMysqlLifecycleManager _lifecycle;
+    private readonly IMysqlServerProbe _probe;
 
     public MysqlDatadirSwapCoordinator(
         ILogger<MysqlDatadirSwapCoordinator> logger,
-        MysqlDatadirSwapper swapper,
-        MysqlLifecycleManager lifecycle,
-        MysqlServerProbe probe)
+        IMysqlDatadirSwapper swapper,
+        IMysqlLifecycleManager lifecycle,
+        IMysqlServerProbe probe)
     {
         _logger = logger;
         _swapper = swapper;
@@ -34,8 +34,8 @@ public sealed class MysqlDatadirSwapCoordinator
         {
             try
             {
-                Directory.Move(realDatadir, oldPath);
-                Directory.Move(stagingPath, realDatadir);
+                _swapper.MoveDirectory(realDatadir, oldPath);
+                _swapper.MoveDirectory(stagingPath, realDatadir);
 
                 await _swapper.FixOwnershipAsync(realDatadir, instanceInfo, ct);
 
@@ -92,8 +92,8 @@ public sealed class MysqlDatadirSwapCoordinator
             _logger.LogWarning(stopEx, "Failed to stop MySQL before recovery — it may already be stopped");
         }
 
-        var datadirExists = Directory.Exists(realDatadir);
-        var oldExists = Directory.Exists(oldPath);
+        var datadirExists = _swapper.DirectoryExists(realDatadir);
+        var oldExists = _swapper.DirectoryExists(oldPath);
 
         if (datadirExists && oldExists)
         {
@@ -143,7 +143,7 @@ public sealed class MysqlDatadirSwapCoordinator
 
         _swapper.TryDeleteDirectory(stagingPath);
 
-        if (Directory.Exists(realDatadir))
+        if (_swapper.DirectoryExists(realDatadir))
         {
             try
             {

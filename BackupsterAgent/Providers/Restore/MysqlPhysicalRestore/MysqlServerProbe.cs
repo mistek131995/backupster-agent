@@ -13,7 +13,7 @@ public enum MysqlConnectionProbeResult
     TransientError,
 }
 
-public sealed class MysqlServerProbe
+public sealed class MysqlServerProbe : IMysqlServerProbe
 {
     private readonly ILogger<MysqlServerProbe> _logger;
 

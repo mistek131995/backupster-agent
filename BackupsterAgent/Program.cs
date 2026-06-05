@@ -3,6 +3,7 @@ using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
+using BackupsterAgent.Providers.Restore.PostgresPhysicalRestore;
 using BackupsterAgent.Extensions;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Backup.Coordinator;
@@ -82,6 +83,7 @@ builder.Services.AddSingleton<MongoLogicalBackupProvider>();
 builder.Services.AddSingleton<IBackupProviderFactory, BackupProviderFactory>();
 
 builder.Services.AddSingleton<PostgresRestoreProvider>();
+builder.Services.AddSingleton<PostgresClusterLifecycle>();
 builder.Services.AddSingleton<PostgresPhysicalRestoreProvider>();
 builder.Services.AddSingleton<PostgresPhysicalDifferentialRestoreProvider>();
 builder.Services.AddSingleton<MssqlPhysicalRestoreProvider>();

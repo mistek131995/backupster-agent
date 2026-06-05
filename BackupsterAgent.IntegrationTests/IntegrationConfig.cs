@@ -94,6 +94,12 @@ public static class IntegrationConfig
             && !string.IsNullOrWhiteSpace(password);
     }
 
+    public static bool IsMysqlPhysicalRestoreEnabled()
+    {
+        var raw = Config.Value["Mysql:AllowPhysicalRestore"];
+        return bool.TryParse(raw, out var enabled) && enabled;
+    }
+
     public static bool TryGetMongoConnection(out ConnectionConfig connection)
     {
         var section = Config.Value.GetSection("Mongo");

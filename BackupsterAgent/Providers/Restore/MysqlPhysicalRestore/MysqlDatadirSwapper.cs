@@ -5,7 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
 
-public sealed class MysqlDatadirSwapper
+public sealed class MysqlDatadirSwapper : IMysqlDatadirSwapper
 {
     private const string MarkerFileName = ".backupster-marker";
     private const int OrphanGraceHours = 48;
@@ -195,6 +195,10 @@ public sealed class MysqlDatadirSwapper
 
         _logger.LogInformation("Fixed ownership to {OwnerSpec} on '{Path}'", ownerSpec, newDatadir);
     }
+
+    public void MoveDirectory(string from, string to) => Directory.Move(from, to);
+
+    public bool DirectoryExists(string path) => Directory.Exists(path);
 
     public bool TryMoveDirectory(string from, string to)
     {
