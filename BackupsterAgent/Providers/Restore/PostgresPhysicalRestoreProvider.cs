@@ -5,10 +5,12 @@ using System.Text;
 using System.Text.RegularExpressions;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Providers.Restore.Common;
 using BackupsterAgent.Providers.Restore.PostgresPhysicalRestore;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Restore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
@@ -18,22 +20,52 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
 {
     private const string MarkerFileName = ".backupster-marker";
     private const int OrphanGraceHours = 48;
+    private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(120);
 
     private readonly ILogger<PostgresPhysicalRestoreProvider> _logger;
     private readonly PostgresBinaryResolver _binaryResolver;
     private readonly RestoreSettings _restoreSettings;
     private readonly PostgresClusterLifecycle _clusterLifecycle;
+    private readonly RestorePathResolver _pathResolver;
+    private readonly RestoreMarkerStore _markerStore;
+    private readonly FilesystemRenamePreflight _renamePreflight;
+    private readonly IPostgresReadinessProbe _readinessProbe;
+
+    public PostgresPhysicalRestoreProvider(
+        ILogger<PostgresPhysicalRestoreProvider> logger,
+        PostgresBinaryResolver binaryResolver,
+        IOptions<RestoreSettings> restoreSettings,
+        PostgresClusterLifecycle clusterLifecycle,
+        RestorePathResolver pathResolver,
+        RestoreMarkerStore markerStore,
+        FilesystemRenamePreflight renamePreflight,
+        IPostgresReadinessProbe readinessProbe)
+    {
+        _logger = logger;
+        _binaryResolver = binaryResolver;
+        _restoreSettings = restoreSettings.Value;
+        _clusterLifecycle = clusterLifecycle;
+        _pathResolver = pathResolver;
+        _markerStore = markerStore;
+        _renamePreflight = renamePreflight;
+        _readinessProbe = readinessProbe;
+    }
 
     public PostgresPhysicalRestoreProvider(
         ILogger<PostgresPhysicalRestoreProvider> logger,
         PostgresBinaryResolver binaryResolver,
         IOptions<RestoreSettings> restoreSettings,
         PostgresClusterLifecycle clusterLifecycle)
+        : this(
+            logger,
+            binaryResolver,
+            restoreSettings,
+            clusterLifecycle,
+            new RestorePathResolver(NullLogger<RestorePathResolver>.Instance),
+            new RestoreMarkerStore(NullLogger<RestoreMarkerStore>.Instance),
+            new FilesystemRenamePreflight(NullLogger<FilesystemRenamePreflight>.Instance),
+            new PostgresReadinessProbe(NullLogger<PostgresReadinessProbe>.Instance))
     {
-        _logger = logger;
-        _binaryResolver = binaryResolver;
-        _restoreSettings = restoreSettings.Value;
-        _clusterLifecycle = clusterLifecycle;
     }
 
     public async Task ValidatePermissionsAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
@@ -50,15 +82,15 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
                 $"Каталог PGDATA '{pgDataPath}' недоступен на хосте агента. " +
                 "Физическое восстановление требует, чтобы агент и PostgreSQL выполнялись на одном хосте.");
 
-        var realPgDataPath = ResolveRealPath(pgDataPath);
+        var realPgDataPath = ResolvePgDataRealPath(pgDataPath);
         if (!string.Equals(realPgDataPath, pgDataPath, StringComparison.Ordinal))
             _logger.LogInformation(
                 "PGDATA '{PgDataPath}' resolves to real path '{RealPath}'. " +
                 "Staging/swap operations during restore will use the real parent directory.",
                 pgDataPath, realPgDataPath);
 
-        var (parent, _) = SplitPgDataPath(realPgDataPath);
-        EnsureSameFsRename(parent, realPgDataPath);
+        var (parent, _) = SplitPgDataPathCommon(realPgDataPath);
+        EnsureSameFsRenameCommon(parent, realPgDataPath);
 
         await _clusterLifecycle.DetectAsync(pgDataPath, ct);
     }
@@ -115,10 +147,10 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
 
         var clusterControl = await _clusterLifecycle.DetectAsync(pgDataPath, ct);
 
-        var realPgDataPath = ResolveRealPath(pgDataPath);
-        var (parent, leaf) = SplitPgDataPath(realPgDataPath);
+        var realPgDataPath = ResolvePgDataRealPath(pgDataPath);
+        var (parent, leaf) = SplitPgDataPathCommon(realPgDataPath);
 
-        CleanupOrphanStagingDirs(parent, leaf);
+        CleanupOrphanStagingDirsCommon(parent, leaf);
 
         var guid = Guid.NewGuid().ToString("N")[..8];
         var stagingPath = Path.Combine(parent, $"{leaf}.new-{guid}");
@@ -127,7 +159,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         var startLog = BuildRestoreTempPath("backupster-pg-start") + ".log";
 
         Directory.CreateDirectory(stagingPath);
-        WriteMarkerFile(stagingPath);
+        RestoreMarkerStore.WriteMarkerFile(stagingPath);
 
         try
         {
@@ -140,7 +172,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
 
                 await _clusterLifecycle.PrepareStagingPermissionsAsync(clusterControl, realPgDataPath, stagingPath, ct);
 
-                EnsureSameFsRename(parent, realPgDataPath);
+                EnsureSameFsRenameCommon(parent, realPgDataPath);
             }
             catch
             {
@@ -169,7 +201,11 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
                     "Starting PostgreSQL cluster at '{PgDataPath}' (server log → '{LogFile}')", pgDataPath, startLog);
                 await _clusterLifecycle.StartAsync(clusterControl, pgCtl, pgDataPath, startLog, ct);
 
-                _logger.LogInformation("PostgreSQL cluster started");
+                _logger.LogInformation(
+                    "PostgreSQL cluster start command completed, waiting for SQL readiness");
+                await _readinessProbe.WaitUntilReadyAsync(connection, ReadinessTimeout, ct);
+
+                _logger.LogInformation("PostgreSQL cluster started and accepts SQL connections");
                 TryDeleteDirectory(oldPath);
             }
             catch (Exception swapException)
@@ -184,6 +220,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         }
         finally
         {
+            await _clusterLifecycle.TryUnmaskSystemdAsync(clusterControl);
             TryDeleteFile(startLog);
         }
     }
@@ -544,6 +581,19 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
             throw;
         }
     }
+
+    private string ResolvePgDataRealPath(string pgDataPath) =>
+        _pathResolver.ResolveRealPath(pgDataPath, "PGDATA");
+
+    private static (string parent, string leaf) SplitPgDataPathCommon(string path) =>
+        RestorePathResolver.SplitPath(path, "PGDATA");
+
+    private void EnsureSameFsRenameCommon(string parent, string realPgDataPath) =>
+        _renamePreflight.EnsureSameFsRename(parent, realPgDataPath, "PGDATA", throwRestorePermissionException: false);
+
+    private void CleanupOrphanStagingDirsCommon(string parent, string leaf) =>
+        _markerStore.CleanupOrphanStagingDirs(
+            parent, leaf, ["new", "failed"], TimeSpan.FromHours(OrphanGraceHours));
 
     private static (string parent, string leaf) SplitPgDataPath(string path)
     {

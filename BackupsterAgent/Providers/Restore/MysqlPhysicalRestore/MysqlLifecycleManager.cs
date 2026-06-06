@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Providers.Restore.Common;
 using BackupsterAgent.Services.Common.Resolvers;
 
 namespace BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
@@ -12,17 +13,29 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
     private readonly MysqlServerProbe _probe;
     private readonly MysqlSystemdController _systemd;
     private readonly MysqlBinaryResolver _binaryResolver;
+    private readonly LinuxProcessInspector _processInspector;
+
+    public MysqlLifecycleManager(
+        ILogger<MysqlLifecycleManager> logger,
+        MysqlServerProbe probe,
+        MysqlSystemdController systemd,
+        MysqlBinaryResolver binaryResolver,
+        LinuxProcessInspector processInspector)
+    {
+        _logger = logger;
+        _probe = probe;
+        _systemd = systemd;
+        _binaryResolver = binaryResolver;
+        _processInspector = processInspector;
+    }
 
     public MysqlLifecycleManager(
         ILogger<MysqlLifecycleManager> logger,
         MysqlServerProbe probe,
         MysqlSystemdController systemd,
         MysqlBinaryResolver binaryResolver)
+        : this(logger, probe, systemd, binaryResolver, new LinuxProcessInspector())
     {
-        _logger = logger;
-        _probe = probe;
-        _systemd = systemd;
-        _binaryResolver = binaryResolver;
     }
 
     public async Task StopMysqlAsync(ConnectionConfig connection, MysqlInstanceInfo instanceInfo, CancellationToken ct,
@@ -145,7 +158,7 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
 
         if (pid.HasValue)
         {
-            var startTime = TryGetProcessStartTime(pid.Value);
+            var startTime = _processInspector.TryGetProcessStartTime(pid.Value);
             if (startTime is null)
             {
                 _logger.LogInformation("MySQL service '{ServiceName}' already stopped (PID {Pid} not found)",
@@ -156,7 +169,7 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
             var deadline = DateTime.UtcNow.AddSeconds(60);
             while (DateTime.UtcNow < deadline)
             {
-                if (!IsSameProcessRunning(pid.Value, startTime.Value))
+                if (!_processInspector.IsSameProcessRunning(pid.Value, startTime.Value))
                 {
                     _logger.LogInformation("MySQL service '{ServiceName}' stopped (PID {Pid} exited)",
                         serviceName, pid.Value);
@@ -205,7 +218,7 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
 
     private async Task WaitForMysqlStopAsync(int? pid, ConnectionConfig connection, CancellationToken ct)
     {
-        DateTime? startTime = pid.HasValue ? TryGetProcessStartTime(pid.Value) : null;
+        DateTime? startTime = pid.HasValue ? _processInspector.TryGetProcessStartTime(pid.Value) : null;
         if (pid.HasValue && startTime is null)
         {
             _logger.LogInformation("MySQL already stopped (PID {Pid} not found)", pid.Value);
@@ -219,7 +232,7 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
 
             if (pid.HasValue)
             {
-                if (!IsSameProcessRunning(pid.Value, startTime!.Value))
+                if (!_processInspector.IsSameProcessRunning(pid.Value, startTime!.Value))
                 {
                     _logger.LogInformation("MySQL stopped (PID {Pid} exited)", pid.Value);
                     return;
@@ -264,33 +277,6 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
             using var client = new TcpClient();
             await client.ConnectAsync(host, port, ct);
             return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static DateTime? TryGetProcessStartTime(int pid)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            return process.StartTime;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static bool IsSameProcessRunning(int pid, DateTime expectedStartTime)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            if (process.HasExited) return false;
-            return process.StartTime == expectedStartTime;
         }
         catch
         {

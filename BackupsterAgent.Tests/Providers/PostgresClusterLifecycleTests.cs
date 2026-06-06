@@ -52,6 +52,48 @@ public sealed class PostgresClusterLifecycleTests
     }
 
     [Test]
+    public void Stop_Systemd_MasksBeforeStop()
+    {
+        var runner = new RecordingPostgresProcessRunner();
+        var lifecycle = CreateLifecycle(runner);
+        var control = new PostgresClusterControl(
+            PostgresClusterControlKind.Systemd, "postgresql@16-main.service", null, null);
+
+        Assert.DoesNotThrowAsync(() =>
+            lifecycle.StopAsync(control, "pg_ctl", "/var/lib/postgresql/16/main", CancellationToken.None));
+
+        var commands = runner.Requests.Select(r => $"{r.FileName} {string.Join(" ", r.Arguments)}").ToArray();
+        Assert.That(commands.Take(2), Is.EqualTo(new[]
+        {
+            "systemctl mask postgresql@16-main.service",
+            "systemctl stop postgresql@16-main.service",
+        }));
+    }
+
+    [Test]
+    public void Stop_SystemdStopFails_Unmasks()
+    {
+        var runner = new RecordingPostgresProcessRunner
+        {
+            ExitCodes = { ["systemctl stop"] = 1 },
+        };
+        var lifecycle = CreateLifecycle(runner);
+        var control = new PostgresClusterControl(
+            PostgresClusterControlKind.Systemd, "postgresql@16-main.service", null, null);
+
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            lifecycle.StopAsync(control, "pg_ctl", "/var/lib/postgresql/16/main", CancellationToken.None));
+
+        var commands = runner.Requests.Select(r => $"{r.FileName} {string.Join(" ", r.Arguments)}").ToArray();
+        Assert.That(commands, Is.EqualTo(new[]
+        {
+            "systemctl mask postgresql@16-main.service",
+            "systemctl stop postgresql@16-main.service",
+            "systemctl unmask postgresql@16-main.service",
+        }));
+    }
+
+    [Test]
     public void Stop_Unmanaged_UsesPgCtlFastStop()
     {
         var runner = new RecordingPostgresProcessRunner();
@@ -100,6 +142,26 @@ public sealed class PostgresClusterLifecycleTests
         Assert.That(request.FileName, Is.EqualTo("powershell"));
         Assert.That(string.Join(" ", request.Arguments), Does.Contain("Start-Service -Name 'postgresql-x64-16'"));
         Assert.That(string.Join(" ", request.Arguments), Does.Contain("WaitForStatus('Running'"));
+    }
+
+    [Test]
+    public void Start_Systemd_UnmasksStartsAndChecksActive()
+    {
+        var runner = new RecordingPostgresProcessRunner();
+        var lifecycle = CreateLifecycle(runner);
+        var control = new PostgresClusterControl(
+            PostgresClusterControlKind.Systemd, "postgresql@16-main.service", null, null);
+
+        Assert.DoesNotThrowAsync(() =>
+            lifecycle.StartAsync(control, "pg_ctl", "/pgdata", "start.log", CancellationToken.None));
+
+        var commands = runner.Requests.Select(r => $"{r.FileName} {string.Join(" ", r.Arguments)}").ToArray();
+        Assert.That(commands, Is.EqualTo(new[]
+        {
+            "systemctl unmask postgresql@16-main.service",
+            "systemctl start postgresql@16-main.service",
+            "systemctl is-active postgresql@16-main.service",
+        }));
     }
 
     private static PostgresClusterLifecycle CreateLifecycle(RecordingPostgresProcessRunner runner)

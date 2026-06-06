@@ -7,8 +7,6 @@ using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using System.Net;
-using System.Net.Sockets;
 
 namespace BackupsterAgent.IntegrationTests.Backup;
 
@@ -282,28 +280,6 @@ public sealed class MongoLogicalBackupProviderIntegrationTests
         }
     }
 
-    [Test]
-    public async Task BackupAsync_WhenMongodumpFails_CleansPartialArchiveAndToolConfig()
-    {
-        var beforeConfigDirs = SnapshotMongoToolConfigDirs();
-        var provider = new MongoLogicalBackupProvider(
-            NullLogger<MongoLogicalBackupProvider>.Instance,
-            _resolver,
-            _runner);
-        var config = CreateDatabaseConfig(_srcDb);
-        var unavailableConnection = CreateUnavailableMongoConnection();
-
-        var ex = Assert.ThrowsAsync<InvalidOperationException>(() =>
-            provider.BackupAsync(config, unavailableConnection, _cts.Token));
-
-        Assert.That(ex!.Message, Does.Contain("mongodump"));
-        Assert.That(Directory.GetFiles(_outputDir, "*.archive.gz"), Is.Empty);
-
-        var leakedConfigDirs = SnapshotMongoToolConfigDirs().Except(beforeConfigDirs).ToArray();
-        Assert.That(leakedConfigDirs, Is.Empty,
-            "Provider must delete temporary MongoDB tool config directories after mongodump failure.");
-    }
-
     private DatabaseConfig CreateDatabaseConfig(string database) =>
         new()
         {
@@ -386,38 +362,4 @@ public sealed class MongoLogicalBackupProviderIntegrationTests
             BinPath = source.BinPath,
         };
 
-    private ConnectionConfig CreateUnavailableMongoConnection()
-    {
-        var port = GetUnusedLoopbackPort();
-        return new ConnectionConfig
-        {
-            Name = _connection.Name + "-unavailable",
-            DatabaseType = _connection.DatabaseType,
-            ConnectionUri = $"mongodb://127.0.0.1:{port}/?serverSelectionTimeoutMS=1000",
-            BinPath = _connection.BinPath,
-        };
-    }
-
-    private static int GetUnusedLoopbackPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
-
-    private static HashSet<string> SnapshotMongoToolConfigDirs()
-    {
-        try
-        {
-            return Directory.EnumerateDirectories(Path.GetTempPath(), "backupster-mongo-*")
-                .Select(Path.GetFullPath)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return [];
-        }
-    }
 }

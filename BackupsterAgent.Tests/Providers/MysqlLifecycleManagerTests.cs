@@ -1,4 +1,5 @@
 using BackupsterAgent.Configuration;
+using BackupsterAgent.Providers.Restore.Common;
 using BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -67,7 +68,10 @@ public sealed class MysqlLifecycleManagerTests
         return new(
             NullLogger<MysqlLifecycleManager>.Instance,
             new MysqlServerProbe(NullLogger<MysqlServerProbe>.Instance),
-            new MysqlSystemdController(NullLogger<MysqlSystemdController>.Instance, runner, Options.Create(settings)),
+            new MysqlSystemdController(new SystemdServiceController(
+                NullLogger<SystemdServiceController>.Instance,
+                runner,
+                Options.Create(settings))),
             new MysqlBinaryResolver(NullLogger<MysqlBinaryResolver>.Instance));
     }
 

@@ -3,7 +3,9 @@ using System.Text.RegularExpressions;
 using System.Text.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Providers.Restore.Common;
 using BackupsterAgent.Services.Common.Processes;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Providers.Restore.PostgresPhysicalRestore;
@@ -13,15 +15,38 @@ public sealed class PostgresClusterLifecycle
     private readonly ILogger<PostgresClusterLifecycle> _logger;
     private readonly IExternalProcessRunner _processRunner;
     private readonly RestoreSettings _restoreSettings;
+    private readonly SystemdUnitDetector _systemdUnitDetector;
+    private readonly SystemdServiceController _systemd;
+    private readonly LinuxProcessInspector _processInspector;
+
+    public PostgresClusterLifecycle(
+        ILogger<PostgresClusterLifecycle> logger,
+        IExternalProcessRunner processRunner,
+        IOptions<RestoreSettings> restoreSettings,
+        SystemdUnitDetector systemdUnitDetector,
+        SystemdServiceController systemd,
+        LinuxProcessInspector processInspector)
+    {
+        _logger = logger;
+        _processRunner = processRunner;
+        _restoreSettings = restoreSettings.Value;
+        _systemdUnitDetector = systemdUnitDetector;
+        _systemd = systemd;
+        _processInspector = processInspector;
+    }
 
     public PostgresClusterLifecycle(
         ILogger<PostgresClusterLifecycle> logger,
         IExternalProcessRunner processRunner,
         IOptions<RestoreSettings> restoreSettings)
+        : this(
+            logger,
+            processRunner,
+            restoreSettings,
+            new SystemdUnitDetector(NullLogger<SystemdUnitDetector>.Instance),
+            new SystemdServiceController(NullLogger<SystemdServiceController>.Instance, processRunner, restoreSettings),
+            new LinuxProcessInspector())
     {
-        _logger = logger;
-        _processRunner = processRunner;
-        _restoreSettings = restoreSettings.Value;
     }
 
     internal async Task<PostgresClusterControl> DetectAsync(string pgDataPath, CancellationToken ct)
@@ -32,7 +57,7 @@ public sealed class PostgresClusterLifecycle
 
         if (OperatingSystem.IsLinux())
         {
-            var unit = await DetectSystemdUnitAsync(pid.Value, ct);
+            var unit = await DetectSystemdUnitCommonAsync(pid.Value, ct);
             if (unit is null)
                 return new PostgresClusterControl(PostgresClusterControlKind.Unmanaged, null, null, pid);
 
@@ -87,12 +112,12 @@ public sealed class PostgresClusterLifecycle
         switch (control.Kind)
         {
             case PostgresClusterControlKind.Systemd:
-                await StopSystemdAsync(control.ServiceName!, ct);
-                await WaitForPidExitAsync(control.PostmasterPid, TimeSpan.FromSeconds(60), ct);
+                await StopSystemdCommonAsync(control.ServiceName!, ct);
+                await WaitForPidExitCommonAsync(control.PostmasterPid, TimeSpan.FromSeconds(60), ct);
                 return;
             case PostgresClusterControlKind.WindowsService:
                 await ControlWindowsServiceAsync(control.ServiceName!, "Stop-Service", "Stopped", ct);
-                await WaitForPidExitAsync(control.PostmasterPid, TimeSpan.FromSeconds(60), ct);
+                await WaitForPidExitCommonAsync(control.PostmasterPid, TimeSpan.FromSeconds(60), ct);
                 return;
             default:
                 await RunPgCtlAsync(pgCtl, ["stop", "-D", pgDataPath, "-m", "fast", "-w"], ct);
@@ -125,7 +150,7 @@ public sealed class PostgresClusterLifecycle
             switch (control.Kind)
             {
                 case PostgresClusterControlKind.Systemd:
-                    await StopSystemdAsync(control.ServiceName!, CancellationToken.None);
+                    await StopSystemdCommonAsync(control.ServiceName!, CancellationToken.None);
                     break;
                 case PostgresClusterControlKind.WindowsService:
                     await ControlWindowsServiceAsync(control.ServiceName!, "Stop-Service", "Stopped", CancellationToken.None);
@@ -151,6 +176,12 @@ public sealed class PostgresClusterLifecycle
             _ => $"pg_ctl start -D \"{pgDataPath}\"",
         };
 
+    internal async Task TryUnmaskSystemdAsync(PostgresClusterControl control)
+    {
+        if (control.Kind == PostgresClusterControlKind.Systemd && !string.IsNullOrWhiteSpace(control.ServiceName))
+            await _systemd.TryUnmaskAsync(control.ServiceName, "PostgreSQL systemd unit");
+    }
+
     internal async Task<string> CollectStartDiagnosticsAsync(
         PostgresClusterControl control, string startLog, CancellationToken ct)
     {
@@ -164,24 +195,7 @@ public sealed class PostgresClusterLifecycle
     }
 
     internal static string? TryParseSystemdUnit(string cgroupContent)
-    {
-        var matches = Regex.Matches(cgroupContent, @"(?:^|/)([^/\s]+\.service)(?=$|/|\s)");
-        if (matches.Count == 0) return null;
-
-        var services = matches
-            .Select(m => m.Groups[1].Value)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-
-        var postgresLike = services
-            .Where(IsPostgresServiceName)
-            .ToArray();
-
-        if (postgresLike.Length == 1)
-            return postgresLike[0];
-
-        return services.Length == 1 ? services[0] : null;
-    }
+        => SystemdUnitDetector.TryParseSystemdUnit(cgroupContent, IsPostgresServiceName);
 
     private async Task<int?> TryReadPostmasterPidAsync(string pgDataPath, CancellationToken ct)
     {
@@ -211,6 +225,9 @@ public sealed class PostgresClusterLifecycle
             return null;
         }
     }
+
+    private async Task<string?> DetectSystemdUnitCommonAsync(int pid, CancellationToken ct) =>
+        await _systemdUnitDetector.DetectUnitAsync(pid, IsPostgresServiceName, "PostgreSQL", ct);
 
     private async Task<string?> DetectSystemdUnitAsync(int pid, CancellationToken ct)
     {
@@ -282,10 +299,26 @@ public sealed class PostgresClusterLifecycle
         }
     }
 
+    private async Task StopSystemdCommonAsync(string unit, CancellationToken ct)
+    {
+        await _systemd.MaskAsync(unit, "PostgreSQL systemd unit");
+
+        try
+        {
+            await _systemd.StopAsync(unit, "PostgreSQL systemd unit", ct);
+        }
+        catch
+        {
+            await _systemd.TryUnmaskAsync(unit, "PostgreSQL systemd unit");
+            throw;
+        }
+    }
+
     private async Task StopSystemdAsync(string unit, CancellationToken ct)
     {
         _logger.LogInformation("Stopping PostgreSQL systemd unit '{Unit}'", unit);
 
+        await _systemd.MaskAsync(unit, "PostgreSQL systemd unit");
         var result = await RunSystemctlAsync("stop", [unit], ct, _restoreSettings.SystemctlStopStartTimeoutSeconds);
         if (result.ExitCode != 0)
             throw new InvalidOperationException(
@@ -298,6 +331,7 @@ public sealed class PostgresClusterLifecycle
     {
         _logger.LogInformation("Starting PostgreSQL systemd unit '{Unit}'", unit);
 
+        await _systemd.TryUnmaskAsync(unit, "PostgreSQL systemd unit");
         var result = await RunSystemctlAsync("start", [unit], ct, _restoreSettings.SystemctlStopStartTimeoutSeconds);
         if (result.ExitCode != 0)
         {
@@ -308,6 +342,8 @@ public sealed class PostgresClusterLifecycle
                 FormatOutput(result) +
                 (string.IsNullOrWhiteSpace(journal) ? "" : $" Диагностика systemd: {journal}"));
         }
+
+        await WaitForSystemdActiveAsync(unit, ct);
     }
 
     private async Task ControlWindowsServiceAsync(
@@ -332,6 +368,21 @@ public sealed class PostgresClusterLifecycle
                 $"Не удалось изменить состояние Windows-сервиса PostgreSQL '{serviceName}' на '{targetStatus}' (код {result.ExitCode}). " +
                 "Убедитесь, что агент запущен с правами на управление сервисом." +
                 FormatOutput(result));
+    }
+
+    private async Task WaitForSystemdActiveAsync(string unit, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(Math.Max(_restoreSettings.SystemctlStopStartTimeoutSeconds, 1));
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await _systemd.IsActiveAsync(unit, ct))
+                return;
+
+            await Task.Delay(1000, ct);
+        }
+
+        throw new InvalidOperationException(
+            $"systemd-юнит PostgreSQL '{unit}' не перешёл в состояние active после запуска.");
     }
 
     private async Task ChownRecursiveAsync(string stagingPath, string owner, CancellationToken ct)
@@ -476,6 +527,17 @@ public sealed class PostgresClusterLifecycle
         }
     }
 
+    private async Task WaitForPidExitCommonAsync(int? pid, TimeSpan timeout, CancellationToken ct)
+    {
+        if (!pid.HasValue) return;
+
+        if (await _processInspector.WaitForExitAsync(pid, timeout, ct))
+            return;
+
+        throw new InvalidOperationException(
+            $"PostgreSQL postmaster PID {pid.Value} не завершился в течение {timeout.TotalSeconds:0} секунд после остановки сервиса.");
+    }
+
     private async Task WaitForPidExitAsync(int? pid, TimeSpan timeout, CancellationToken ct)
     {
         if (!pid.HasValue) return;
@@ -498,10 +560,7 @@ public sealed class PostgresClusterLifecycle
 
     private async Task<ExternalProcessResult> RunSystemctlAsync(
         string verb, string[] arguments, CancellationToken ct, int timeoutSeconds)
-    {
-        var args = new[] { verb }.Concat(arguments).ToArray();
-        return await RunExternalAsync("systemctl", args, ct, timeoutSeconds);
-    }
+        => await _systemd.RunAsync(verb, arguments, ct, timeoutSeconds);
 
     private async Task<ExternalProcessResult> RunPowerShellAsync(string script, CancellationToken ct, int timeoutSeconds) =>
         await RunExternalAsync(

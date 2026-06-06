@@ -1,4 +1,5 @@
 using BackupsterAgent.Configuration;
+using BackupsterAgent.Providers.Restore.Common;
 using BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
 using BackupsterAgent.Services.Common.Processes;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -91,7 +92,10 @@ public sealed class MysqlSystemdControllerTests
         };
 
         return new MysqlSystemdController(
-            NullLogger<MysqlSystemdController>.Instance, runner, Options.Create(settings));
+            new SystemdServiceController(
+                NullLogger<SystemdServiceController>.Instance,
+                runner,
+                Options.Create(settings)));
     }
 
     private sealed class ThrowingSystemctlRunner : IExternalProcessRunner

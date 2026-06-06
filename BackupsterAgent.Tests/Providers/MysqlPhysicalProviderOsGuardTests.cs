@@ -2,6 +2,7 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
+using BackupsterAgent.Providers.Restore.Common;
 using BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
 using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
@@ -81,8 +82,10 @@ public sealed class MysqlPhysicalProviderOsGuardTests
         var lifecycle = new MysqlLifecycleManager(
             NullLogger<MysqlLifecycleManager>.Instance,
             probe,
-            new MysqlSystemdController(NullLogger<MysqlSystemdController>.Instance, runner,
-                Options.Create(new RestoreSettings())),
+            new MysqlSystemdController(new SystemdServiceController(
+                NullLogger<SystemdServiceController>.Instance,
+                runner,
+                Options.Create(new RestoreSettings()))),
             binaryResolver);
         var swapper = new MysqlDatadirSwapper(
             NullLogger<MysqlDatadirSwapper>.Instance,
@@ -93,7 +96,14 @@ public sealed class MysqlPhysicalProviderOsGuardTests
             binaryResolver,
             probe,
             new MysqlBackupExtractor(NullLogger<MysqlBackupExtractor>.Instance, runner),
-            new MysqlInstanceInspector(NullLogger<MysqlInstanceInspector>.Instance, probe),
+            new MysqlInstanceInspector(
+                NullLogger<MysqlInstanceInspector>.Instance,
+                probe,
+                new SystemdUnitDetector(NullLogger<SystemdUnitDetector>.Instance),
+                new MysqlSystemdController(new SystemdServiceController(
+                    NullLogger<SystemdServiceController>.Instance,
+                    runner,
+                    Options.Create(new RestoreSettings())))),
             lifecycle,
             swapper,
             new MysqlDatadirSwapCoordinator(

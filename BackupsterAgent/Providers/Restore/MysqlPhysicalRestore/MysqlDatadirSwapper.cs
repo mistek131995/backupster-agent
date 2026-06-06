@@ -1,131 +1,62 @@
 using System.Diagnostics;
 using BackupsterAgent.Configuration;
-using BackupsterAgent.Exceptions;
+using BackupsterAgent.Providers.Restore.Common;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
 
 public sealed class MysqlDatadirSwapper : IMysqlDatadirSwapper
 {
-    private const string MarkerFileName = ".backupster-marker";
     private const int OrphanGraceHours = 48;
 
     private readonly ILogger<MysqlDatadirSwapper> _logger;
     private readonly RestoreSettings _restoreSettings;
+    private readonly RestorePathResolver _pathResolver;
+    private readonly RestoreMarkerStore _markerStore;
+    private readonly FilesystemRenamePreflight _renamePreflight;
+
+    public MysqlDatadirSwapper(
+        ILogger<MysqlDatadirSwapper> logger,
+        IOptions<RestoreSettings> restoreSettings,
+        RestorePathResolver pathResolver,
+        RestoreMarkerStore markerStore,
+        FilesystemRenamePreflight renamePreflight)
+    {
+        _logger = logger;
+        _restoreSettings = restoreSettings.Value;
+        _pathResolver = pathResolver;
+        _markerStore = markerStore;
+        _renamePreflight = renamePreflight;
+    }
 
     public MysqlDatadirSwapper(
         ILogger<MysqlDatadirSwapper> logger,
         IOptions<RestoreSettings> restoreSettings)
+        : this(
+            logger,
+            restoreSettings,
+            new RestorePathResolver(NullLogger<RestorePathResolver>.Instance),
+            new RestoreMarkerStore(NullLogger<RestoreMarkerStore>.Instance),
+            new FilesystemRenamePreflight(NullLogger<FilesystemRenamePreflight>.Instance))
     {
-        _logger = logger;
-        _restoreSettings = restoreSettings.Value;
     }
 
-    public string ResolveRealPath(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        try
-        {
-            var info = new DirectoryInfo(fullPath);
-            var target = info.ResolveLinkTarget(returnFinalTarget: true);
-            return target?.FullName is { Length: > 0 } realPath ? realPath : fullPath;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to resolve symlinks for MySQL datadir '{Path}'. Using original path.", fullPath);
-            return fullPath;
-        }
-    }
+    public string ResolveRealPath(string path) =>
+        _pathResolver.ResolveRealPath(path, "MySQL datadir");
 
-    public void EnsureSameFsRename(string parent, string realPath)
-    {
-        var probeFrom = Path.Combine(parent, $"backupster-rename-probe-{Guid.NewGuid():N}");
-        var probeTo = Path.Combine(parent, $"backupster-rename-probe-{Guid.NewGuid():N}");
+    public void EnsureSameFsRename(string parent, string realPath) =>
+        _renamePreflight.EnsureSameFsRename(parent, realPath, "MySQL datadir", throwRestorePermissionException: true);
 
-        try
-        {
-            Directory.CreateDirectory(probeFrom);
-            Directory.Move(probeFrom, probeTo);
-        }
-        catch (Exception ex)
-        {
-            TryDeleteDirectory(probeFrom);
-            TryDeleteDirectory(probeTo);
-            throw new RestorePermissionException(
-                $"Не удалось выполнить атомарный rename для MySQL datadir '{realPath}'. " +
-                $"Физическое восстановление требует, чтобы datadir и его родительский каталог '{parent}' " +
-                "поддерживали атомарный rename внутри одной файловой системы. " +
-                $"Подробности: {ex.Message}");
-        }
-        finally
-        {
-            TryDeleteDirectory(probeTo);
-        }
-    }
+    public static (string parent, string leaf) SplitPath(string path) =>
+        RestorePathResolver.SplitPath(path, "MySQL datadir");
 
-    public static (string parent, string leaf) SplitPath(string path)
-    {
-        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var parent = Path.GetDirectoryName(trimmed);
-        var leaf = Path.GetFileName(trimmed);
-        if (string.IsNullOrEmpty(parent) || string.IsNullOrEmpty(leaf))
-            throw new InvalidOperationException(
-                $"Не удалось разобрать путь '{path}' на родительский каталог и имя.");
-        return (parent, leaf);
-    }
+    public static void WriteMarkerFile(string dir) =>
+        RestoreMarkerStore.WriteMarkerFile(dir);
 
-    public static void WriteMarkerFile(string dir)
-    {
-        var path = Path.Combine(dir, MarkerFileName);
-        File.WriteAllText(path, DateTime.UtcNow.ToString("o"));
-    }
-
-    public void CleanupOrphanStagingDirs(string parent, string leaf)
-    {
-        string[] suffixes = ["new", "failed", "old"];
-        var threshold = DateTime.UtcNow - TimeSpan.FromHours(OrphanGraceHours);
-
-        foreach (var suffix in suffixes)
-        {
-            IEnumerable<string> matches;
-            try
-            {
-                matches = Directory.EnumerateDirectories(parent, $"{leaf}.{suffix}-*");
-            }
-            catch
-            {
-                continue;
-            }
-
-            foreach (var dir in matches)
-            {
-                try
-                {
-                    var marker = Path.Combine(dir, MarkerFileName);
-                    if (!File.Exists(marker)) continue;
-
-                    var content = File.ReadAllText(marker).Trim();
-                    if (!DateTime.TryParse(content, null,
-                            System.Globalization.DateTimeStyles.AssumeUniversal |
-                            System.Globalization.DateTimeStyles.AdjustToUniversal,
-                            out var createdAt))
-                        continue;
-
-                    if (createdAt > threshold) continue;
-
-                    _logger.LogWarning(
-                        "Orphan cleanup: deleting stale staging dir '{Dir}' (age > {Hours}h)",
-                        dir, OrphanGraceHours);
-                    Directory.Delete(dir, recursive: true);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Orphan cleanup: failed to process '{Dir}'", dir);
-                }
-            }
-        }
-    }
+    public void CleanupOrphanStagingDirs(string parent, string leaf) =>
+        _markerStore.CleanupOrphanStagingDirs(
+            parent, leaf, ["new", "failed", "old"], TimeSpan.FromHours(OrphanGraceHours));
 
     public async Task FixOwnershipAsync(string newDatadir, MysqlInstanceInfo instanceInfo, CancellationToken ct)
     {
@@ -167,13 +98,13 @@ public sealed class MysqlDatadirSwapper : IMysqlDatadirSwapper
             if (ct.IsCancellationRequested)
             {
                 _logger.LogWarning(
-                    "chown -R {OwnerSpec} '{Path}' aborted by user cancellation — process killed",
+                    "chown -R {OwnerSpec} '{Path}' aborted by user cancellation - process killed",
                     ownerSpec, newDatadir);
                 throw;
             }
 
             _logger.LogError(
-                "chown -R {OwnerSpec} '{Path}' timed out after {Timeout}s — process killed",
+                "chown -R {OwnerSpec} '{Path}' timed out after {Timeout}s - process killed",
                 ownerSpec, newDatadir, timeoutSeconds);
             throw new InvalidOperationException(
                 $"Смена владельца каталога данных MySQL не завершилась за {timeoutSeconds} секунд. " +

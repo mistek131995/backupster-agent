@@ -6,6 +6,7 @@ using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
+using BackupsterAgent.Providers.Restore.Common;
 using BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
 using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common.Processes;
@@ -47,8 +48,6 @@ public sealed class MysqlPhysicalRestoreProviderIntegrationTests
     {
         Assume.That(OperatingSystem.IsLinux(), Is.True,
             "MySQL physical restore through XtraBackup is supported only on Linux.");
-        Assume.That(IntegrationConfig.IsMysqlPhysicalRestoreEnabled(), Is.True,
-            "Destructive MySQL physical restore tests require Mysql:AllowPhysicalRestore=true.");
         Assume.That(
             IntegrationConfig.TryGetMysqlConnection(out var connection),
             Is.True,
@@ -236,7 +235,12 @@ public sealed class MysqlPhysicalRestoreProviderIntegrationTests
     {
         var inspector = new MysqlInstanceInspector(
             NullLogger<MysqlInstanceInspector>.Instance,
-            new MysqlServerProbe(NullLogger<MysqlServerProbe>.Instance));
+            new MysqlServerProbe(NullLogger<MysqlServerProbe>.Instance),
+            new SystemdUnitDetector(NullLogger<SystemdUnitDetector>.Instance),
+            new MysqlSystemdController(new SystemdServiceController(
+                NullLogger<SystemdServiceController>.Instance,
+                _runner,
+                Options.Create(new RestoreSettings()))));
         var serviceName = await inspector.DetectServiceNameAsync(_connection, _cts.Token);
         Assume.That(serviceName, Is.Null,
             "Missing SHUTDOWN integration test applies only to unmanaged MySQL processes.");
@@ -295,10 +299,10 @@ public sealed class MysqlPhysicalRestoreProviderIntegrationTests
         });
         var probe = new MysqlServerProbe(NullLogger<MysqlServerProbe>.Instance);
         var extractor = new MysqlBackupExtractor(NullLogger<MysqlBackupExtractor>.Instance, _runner);
-        var systemd = new MysqlSystemdController(
-            NullLogger<MysqlSystemdController>.Instance,
+        var systemd = new MysqlSystemdController(new SystemdServiceController(
+            NullLogger<SystemdServiceController>.Instance,
             _runner,
-            restoreOptions);
+            restoreOptions));
         var lifecycle = new MysqlLifecycleManager(
             NullLogger<MysqlLifecycleManager>.Instance,
             probe,
@@ -309,7 +313,9 @@ public sealed class MysqlPhysicalRestoreProviderIntegrationTests
             restoreOptions);
         var inspector = new MysqlInstanceInspector(
             NullLogger<MysqlInstanceInspector>.Instance,
-            probe);
+            probe,
+            new SystemdUnitDetector(NullLogger<SystemdUnitDetector>.Instance),
+            systemd);
         var coordinator = new MysqlDatadirSwapCoordinator(
             NullLogger<MysqlDatadirSwapCoordinator>.Instance,
             swapper,

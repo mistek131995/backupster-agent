@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text;
-using System.Text.RegularExpressions;
 using BackupsterAgent.Configuration;
+using BackupsterAgent.Providers.Restore.Common;
 
 namespace BackupsterAgent.Providers.Restore.MysqlPhysicalRestore;
 
@@ -9,13 +9,19 @@ public sealed class MysqlInstanceInspector
 {
     private readonly ILogger<MysqlInstanceInspector> _logger;
     private readonly MysqlServerProbe _probe;
+    private readonly SystemdUnitDetector _systemdUnitDetector;
+    private readonly MysqlSystemdController _systemd;
 
     public MysqlInstanceInspector(
         ILogger<MysqlInstanceInspector> logger,
-        MysqlServerProbe probe)
+        MysqlServerProbe probe,
+        SystemdUnitDetector systemdUnitDetector,
+        MysqlSystemdController systemd)
     {
         _logger = logger;
         _probe = probe;
+        _systemdUnitDetector = systemdUnitDetector;
+        _systemd = systemd;
     }
 
     public async Task<MysqlInstanceInfo> DetectInstanceInfoAsync(
@@ -32,6 +38,8 @@ public sealed class MysqlInstanceInspector
         {
             originalArgs = ReadProcessArgsFromProc(pid.Value);
             serviceName = await DetectSystemdUnitAsync(pid.Value, ct);
+            if (serviceName is not null)
+                await _systemd.EnsureMainPidAsync(serviceName, pid.Value, ct);
         }
 
         (ownerUser, ownerGroup) = ReadDirectoryOwner(datadir);
@@ -43,31 +51,16 @@ public sealed class MysqlInstanceInspector
     {
         var pid = await _probe.GetMysqlPidAsync(connection, ct);
         if (!pid.HasValue) return null;
-        return await DetectSystemdUnitAsync(pid.Value, ct);
+
+        var serviceName = await DetectSystemdUnitAsync(pid.Value, ct);
+        if (serviceName is not null)
+            await _systemd.EnsureMainPidAsync(serviceName, pid.Value, ct);
+
+        return serviceName;
     }
 
-    private async Task<string?> DetectSystemdUnitAsync(int pid, CancellationToken ct)
-    {
-        var cgroupFile = $"/proc/{pid}/cgroup";
-        if (!File.Exists(cgroupFile)) return null;
-
-        string content;
-        try
-        {
-            content = await File.ReadAllTextAsync(cgroupFile, ct);
-        }
-        catch
-        {
-            return null;
-        }
-
-        var match = Regex.Match(content, @"system\.slice/([^\s/]+\.service)");
-        if (!match.Success) return null;
-
-        var unit = match.Groups[1].Value;
-        _logger.LogInformation("Detected MySQL systemd unit: '{Unit}'", unit);
-        return unit;
-    }
+    private async Task<string?> DetectSystemdUnitAsync(int pid, CancellationToken ct) =>
+        await _systemdUnitDetector.DetectUnitAsync(pid, IsMysqlServiceName, "MySQL", ct);
 
     private IReadOnlyList<string> ReadProcessArgsFromProc(int pid)
     {
@@ -85,7 +78,7 @@ public sealed class MysqlInstanceInspector
             if (!allArgs[0].Contains("mysqld", StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogWarning(
-                    "PID {Pid} cmdline argv[0]='{Argv0}' does not look like mysqld — skipping arg capture (possible PID reuse)",
+                    "PID {Pid} cmdline argv[0]='{Argv0}' does not look like mysqld - skipping arg capture (possible PID reuse)",
                     pid, allArgs[0]);
                 return [];
             }
@@ -123,7 +116,7 @@ public sealed class MysqlInstanceInspector
 
             if (!process.WaitForExit(5_000))
             {
-                _logger.LogWarning("stat timed out after 5s for '{Path}' — killing process", path);
+                _logger.LogWarning("stat timed out after 5s for '{Path}' - killing process", path);
                 try { process.Kill(entireProcessTree: true); } catch { }
                 return (null, null);
             }
@@ -143,4 +136,9 @@ public sealed class MysqlInstanceInspector
             return (null, null);
         }
     }
+
+    private static bool IsMysqlServiceName(string serviceName) =>
+        serviceName.Contains("mysql", StringComparison.OrdinalIgnoreCase) ||
+        serviceName.Contains("mysqld", StringComparison.OrdinalIgnoreCase) ||
+        serviceName.Contains("mariadb", StringComparison.OrdinalIgnoreCase);
 }
