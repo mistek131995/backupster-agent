@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Formats.Tar;
+using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
 using BackupsterAgent.Configuration;
@@ -38,6 +40,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
     {
         var pgCtl = await _binaryResolver.ResolveAsync(connection, "pg_ctl", ct);
         await CheckPgCtlAsync(pgCtl, ct);
+        await CheckTarAsync("tar", ct);
 
         var pgDataPath = await QueryDataDirectoryAsync(connection, ct);
         _logger.LogInformation("Resolved PGDATA from cluster: '{PgDataPath}'", pgDataPath);
@@ -60,8 +63,29 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         await _clusterLifecycle.DetectAsync(pgDataPath, ct);
     }
 
-    public Task ValidateRestoreSourceAsync(ConnectionConfig connection, string restoreFilePath, CancellationToken ct) =>
-        Task.CompletedTask;
+    public async Task ValidateRestoreSourceAsync(ConnectionConfig connection, string restoreFilePath, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(restoreFilePath))
+            throw new InvalidOperationException("Путь к PostgreSQL physical-бэкапу для restore не задан.");
+
+        if (!File.Exists(restoreFilePath))
+            throw new InvalidOperationException(
+                $"Файл PostgreSQL physical-бэкапа '{restoreFilePath}' не найден на хосте агента.");
+
+        var info = new FileInfo(restoreFilePath);
+        if (info.Length == 0)
+            throw new InvalidOperationException(
+                $"Файл PostgreSQL physical-бэкапа '{restoreFilePath}' пустой. Проверьте объект в хранилище.");
+
+        var format = await PgBaseFormatDetector.DetectByContentAsync(restoreFilePath, ct);
+        if (format == PgBaseDumpFormat.Container)
+        {
+            await ValidatePgBaseContainerAsync(restoreFilePath, ct);
+            return;
+        }
+
+        await ValidateLegacySingleTarGzAsync(restoreFilePath, ct);
+    }
 
     public Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct)
     {
@@ -315,6 +339,41 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
                 "Убедитесь, что postgresql установлен и pg_ctl есть в PATH.");
     }
 
+    internal static async Task CheckTarAsync(string tarBinary, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = tarBinary,
+            ArgumentList = { "--version" },
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        psi.Environment["LC_MESSAGES"] = "C";
+        psi.Environment["LANG"] = "C";
+
+        using var process = new Process { StartInfo = psi };
+        try
+        {
+            process.Start();
+            await process.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            throw new RestorePermissionException(
+                $"tar не найден на хосте агента ({ex.Message}). " +
+                "Установите GNU tar/bsdtar или добавьте tar в PATH: PostgreSQL physical restore использует его для распаковки base.tar.gz и pg_wal.tar.gz.");
+        }
+
+        if (process.ExitCode != 0)
+            throw new RestorePermissionException(
+                $"tar --version вернул код {process.ExitCode}. " +
+                "Убедитесь, что tar установлен и доступен в PATH: PostgreSQL physical restore использует его для распаковки base.tar.gz и pg_wal.tar.gz.");
+    }
+
     private async Task<string> QueryDataDirectoryAsync(ConnectionConfig connection, CancellationToken ct)
     {
         var result = await PostgresQueryRetry.ExecuteAsync(
@@ -368,6 +427,76 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         finally
         {
             TryDeleteDirectory(workDir);
+        }
+    }
+
+    private static async Task ValidatePgBaseContainerAsync(string path, CancellationToken ct)
+    {
+        var hasBase = false;
+        var hasWal = false;
+
+        try
+        {
+            await using var input = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 65536, useAsync: true);
+            await using var reader = new TarReader(input, leaveOpen: false);
+
+            TarEntry? entry;
+            while ((entry = await reader.GetNextEntryAsync(copyData: false, cancellationToken: ct)) is not null)
+            {
+                if (entry.EntryType != TarEntryType.RegularFile)
+                    continue;
+
+                if (entry.Name == PgBaseContainer.BaseEntryName)
+                    hasBase = true;
+                else if (entry.Name == PgBaseContainer.WalEntryName)
+                    hasWal = true;
+            }
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new InvalidOperationException(
+                $"Контейнер PostgreSQL physical-бэкапа '{path}' повреждён или не является tar-архивом pgbase: {ex.Message}",
+                ex);
+        }
+
+        if (!hasBase)
+            throw new InvalidOperationException(
+                $"Контейнер PostgreSQL physical-бэкапа '{path}' не содержит обязательный файл '{PgBaseContainer.BaseEntryName}'.");
+
+        if (!hasWal)
+            throw new InvalidOperationException(
+                $"Контейнер PostgreSQL physical-бэкапа '{path}' не содержит обязательный файл '{PgBaseContainer.WalEntryName}'.");
+    }
+
+    private static async Task ValidateLegacySingleTarGzAsync(string path, CancellationToken ct)
+    {
+        var head = new byte[2];
+        await using (var fs = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 2, useAsync: true))
+        {
+            var read = await fs.ReadAsync(head, ct);
+            if (read < 2 || head[0] != 0x1F || head[1] != 0x8B)
+                throw new InvalidOperationException(
+                    $"Файл PostgreSQL physical-бэкапа '{path}' не является ни pgbase-контейнером, ни legacy gzip-архивом.");
+        }
+
+        try
+        {
+            await using var fs = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 65536, useAsync: true);
+            await using var gz = new GZipStream(fs, CompressionMode.Decompress);
+            var probe = new byte[1];
+            _ = await gz.ReadAsync(probe, ct);
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new InvalidOperationException(
+                $"Legacy gzip-архив PostgreSQL physical-бэкапа '{path}' повреждён: {ex.Message}",
+                ex);
         }
     }
 

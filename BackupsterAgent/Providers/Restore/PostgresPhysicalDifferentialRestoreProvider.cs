@@ -68,9 +68,9 @@ public sealed class PostgresPhysicalDifferentialRestoreProvider : IDifferentialR
             if (!File.Exists(item.PgBaseManifestFilePath))
                 throw new InvalidOperationException(
                     $"Файл backup_manifest цепочки '{item.PgBaseManifestFilePath}' (recordId={item.BackupRecordId}) недоступен на хосте агента.");
-        }
 
-        await Task.CompletedTask;
+            await _fullProvider.ValidateRestoreSourceAsync(connection, item.DumpFilePath, ct);
+        }
     }
 
     public Task PrepareTargetDatabaseAsync(ConnectionConfig connection, string targetDatabase, CancellationToken ct) =>

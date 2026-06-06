@@ -4,6 +4,8 @@ using System.Net;
 using System.Net.Sockets;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Providers.Backup;
+using BackupsterAgent.Providers.Restore;
+using BackupsterAgent.Providers.Restore.PostgresPhysicalRestore;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Resolvers;
@@ -28,6 +30,7 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
     private string _restoreDir = null!;
     private string _serverLogPath = null!;
     private string _pgCtlBinary = null!;
+    private string _initDbBinary = null!;
     private int _restorePort;
     private bool _serverStarted;
     private CancellationTokenSource _cts = null!;
@@ -64,6 +67,7 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
         _cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
 
         _pgCtlBinary = await _resolver.ResolveAsync(_connection, "pg_ctl", _cts.Token);
+        _initDbBinary = await _resolver.ResolveAsync(_connection, "initdb", _cts.Token);
         await CreateSourceDatabaseAsync(_connection, _srcDb, _cts.Token);
     }
 
@@ -129,6 +133,105 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
         Assert.That(rows, Is.EquivalentTo(ExpectedRows));
     }
 
+    [Test]
+    public async Task RestoreProvider_RoundTrip_RestoresFullBackupToSeparateCluster()
+    {
+        var backupProvider = new PostgresPhysicalBackupProvider(
+            NullLogger<PostgresPhysicalBackupProvider>.Instance,
+            _resolver,
+            _runner);
+        var restoreProvider = BuildRestoreProvider();
+
+        var sourcePgData = Path.Combine(
+            Path.GetTempPath(),
+            "backupster-pg-phys-source-" + Guid.NewGuid().ToString("N"));
+        var sourceServerLog = sourcePgData + ".log";
+        var sourcePort = FindFreeLoopbackPort();
+        var sourceConnection = new ConnectionConfig
+        {
+            Name = "pg-source-itest",
+            DatabaseType = _connection.DatabaseType,
+            Host = "localhost",
+            Port = sourcePort,
+            Username = "postgres",
+            Password = string.Empty,
+            BinPath = _connection.BinPath,
+        };
+        var sourceStarted = false;
+
+        var targetPgData = Path.Combine(
+            Path.GetTempPath(),
+            "backupster-pg-phys-target-" + Guid.NewGuid().ToString("N"));
+        var targetServerLog = targetPgData + ".log";
+        var targetPort = FindFreeLoopbackPort();
+        var targetClusterStarted = false;
+
+        try
+        {
+            await RunInitDbAsync(_initDbBinary, sourcePgData, _cts.Token);
+            AppendPostgresConfOverrides(sourcePgData, sourcePort);
+
+            await StartClusterAsync(sourcePgData, sourceServerLog, _cts.Token);
+            sourceStarted = true;
+            await WaitForServerReadyAsync(sourcePort, sourceConnection, _cts.Token);
+
+            await CreateSourceDatabaseAsync(sourceConnection, _srcDb, _cts.Token);
+
+            var fullResult = await backupProvider.BackupAsync(MakeConfig(_outputDir), sourceConnection, _cts.Token);
+            Assert.That(fullResult.Success, Is.True);
+            Assert.That(File.Exists(fullResult.FilePath), Is.True);
+
+            await RunInitDbAsync(_initDbBinary, targetPgData, _cts.Token);
+            AppendPostgresConfOverrides(targetPgData, targetPort);
+
+            await StartClusterAsync(targetPgData, targetServerLog, _cts.Token);
+            targetClusterStarted = true;
+            await WaitForServerReadyAsync(targetPort, sourceConnection, _cts.Token);
+
+            await StopClusterFastAsync(sourcePgData, _cts.Token);
+            sourceStarted = false;
+            NpgsqlConnection.ClearAllPools();
+
+            var targetConnection = new ConnectionConfig
+            {
+                Name = "pg-target-itest",
+                DatabaseType = sourceConnection.DatabaseType,
+                Host = "localhost",
+                Port = targetPort,
+                Username = "postgres",
+                Password = string.Empty,
+                BinPath = sourceConnection.BinPath,
+            };
+
+            await restoreProvider.ValidatePermissionsAsync(targetConnection, _srcDb, _cts.Token);
+            await restoreProvider.ValidateRestoreSourceAsync(targetConnection, fullResult.FilePath, _cts.Token);
+            await restoreProvider.PrepareTargetDatabaseAsync(targetConnection, _srcDb, _cts.Token);
+            await restoreProvider.RestoreAsync(targetConnection, _srcDb, _srcDb, fullResult.FilePath, _cts.Token);
+
+            await WaitForServerReadyAsync(sourcePort, sourceConnection, _cts.Token);
+
+            var rows = await ReadItemsAsync(sourceConnection, sourcePort, _srcDb, _cts.Token);
+            Assert.That(rows, Is.EquivalentTo(ExpectedRows));
+
+            Assert.That(File.Exists(Path.Combine(targetPgData, "PG_VERSION")), Is.True);
+        }
+        finally
+        {
+            if (targetClusterStarted)
+                await TryStopClusterAsync(targetPgData);
+
+            TryDeleteDirectory(targetPgData, "target pgdata");
+            TryDeleteFile(targetServerLog, "target server log");
+            TryCleanupSiblings(targetPgData);
+
+            if (sourceStarted)
+                await TryStopClusterAsync(sourcePgData);
+
+            TryDeleteDirectory(sourcePgData, "source pgdata");
+            TryDeleteFile(sourceServerLog, "source server log");
+        }
+    }
+
     // Rows inserted before CHECKPOINT — expected to be present in datafiles inside the basebackup.
     private static readonly (int Id, string Name)[] PreCheckpointRows =
     [
@@ -147,6 +250,105 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
 
     private static readonly (int Id, string Name)[] ExpectedRows =
         PreCheckpointRows.Concat(PostCheckpointRows).ToArray();
+
+    private PostgresPhysicalRestoreProvider BuildRestoreProvider()
+    {
+        var restoreSettings = Microsoft.Extensions.Options.Options.Create(new RestoreSettings());
+        var lifecycle = new PostgresClusterLifecycle(
+            NullLogger<PostgresClusterLifecycle>.Instance,
+            _runner,
+            restoreSettings);
+
+        return new PostgresPhysicalRestoreProvider(
+            NullLogger<PostgresPhysicalRestoreProvider>.Instance,
+            _resolver,
+            restoreSettings,
+            lifecycle);
+    }
+
+    private DatabaseConfig MakeConfig(string outputDir) => new()
+    {
+        ConnectionName = _connection.Name,
+        StorageName = "n/a",
+        Database = _srcDb,
+        OutputPath = outputDir,
+    };
+
+    private async Task RunInitDbAsync(string initdbBinary, string pgDataPath, CancellationToken ct)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = initdbBinary,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("-D");
+        psi.ArgumentList.Add(pgDataPath);
+        psi.ArgumentList.Add("-A");
+        psi.ArgumentList.Add("trust");
+        psi.ArgumentList.Add("-U");
+        psi.ArgumentList.Add("postgres");
+        psi.ArgumentList.Add("--encoding=UTF8");
+        psi.ArgumentList.Add("--no-locale");
+        psi.Environment["LC_MESSAGES"] = "C";
+        psi.Environment["LANG"] = "C";
+
+        using var process = new System.Diagnostics.Process { StartInfo = psi };
+        process.Start();
+        await process.WaitForExitAsync(ct);
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"initdb at '{pgDataPath}' failed with exit code {process.ExitCode}");
+    }
+
+    private async Task StartClusterAsync(string pgDataPath, string serverLog, CancellationToken ct)
+    {
+        var exitCode = await RunPgCtlDirectAsync(
+            new[] { "-D", pgDataPath, "-l", serverLog, "-w", "-t", "120", "start" },
+            timeout: TimeSpan.FromSeconds(150),
+            ct);
+        if (exitCode != 0)
+        {
+            var tail = TryReadServerLogTail(serverLog, 80);
+            throw new InvalidOperationException(
+                $"pg_ctl start failed for '{pgDataPath}' with exit {exitCode}. Server log tail:{Environment.NewLine}{tail}");
+        }
+    }
+
+    private async Task StopClusterFastAsync(string pgDataPath, CancellationToken ct)
+    {
+        var exitCode = await RunPgCtlDirectAsync(
+            new[] { "-D", pgDataPath, "-m", "fast", "-w", "-t", "60", "stop" },
+            timeout: TimeSpan.FromSeconds(75),
+            ct);
+        if (exitCode != 0)
+            throw new InvalidOperationException(
+                $"pg_ctl stop failed for '{pgDataPath}' with exit {exitCode}");
+    }
+
+    private async Task TryStopClusterAsync(string pgDataPath)
+    {
+        using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(75));
+        try
+        {
+            var fast = await RunPgCtlDirectAsync(
+                new[] { "-D", pgDataPath, "-m", "fast", "-w", "-t", "30", "stop" },
+                timeout: TimeSpan.FromSeconds(45),
+                cleanupCts.Token);
+            if (fast == 0) return;
+
+            var immediate = await RunPgCtlDirectAsync(
+                new[] { "-D", pgDataPath, "-m", "immediate", "-w", "-t", "30", "stop" },
+                timeout: TimeSpan.FromSeconds(45),
+                cleanupCts.Token);
+            if (immediate != 0)
+                TryKillByPidFile(pgDataPath);
+        }
+        catch (Exception ex)
+        {
+            TestContext.Progress.WriteLine($"Cluster cleanup failed for '{pgDataPath}': {ex.Message}");
+            TryKillByPidFile(pgDataPath);
+        }
+    }
 
     private async Task StartRestoreServerWithPortRetryAsync(int maxAttempts)
     {
@@ -561,6 +763,31 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
         catch (Exception ex)
         {
             TestContext.Progress.WriteLine($"{description} cleanup failed for '{path}': {ex.Message}");
+        }
+    }
+
+    private static void TryDeleteFile(string path, string description)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            TestContext.Progress.WriteLine($"{description} cleanup failed for '{path}': {ex.Message}");
+        }
+    }
+
+    private static void TryCleanupSiblings(string pgDataPath)
+    {
+        var parent = Path.GetDirectoryName(pgDataPath);
+        var leaf = Path.GetFileName(pgDataPath);
+        if (string.IsNullOrWhiteSpace(parent) || string.IsNullOrWhiteSpace(leaf)) return;
+
+        foreach (var pattern in new[] { $"{leaf}.old-*", $"{leaf}.new-*", $"{leaf}.failed-*" })
+        {
+            foreach (var dir in Directory.EnumerateDirectories(parent, pattern))
+                TryDeleteDirectory(dir, "restore sibling dir");
         }
     }
 }
