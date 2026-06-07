@@ -163,6 +163,8 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         Directory.CreateDirectory(stagingPath);
         RestoreMarkerStore.WriteMarkerFile(stagingPath);
 
+        var readinessConnection = connection;
+
         try
         {
             try
@@ -171,6 +173,16 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
 
                 await VerifyStagedClusterAsync(stagingPath, pgCtl, ct);
                 _logger.LogInformation("Staged cluster verified at '{StagingPath}'", stagingPath);
+
+                readinessConnection = PostgresRestoredReadinessConnectionResolver.Resolve(connection, stagingPath);
+                if (readinessConnection.Port != connection.Port)
+                {
+                    _logger.LogInformation(
+                        "Restored PostgreSQL config sets port {RestoredPort}; readiness probe will use {Host}:{ReadinessPort}",
+                        readinessConnection.Port,
+                        readinessConnection.Host,
+                        readinessConnection.Port);
+                }
 
                 await _clusterLifecycle.PrepareStagingPermissionsAsync(clusterControl, realPgDataPath, stagingPath, ct);
 
@@ -205,7 +217,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
 
                 _logger.LogInformation(
                     "PostgreSQL cluster start command completed, waiting for SQL readiness");
-                await _readinessProbe.WaitUntilReadyAsync(connection, ReadinessTimeout, ct);
+                await _readinessProbe.WaitUntilReadyAsync(readinessConnection, ReadinessTimeout, ct);
 
                 _logger.LogInformation("PostgreSQL cluster started and accepts SQL connections");
                 TryDeleteDirectory(oldPath);

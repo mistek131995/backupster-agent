@@ -336,14 +336,13 @@ public sealed class PostgresSystemdManagedRestoreIntegrationTests
 
     private async Task StopAndRemoveUnitAsync(string unitName, string unitPath)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-        await RunProcessAsync("systemctl", ["stop", unitName], TimeSpan.FromSeconds(60), cts.Token);
-        await RunProcessAsync("systemctl", ["reset-failed", unitName], TimeSpan.FromSeconds(20), cts.Token);
+        await TryRunCleanupProcessAsync("systemctl", ["stop", unitName], TimeSpan.FromSeconds(60));
+        await TryRunCleanupProcessAsync("systemctl", ["reset-failed", unitName], TimeSpan.FromSeconds(20));
 
         try { if (File.Exists(unitPath)) File.Delete(unitPath); }
         catch (Exception ex) { TestContext.Progress.WriteLine($"Unit file cleanup failed for '{unitPath}': {ex.Message}"); }
 
-        await RunProcessAsync("systemctl", ["daemon-reload"], TimeSpan.FromSeconds(30), cts.Token);
+        await TryRunCleanupProcessAsync("systemctl", ["daemon-reload"], TimeSpan.FromSeconds(30));
     }
 
     private async Task AssumeSystemctlAvailableAsync(CancellationToken ct)
@@ -456,6 +455,28 @@ public sealed class PostgresSystemdManagedRestoreIntegrationTests
         try { return await task; }
         catch { return string.Empty; }
     }
+
+    private static async Task TryRunCleanupProcessAsync(
+        string fileName,
+        IReadOnlyList<string> args,
+        TimeSpan timeout)
+    {
+        var command = FormatCommand(fileName, args);
+        try
+        {
+            var result = await RunProcessAsync(fileName, args, timeout, CancellationToken.None);
+            if (result.ExitCode != 0)
+                TestContext.Progress.WriteLine(
+                    $"Cleanup command '{command}' failed with exit {result.ExitCode}: {result.Stderr}{result.Stdout}");
+        }
+        catch (Exception ex)
+        {
+            TestContext.Progress.WriteLine($"Cleanup command '{command}' failed: {ex.Message}");
+        }
+    }
+
+    private static string FormatCommand(string fileName, IReadOnlyList<string> args) =>
+        args.Count == 0 ? fileName : fileName + " " + string.Join(" ", args);
 
     private async Task WaitForServerReadyAsync(ConnectionConfig connection, CancellationToken ct)
     {
@@ -667,9 +688,15 @@ public sealed class PostgresSystemdManagedRestoreIntegrationTests
 
         public async ValueTask DisposeAsync()
         {
-            await owner.StopAndRemoveUnitAsync(UnitName, UnitPath);
-            TryKillByPidFile(PgData);
-            TryDeleteDirectory(RootDir);
+            try
+            {
+                await owner.StopAndRemoveUnitAsync(UnitName, UnitPath);
+            }
+            finally
+            {
+                TryKillByPidFile(PgData);
+                TryDeleteDirectory(RootDir);
+            }
         }
     }
 }

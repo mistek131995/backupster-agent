@@ -219,7 +219,7 @@ public sealed class MysqlPhysicalRestoreProviderIntegrationTests
         var expected = await ReadRestoreSnapshotAsync(_connection, _cts.Token);
         var provider = BuildRestoreProvider();
 
-        var ex = Assert.ThrowsAsync<Exception>(() =>
+        var ex = Assert.CatchAsync<Exception>(() =>
             provider.RestoreAsync(_connection, _db1, _db1, corruptedPath, _cts.Token));
 
         Assert.That(ex!.Message, Is.Not.Empty);
