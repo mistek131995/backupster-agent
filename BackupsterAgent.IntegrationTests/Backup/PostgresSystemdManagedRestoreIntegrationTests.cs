@@ -336,7 +336,7 @@ public sealed class PostgresSystemdManagedRestoreIntegrationTests
 
     private async Task StopAndRemoveUnitAsync(string unitName, string unitPath)
     {
-        await TryRunCleanupProcessAsync("systemctl", ["stop", unitName], TimeSpan.FromSeconds(60));
+        await TryRunCleanupProcessAsync("systemctl", ["stop", unitName], TimeSpan.FromSeconds(90));
         await TryRunCleanupProcessAsync("systemctl", ["reset-failed", unitName], TimeSpan.FromSeconds(20));
 
         try { if (File.Exists(unitPath)) File.Delete(unitPath); }
@@ -587,6 +587,8 @@ public sealed class PostgresSystemdManagedRestoreIntegrationTests
             "local all all trust",
             "host all all 127.0.0.1/32 trust",
             "host all all ::1/128 trust",
+            "host replication all 127.0.0.1/32 trust",
+            "host replication all ::1/128 trust",
             string.Empty,
         ]));
     }
