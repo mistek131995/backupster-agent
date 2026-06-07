@@ -322,7 +322,6 @@ public sealed class PostgresSystemdManagedRestoreIntegrationTests
             "Environment=LC_MESSAGES=C",
             "Environment=LANG=C",
             $"ExecStart={execStart}",
-            $"ExecStartPost={_pgIsReadyBinary} -h localhost -p {port} -U postgres -t 30",
             "",
         ]);
     }

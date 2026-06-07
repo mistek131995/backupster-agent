@@ -89,6 +89,9 @@ WHERE GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''',
         var fileName = $"{config.DatabasePathSegment}_{timestamp}.xbstream.gz";
         var outputFile = Path.Combine(config.OutputPath, fileName);
         var tempDir = Path.Combine(config.OutputPath, $"xtra-{Guid.NewGuid():N}");
+        var defaultsFile = string.IsNullOrEmpty(connection.Password)
+            ? null
+            : Path.Combine(tempDir, $"client-{Guid.NewGuid():N}.cnf");
 
         Directory.CreateDirectory(config.OutputPath);
         Directory.CreateDirectory(tempDir);
@@ -97,29 +100,24 @@ WHERE GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''',
             "Starting MySQL physical backup (XtraBackup). Database: '{Database}', Host: '{Host}:{Port}', Output: '{OutputFile}', Binary: '{Binary}'",
             config.Database, connection.Host, connection.Port, outputFile, xtrabackup);
 
-        var request = new ExternalProcessRequest
-        {
-            FileName = xtrabackup,
-            Arguments = new[]
-            {
-                "--backup",
-                "--stream=xbstream",
-                "--target-dir=" + tempDir,
-                "--host=" + connection.Host,
-                "--port=" + connection.Port.ToString(),
-                "--user=" + connection.Username,
-            },
-            EnvironmentOverrides = new Dictionary<string, string?>
-            {
-                ["MYSQL_PWD"] = connection.Password,
-            },
-        };
-
         var sw = Stopwatch.StartNew();
 
         ExternalProcessResult result;
         try
         {
+            if (defaultsFile is not null)
+            {
+                await File.WriteAllTextAsync(defaultsFile, BuildMysqlDefaultsFile(connection.Password), ct);
+                if (OperatingSystem.IsLinux())
+                    File.SetUnixFileMode(defaultsFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+
+            var request = new ExternalProcessRequest
+            {
+                FileName = xtrabackup,
+                Arguments = BuildXtraBackupArguments(defaultsFile, tempDir, connection),
+            };
+
             result = await _processRunner.RunAsync(
                 request,
                 handleStdout: async (stdout, innerCt) =>
@@ -208,6 +206,46 @@ WHERE GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''',
         var result = await cmd.ExecuteScalarAsync(ct);
         return result as string ?? string.Empty;
     }
+
+    private static string[] BuildXtraBackupArguments(string? defaultsFile, string tempDir, ConnectionConfig connection)
+    {
+        var args = new List<string>();
+        if (defaultsFile is not null)
+            args.Add("--defaults-extra-file=" + defaultsFile);
+
+        args.AddRange([
+            "--backup",
+            "--stream=xbstream",
+            "--target-dir=" + tempDir,
+            "--host=" + connection.Host,
+            "--port=" + connection.Port.ToString(),
+            "--user=" + connection.Username,
+        ]);
+
+        return args.ToArray();
+    }
+
+    private static string BuildMysqlDefaultsFile(string password)
+    {
+        var value = QuoteMysqlOptionValue(password);
+        return string.Join(Environment.NewLine,
+        [
+            "[client]",
+            "password=" + value,
+            "",
+            "[xtrabackup]",
+            "password=" + value,
+            "",
+        ]);
+    }
+
+    private static string QuoteMysqlOptionValue(string value) =>
+        "\"" + value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal)
+            .Replace("\t", "\\t", StringComparison.Ordinal) + "\"";
 
     private void TryDeleteFile(string path)
     {
