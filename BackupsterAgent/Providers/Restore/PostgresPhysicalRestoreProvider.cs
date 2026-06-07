@@ -92,7 +92,8 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         var (parent, _) = SplitPgDataPathCommon(realPgDataPath);
         EnsureSameFsRenameCommon(parent, realPgDataPath);
 
-        await _clusterLifecycle.DetectAsync(pgDataPath, ct);
+        var clusterControl = await _clusterLifecycle.DetectAsync(pgDataPath, ct);
+        await _clusterLifecycle.ValidateUnmanagedPgCtlUserAsync(clusterControl, pgDataPath, ct);
     }
 
     public async Task ValidateRestoreSourceAsync(ConnectionConfig connection, string restoreFilePath, CancellationToken ct)
@@ -146,6 +147,7 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
                 "Физическое восстановление требует, чтобы агент и PostgreSQL выполнялись на одном хосте.");
 
         var clusterControl = await _clusterLifecycle.DetectAsync(pgDataPath, ct);
+        await _clusterLifecycle.ValidateUnmanagedPgCtlUserAsync(clusterControl, pgDataPath, ct);
 
         var realPgDataPath = ResolvePgDataRealPath(pgDataPath);
         var (parent, leaf) = SplitPgDataPathCommon(realPgDataPath);

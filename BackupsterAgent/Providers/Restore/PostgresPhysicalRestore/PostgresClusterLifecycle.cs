@@ -120,7 +120,7 @@ public sealed class PostgresClusterLifecycle
                 await WaitForPidExitCommonAsync(control.PostmasterPid, TimeSpan.FromSeconds(60), ct);
                 return;
             default:
-                await RunPgCtlAsync(pgCtl, ["stop", "-D", pgDataPath, "-m", "fast", "-w"], ct);
+                await RunPgCtlAsync(pgCtl, pgDataPath, ["stop", "-D", pgDataPath, "-m", "fast", "-w"], ct);
                 return;
         }
     }
@@ -166,6 +166,13 @@ public sealed class PostgresClusterLifecycle
 
         if (!string.Equals(pgDataPath, realPgDataPath, StringComparison.Ordinal))
             await TryStopOrphanedPostmasterAsync(pgCtl, realPgDataPath);
+    }
+
+    internal async Task ValidateUnmanagedPgCtlUserAsync(
+        PostgresClusterControl control, string pgDataPath, CancellationToken ct)
+    {
+        if (control.Kind == PostgresClusterControlKind.Unmanaged)
+            _ = await ResolveLinuxPgCtlUserAsync(pgDataPath, ct);
     }
 
     internal string BuildManualStartInstruction(PostgresClusterControl control, string pgDataPath) =>
@@ -479,9 +486,10 @@ public sealed class PostgresClusterLifecycle
         _logger.LogInformation("Staging PostgreSQL PGDATA mode set to '{Mode}'", mode);
     }
 
-    private async Task RunPgCtlAsync(string pgCtl, string[] args, CancellationToken ct)
+    private async Task RunPgCtlAsync(string pgCtl, string pgDataPath, string[] args, CancellationToken ct)
     {
-        var result = await RunExternalAsync(pgCtl, args, ct, _restoreSettings.SystemctlStopStartTimeoutSeconds);
+        var runUser = await ResolveLinuxPgCtlUserAsync(pgDataPath, ct);
+        var result = await RunPgCtlProcessAsync(pgCtl, args, runUser, ct, _restoreSettings.SystemctlStopStartTimeoutSeconds);
         if (result.ExitCode != 0)
         {
             var detail = string.IsNullOrWhiteSpace(result.Stderr) ? result.Stdout.Trim() : result.Stderr.Trim();
@@ -496,9 +504,14 @@ public sealed class PostgresClusterLifecycle
     private async Task StartWithPgCtlAsync(string pgCtl, string pgDataPath, string startLog, CancellationToken ct)
     {
         var timeoutSeconds = Math.Max(_restoreSettings.PgCtlStartTimeoutSeconds, 1);
-        var result = await RunExternalAsync(
+        var runUser = await ResolveLinuxPgCtlUserAsync(pgDataPath, ct);
+        if (runUser is not null)
+            await PreparePgCtlStartLogAsync(startLog, runUser, ct);
+
+        var result = await RunPgCtlProcessAsync(
             pgCtl,
             ["start", "-D", pgDataPath, "-l", startLog, "-w", "-t", timeoutSeconds.ToString()],
+            runUser,
             ct,
             timeoutSeconds);
 
@@ -516,7 +529,7 @@ public sealed class PostgresClusterLifecycle
         try
         {
             using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            await RunPgCtlAsync(pgCtl, ["stop", "-D", pgDataPath, "-m", "immediate", "-w", "-t", "60"], stopCts.Token);
+            await RunPgCtlAsync(pgCtl, pgDataPath, ["stop", "-D", pgDataPath, "-m", "immediate", "-w", "-t", "60"], stopCts.Token);
             _logger.LogInformation("Orphaned postmaster at '{PgDataPath}' stopped", pgDataPath);
         }
         catch (Exception ex)
@@ -525,6 +538,60 @@ public sealed class PostgresClusterLifecycle
                 "Failed to stop orphaned postmaster at '{PgDataPath}' — rollback may fail if postmaster is still holding files",
                 pgDataPath);
         }
+    }
+
+    private async Task<ExternalProcessResult> RunPgCtlProcessAsync(
+        string pgCtl, string[] args, string? runUser, CancellationToken ct, int timeoutSeconds)
+    {
+        if (runUser is null)
+            return await RunExternalAsync(pgCtl, args, ct, timeoutSeconds);
+
+        return await RunExternalAsync("runuser", ["-u", runUser, "--", pgCtl, ..args], ct, timeoutSeconds);
+    }
+
+    private async Task<string?> ResolveLinuxPgCtlUserAsync(string pgDataPath, CancellationToken ct)
+    {
+        if (!IsLinuxRootProcess())
+            return null;
+
+        var owner = await GetLinuxOwnerUserAsync(pgDataPath, ct);
+        if (string.IsNullOrWhiteSpace(owner) ||
+            string.Equals(owner, "UNKNOWN", StringComparison.OrdinalIgnoreCase))
+            throw new RestorePermissionException(
+                $"Не удалось определить владельца PGDATA '{pgDataPath}'. " +
+                "PostgreSQL запрещает запуск pg_ctl от root, поэтому для unmanaged-кластера нужно определить пользователя-владельца каталога данных.");
+
+        if (string.Equals(owner, "root", StringComparison.Ordinal))
+            throw new RestorePermissionException(
+                $"PGDATA '{pgDataPath}' принадлежит root. PostgreSQL запрещает запуск pg_ctl от root; назначьте каталог данных пользователю PostgreSQL.");
+
+        return owner;
+    }
+
+    private async Task<string?> GetLinuxOwnerUserAsync(string path, CancellationToken ct)
+    {
+        var result = await RunExternalAsync("stat", ["-Lc", "%U", path], ct, _restoreSettings.SystemctlTimeoutSeconds);
+        if (result.ExitCode != 0)
+            throw new RestorePermissionException(
+                $"Не удалось прочитать владельца PGDATA '{path}' (код {result.ExitCode})." +
+                FormatOutput(result));
+
+        var owner = result.Stdout.Trim();
+        return string.IsNullOrWhiteSpace(owner) ? null : owner;
+    }
+
+    private async Task PreparePgCtlStartLogAsync(string startLog, string runUser, CancellationToken ct)
+    {
+        var parent = Path.GetDirectoryName(startLog);
+        if (!string.IsNullOrWhiteSpace(parent))
+            Directory.CreateDirectory(parent);
+
+        File.WriteAllText(startLog, string.Empty);
+        var result = await RunExternalAsync("chown", [runUser, startLog], ct, _restoreSettings.SystemctlTimeoutSeconds);
+        if (result.ExitCode != 0)
+            throw new RestorePermissionException(
+                $"Не удалось назначить владельца '{runUser}' для log-файла PostgreSQL '{startLog}' (код {result.ExitCode})." +
+                FormatOutput(result));
     }
 
     private async Task WaitForPidExitCommonAsync(int? pid, TimeSpan timeout, CancellationToken ct)
@@ -711,6 +778,9 @@ public sealed class PostgresClusterLifecycle
 
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..maxLength] + "...";
+
+    private static bool IsLinuxRootProcess() =>
+        OperatingSystem.IsLinux() && string.Equals(Environment.UserName, "root", StringComparison.Ordinal);
 
     private sealed record WindowsServiceInfo(string Name, string StartName);
 }

@@ -42,6 +42,10 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
             IntegrationConfig.TryGetPostgresConnection(out var connection),
             Is.True,
             "Postgres:* not configured; set via dotnet user-secrets or BACKUPSTER_INTEGRATION_POSTGRES__* env vars.");
+        Assume.That(
+            PostgresIntegrationProcessRunner.CanUsePostgresUser(),
+            Is.True,
+            "Running PostgreSQL physical integration tests as root requires OS user 'postgres' and runuser.");
 
         _connection = connection;
         _runner = new ExternalProcessRunner(NullLogger<ExternalProcessRunner>.Instance);
@@ -276,22 +280,9 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
 
     private async Task RunInitDbAsync(string initdbBinary, string pgDataPath, CancellationToken ct)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = initdbBinary,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add("-D");
-        psi.ArgumentList.Add(pgDataPath);
-        psi.ArgumentList.Add("-A");
-        psi.ArgumentList.Add("trust");
-        psi.ArgumentList.Add("-U");
-        psi.ArgumentList.Add("postgres");
-        psi.ArgumentList.Add("--encoding=UTF8");
-        psi.ArgumentList.Add("--no-locale");
-        psi.Environment["LC_MESSAGES"] = "C";
-        psi.Environment["LANG"] = "C";
+        var psi = PostgresIntegrationProcessRunner.CreatePostgresProcessStartInfo(
+            initdbBinary,
+            ["-D", pgDataPath, "-A", "trust", "-U", "postgres", "--encoding=UTF8", "--no-locale"]);
 
         using var process = new System.Diagnostics.Process { StartInfo = psi };
         process.Start();
@@ -361,6 +352,7 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
             _restorePort = FindFreeLoopbackPort();
             AppendPostgresConfOverrides(_restoreDir, _restorePort);
             EnsureLocalTrustHbaFile(_restoreDir);
+            await PostgresIntegrationProcessRunner.ChownPathToPostgresAsync(_restoreDir, recursive: true, _cts.Token);
 
             var exitCode = await RunPgCtlDirectAsync(
                 new[]
@@ -439,18 +431,8 @@ public sealed class PostgresPhysicalBackupProviderIntegrationTests
 
     private async Task<int> RunPgCtlDirectAsync(string[] args, TimeSpan timeout, CancellationToken ct)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = _pgCtlBinary,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = false,
-            RedirectStandardError = false,
-            RedirectStandardInput = false,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        psi.Environment["LC_MESSAGES"] = "C";
-        psi.Environment["LANG"] = "C";
+        await PostgresIntegrationProcessRunner.PreparePgCtlLogAsync(args, ct);
+        var psi = PostgresIntegrationProcessRunner.CreatePostgresProcessStartInfo(_pgCtlBinary, args);
 
         using var process = new System.Diagnostics.Process { StartInfo = psi };
         process.Start();
