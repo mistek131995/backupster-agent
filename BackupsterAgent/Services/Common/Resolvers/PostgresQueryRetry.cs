@@ -44,10 +44,6 @@ public static class PostgresQueryRetry
             {
                 throw;
             }
-            catch (PostgresException)
-            {
-                throw;
-            }
             catch (Exception ex) when (IsTransient(ex))
             {
                 if (attempt >= maxAttempts)
@@ -69,6 +65,10 @@ public static class PostgresQueryRetry
 
                 await Task.Delay(delay, ct);
             }
+            catch (PostgresException)
+            {
+                throw;
+            }
         }
     }
 
@@ -76,6 +76,7 @@ public static class PostgresQueryRetry
     {
         for (var current = ex; current is not null; current = current.InnerException)
         {
+            if (current is PostgresException pg && pg.SqlState is "57P01" or "57P02" or "57P03") return true;
             if (current is NpgsqlException && current is not PostgresException) return true;
             if (current is IOException) return true;
             if (current is SocketException) return true;

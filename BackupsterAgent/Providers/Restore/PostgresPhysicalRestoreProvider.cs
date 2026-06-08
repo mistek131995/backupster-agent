@@ -199,6 +199,8 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
             {
                 await _clusterLifecycle.StopAsync(clusterControl, pgCtl, pgDataPath, ct);
                 _logger.LogInformation("PostgreSQL cluster stopped");
+                NpgsqlConnection.ClearAllPools();
+                _logger.LogDebug("Cleared Npgsql connection pools after PostgreSQL cluster stop");
             }
             catch
             {

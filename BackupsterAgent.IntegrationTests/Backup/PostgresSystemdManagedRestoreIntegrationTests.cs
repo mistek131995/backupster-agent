@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
@@ -489,9 +490,11 @@ public sealed class PostgresSystemdManagedRestoreIntegrationTests
             {
                 await using var conn = new NpgsqlConnection(PostgresConnectionFactory.BuildAdminConnectionString(connection));
                 await conn.OpenAsync(ct);
+                await using var cmd = new NpgsqlCommand("SELECT 1;", conn);
+                await cmd.ExecuteScalarAsync(ct);
                 return;
             }
-            catch (Exception ex) when (ex is NpgsqlException or TimeoutException)
+            catch (Exception ex) when (IsTransientStartupError(ex))
             {
                 last = ex;
                 await Task.Delay(500, ct);
@@ -499,6 +502,24 @@ public sealed class PostgresSystemdManagedRestoreIntegrationTests
         }
 
         throw new TimeoutException($"PostgreSQL on port {connection.Port} did not become ready.", last);
+    }
+
+    private static bool IsTransientStartupError(Exception ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            switch (current)
+            {
+                case PostgresException pg when pg.SqlState is "57P01" or "57P02" or "57P03":
+                case NpgsqlException npg when npg is not PostgresException:
+                case TimeoutException:
+                case IOException:
+                case SocketException:
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task<bool> IsUnitActiveAsync(string unitName, CancellationToken ct)
