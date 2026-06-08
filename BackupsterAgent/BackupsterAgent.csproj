@@ -7,18 +7,18 @@
     <RootNamespace>BackupsterAgent</RootNamespace>
     <AssemblyName>BackupsterAgent</AssemblyName>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
-    <Version>1.4.2</Version>
-    <InformationalVersion>1.4.2</InformationalVersion>
+    <Version>1.5.0</Version>
+    <InformationalVersion>1.5.0</InformationalVersion>
     <UserSecretsId>682cede7-c276-4c32-a9ba-2eb01fa9759a</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="AWSSDK.S3" Version="4.0.23.6" />
-    <PackageReference Include="Azure.Storage.Blobs" Version="12.28.0" />
+    <PackageReference Include="AWSSDK.S3" Version="4.0.24.1" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.29.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.5" />
     <PackageReference Include="Microsoft.SqlServer.DacFx" Version="170.*" />
     <PackageReference Include="MongoDB.Driver" Version="3.*" />
-    <PackageReference Include="MySqlConnector" Version="2.5.0" />
+    <PackageReference Include="MySqlConnector" Version="2.6.0" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.8" />
