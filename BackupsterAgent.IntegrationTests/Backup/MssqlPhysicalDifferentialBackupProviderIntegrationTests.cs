@@ -221,6 +221,7 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
             {
                 await InsertRowsAsync(_connection, _srcDb, PostDiffRows, _cts.Token);
 
+                await WaitForNextBackupFileTimestampAsync(_cts.Token);
                 var full2Result = await fullProvider.BackupAsync(config, _connection, _cts.Token);
                 try
                 {
@@ -464,6 +465,17 @@ END";
 
     private static string BuildDumpObjectKey(string bakPath) =>
         $"integration/{Path.GetFileName(bakPath)}.enc";
+
+    private static async Task WaitForNextBackupFileTimestampAsync(CancellationToken ct)
+    {
+        var currentTimestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+
+        do
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(25), ct);
+        }
+        while (DateTime.UtcNow.ToString("yyyyMMdd_HHmmss") == currentTimestamp);
+    }
 
     private static string BuildMasterConnectionString(ConnectionConfig connection) =>
         BuildConnectionString(connection, "master");
