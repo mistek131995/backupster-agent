@@ -1,6 +1,12 @@
 # Build output
 bin/
 obj/
+publish/
+artifacts/
+.tools/
+*.deb
+*.rpm
+BackupsterAgent-*.zip
 
 # IDE
 .idea/
