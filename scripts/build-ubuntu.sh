@@ -55,7 +55,6 @@ ensure_nfpm() {
 }
 
 require_command dotnet
-require_command zip
 
 VERSION="$(msbuild_property Version)"
 if [ -z "${VERSION}" ]; then
@@ -77,19 +76,9 @@ dotnet publish "${PROJECT_PATH}" \
   -p:InformationalVersion="${VERSION}" \
   -o "${PUBLISH_DIR}"
 
-ZIP_PATH="${ARTIFACTS_DIR}/BackupsterAgent-v${VERSION}-${RUNTIME}.zip"
-rm -f "${ZIP_PATH}"
+ensure_nfpm
 (
-  cd "${PUBLISH_DIR}"
-  zip -qr "${ZIP_PATH}" .
+  cd "${ROOT_DIR}"
+  VERSION="${VERSION}" "${NFPM_BIN}" pkg --packager deb --config packaging/nfpm.yaml --target "${ARTIFACTS_DIR}/"
 )
-echo "Created ${ZIP_PATH}"
-
-if [ "${SKIP_DEB:-0}" != "1" ]; then
-  ensure_nfpm
-  (
-    cd "${ROOT_DIR}"
-    VERSION="${VERSION}" "${NFPM_BIN}" pkg --packager deb --config packaging/nfpm.yaml --target "${ARTIFACTS_DIR}/"
-  )
-  echo "Created ${ARTIFACTS_DIR}/backupster-agent_${VERSION}_amd64.deb"
-fi
+echo "Created ${ARTIFACTS_DIR}/backupster-agent_${VERSION}_amd64.deb"
