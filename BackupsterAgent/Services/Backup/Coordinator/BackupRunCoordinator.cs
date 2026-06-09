@@ -101,7 +101,7 @@ public sealed class BackupRunCoordinator
         catch (Exception ex)
         {
             _logger.LogError(ex, "{Name} failed", descriptor.DisplayName);
-            outcome = PipelineOutcome.Failed(ex.Message);
+            outcome = PipelineOutcome.Failed(BuildUserErrorMessage(ex));
         }
 
         var finalizeDto = BuildFinalizeDto(outcome);
@@ -208,5 +208,45 @@ public sealed class BackupRunCoordinator
                 "{Name}: failed to save outbox entry. Backup completed but won't be replayed.",
                 descriptor.DisplayName);
         }
+    }
+
+    private static string BuildUserErrorMessage(Exception ex)
+    {
+        if (ex is UnauthorizedAccessException)
+            return BuildAccessDeniedMessage(ex.Message);
+
+        if (ex is DirectoryNotFoundException)
+            return BuildPathUnavailableMessage(ex.Message);
+
+        return ex.Message;
+    }
+
+    private static string BuildAccessDeniedMessage(string message)
+    {
+        var path = TryExtractQuotedPath(message);
+        if (path is null)
+            return "Нет доступа к рабочему каталогу бэкапа. Проверьте права пользователя, от имени которого запущен агент.";
+
+        return $"Нет доступа к пути '{path}'. Проверьте права пользователя, от имени которого запущен агент, и доступность этого пути.";
+    }
+
+    private static string BuildPathUnavailableMessage(string message)
+    {
+        var path = TryExtractQuotedPath(message);
+        if (path is null)
+            return "Рабочий каталог бэкапа недоступен на хосте агента. Проверьте, что каталог существует и доступен пользователю агента.";
+
+        return $"Путь '{path}' недоступен на хосте агента. Проверьте, что каталог существует и доступен пользователю агента.";
+    }
+
+    private static string? TryExtractQuotedPath(string message)
+    {
+        var start = message.IndexOf('\'');
+        if (start < 0) return null;
+
+        var end = message.IndexOf('\'', start + 1);
+        if (end <= start + 1) return null;
+
+        return message[(start + 1)..end];
     }
 }

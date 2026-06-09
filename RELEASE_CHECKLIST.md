@@ -13,35 +13,35 @@
 
 ## Прогоны
 
-| Тест-кейс | 1.4.0 | 1.4.1 | 1.4.2 |
-|---|--|--|-|
-| **Бэкап** |  |  | |
-| Postgres — logical | ✓ | ✓ | |
-| Postgres — physical | ✓ | ✓ | |
-| Postgres — physical differential | ✓ | ✓ | |
-| MySQL — logical | ✓ |  | |
-| MSSQL — logical | ✓ | ✓ | ✓ |
-| MSSQL — physical | ✓ | ✓ | ✓ |
-| MSSQL — physical differential | ✓ | ✓ | ✓ |
-| File-set | ✓ |  | |
-| **Восстановление** | |  | |
-| Postgres — logical | ✓ | ✓ | |
-| Postgres — physical | ✓ | ✓ | |
-| Postgres — physical differential | ✓ | ✓ | |
-| MySQL — logical | ✓ |  | |
-| MSSQL — logical | ✓ | ✓ | ✓ |
-| MSSQL — physical | ✓ | ✓ | ✓ |
-| MSSQL — physical differential | ✓ | ✓ | ✓ |
-| БД + файлы вместе | ✓ |  | |
-| File-set only | ✓ |  | |
-| **Хранилища** | |  | |
-| S3 — upload | ✓ |  | |
-| S3 — download | ✓ |  | |
-| SFTP — upload | ✓ |  | |
-| SFTP — download | ✓ |  | |
-| Azure Blob — upload | |  | |
-| Azure Blob — download | |  | |
-| WebDAV — upload | ✓ |  | |
-| WebDAV — download | ✓ |  | |
-| LocalFs — upload | ✓ |  | |
-| LocalFs — download | ✓ |  | |
+| Тест-кейс | 1.4.0 | 1.4.1 | 1.4.2 | 1.5.0 |
+|---|---|---|---|---|
+| **Бэкап** |  |  |  |  |
+| Postgres — logical | ✓ | ✓ |  | ✓ |
+| Postgres — physical | ✓ | ✓ |  | ✓ |
+| Postgres — physical differential | ✓ | ✓ |  | ✓ |
+| MySQL — logical | ✓ |  |  |  |
+| MSSQL — logical | ✓ | ✓ | ✓ |  |
+| MSSQL — physical | ✓ | ✓ | ✓ |  |
+| MSSQL — physical differential | ✓ | ✓ | ✓ |  |
+| File-set | ✓ |  |  |  |
+| **Восстановление** |  |  |  |  |
+| Postgres — logical | ✓ | ✓ |  | ✓ |
+| Postgres — physical | ✓ | ✓ |  | ✓ |
+| Postgres — physical differential | ✓ | ✓ |  | ✓ |
+| MySQL — logical | ✓ |  |  |  |
+| MSSQL — logical | ✓ | ✓ | ✓ |  |
+| MSSQL — physical | ✓ | ✓ | ✓ |  |
+| MSSQL — physical differential | ✓ | ✓ | ✓ |  |
+| БД + файлы вместе | ✓ |  |  |  |
+| File-set only | ✓ |  |  |  |
+| **Хранилища** |  |  |  |  |
+| S3 — upload | ✓ |  |  |  |
+| S3 — download | ✓ |  |  |  |
+| SFTP — upload | ✓ |  |  |  |
+| SFTP — download | ✓ |  |  |  |
+| Azure Blob — upload |  |  |  |  |
+| Azure Blob — download |  |  |  |  |
+| WebDAV — upload | ✓ |  |  |  |
+| WebDAV — download | ✓ |  |  |  |
+| LocalFs — upload | ✓ |  |  |  |
+| LocalFs — download | ✓ |  |  |  |

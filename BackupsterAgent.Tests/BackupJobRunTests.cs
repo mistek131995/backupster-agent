@@ -236,15 +236,21 @@ public sealed class BackupJobRunTests
         var serverId = Guid.NewGuid();
         _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.Ok, serverId);
         _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
-        _provider.ThrowOnValidate = new UnauthorizedAccessException("pg_dump: permission denied");
+        _provider.ThrowOnValidate = new UnauthorizedAccessException("Access to the path '/backups/db1.sql.gz' is denied.");
 
         var result = await BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
             Assert.That(result.Success, Is.False);
+            Assert.That(result.ErrorMessage, Does.Contain("Нет доступа"));
+            Assert.That(result.ErrorMessage, Does.Contain("/backups/db1.sql.gz"));
+            Assert.That(result.ErrorMessage, Does.Not.Contain("Access to the path"));
             Assert.That(_recordClient.FinalizeCalls, Is.EqualTo(1));
             Assert.That(_recordClient.LastFinalize!.Status, Is.EqualTo(BackupStatus.Failed));
+            Assert.That(_recordClient.LastFinalize!.ErrorMessage, Does.Contain("Нет доступа"));
+            Assert.That(_recordClient.LastFinalize!.ErrorMessage, Does.Contain("/backups/db1.sql.gz"));
+            Assert.That(_recordClient.LastFinalize!.ErrorMessage, Does.Not.Contain("Access to the path"));
             Assert.That(_provider.BackupCalls, Is.Zero, "backup must not run if validation fails");
         });
     }

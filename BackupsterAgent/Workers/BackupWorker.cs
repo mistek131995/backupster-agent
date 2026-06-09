@@ -1,5 +1,4 @@
 using BackupsterAgent.Configuration;
-using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Backup;
