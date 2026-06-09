@@ -2,6 +2,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
@@ -361,6 +362,101 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
     }
 
     [Test]
+    public async Task DiffAfterRestoreToOlderChain_WithNewerFullManifest_FailsFast()
+    {
+        var (fullProvider, diffProvider) = BuildProviders();
+
+        var full1Result = await fullProvider.BackupAsync(MakeConfig(_fullOutputDir), _connection, _cts.Token);
+        Assert.That(full1Result.PgBaseManifestPath, Is.Not.Null);
+
+        await InsertRowsAsync(_connection, _srcDb, PostFullRows, _cts.Token);
+        await ExecuteOnDatabaseAsync(_connection, _srcDb, "CHECKPOINT;", _cts.Token);
+        await WaitForWalSummarizerAsync(_connection, _cts.Token);
+
+        var diff1Result = await diffProvider.BackupAsync(
+            MakeConfig(_diffOutputDir),
+            _connection,
+            new DifferentialBackupContext
+            {
+                BaseBackupRecordId = Guid.NewGuid(),
+                BasePgBaseManifestPath = full1Result.PgBaseManifestPath,
+            },
+            _cts.Token);
+        Assert.That(diff1Result.PgBaseManifestPath, Is.Not.Null);
+
+        await InsertRowsAsync(_connection, _srcDb, PostDiffRows, _cts.Token);
+        await ExecuteOnDatabaseAsync(_connection, _srcDb, "CHECKPOINT;", _cts.Token);
+        await WaitForWalSummarizerAsync(_connection, _cts.Token);
+
+        var full2Result = await fullProvider.BackupAsync(
+            MakeConfig(Path.Combine(_fullOutputDir, "full2")), _connection, _cts.Token);
+        Assert.That(full2Result.PgBaseManifestPath, Is.Not.Null);
+
+        var full1Staging = Path.Combine(_fullOutputDir, "staging-full1-for-diverged-base");
+        var diff1Staging = Path.Combine(_diffOutputDir, "staging-diff1-for-diverged-base");
+        Directory.CreateDirectory(full1Staging);
+        Directory.CreateDirectory(diff1Staging);
+
+        await ExtractPgBaseContainerAsync(full1Result.FilePath, full1Staging, _cts.Token);
+        await ExtractPgBaseContainerAsync(diff1Result.FilePath, diff1Staging, _cts.Token);
+
+        File.Copy(full1Result.PgBaseManifestPath!, Path.Combine(full1Staging, "backup_manifest"), overwrite: true);
+        File.Copy(diff1Result.PgBaseManifestPath!, Path.Combine(diff1Staging, "backup_manifest"), overwrite: true);
+
+        var combineExit = await RunPgCombineBackupAsync(full1Staging, diff1Staging, _restoreDir, _cts.Token);
+        Assert.That(combineExit, Is.EqualTo(0), "pg_combinebackup must materialize the old full1+diff1 branch");
+        Assert.That(File.Exists(Path.Combine(_restoreDir, "PG_VERSION")), Is.True);
+
+        await StartRestoreServerWithPortRetryAsync(maxAttempts: 3);
+        await WaitForServerReadyAsync(_restorePort, _connection, _cts.Token);
+
+        var restoredRows = await ReadItemsAsync(_connection, _restorePort, _srcDb, _cts.Token);
+        Assert.That(restoredRows, Is.EquivalentTo(InitialRows.Concat(PostFullRows)));
+
+        var restoredConnection = new ConnectionConfig
+        {
+            Name = "pg-restored-itest",
+            DatabaseType = _connection.DatabaseType,
+            Host = "localhost",
+            Port = _restorePort,
+            Username = _connection.Username,
+            Password = _connection.Password,
+            BinPath = _connection.BinPath,
+        };
+
+        await ExecuteOnDatabaseAsync(restoredConnection, _srcDb, "CHECKPOINT;", _cts.Token);
+        await WaitForWalSummarizerAsync(restoredConnection, _cts.Token);
+
+        var restoredLsn = await GetCurrentWalLsnAsync(restoredConnection, _cts.Token);
+        var full2StartLsn = ReadFirstWalRangeStartLsn(full2Result.PgBaseManifestPath!);
+        Assert.That(
+            ComparePgLsn(restoredLsn, full2StartLsn),
+            Is.LessThan(0),
+            $"Test precondition failed: restored old branch LSN {restoredLsn} must be before newer full manifest Start-LSN {full2StartLsn}.");
+
+        var invalidBaseContext = new DifferentialBackupContext
+        {
+            BaseBackupRecordId = Guid.NewGuid(),
+            BasePgBaseManifestPath = full2Result.PgBaseManifestPath,
+        };
+
+        using var invalidDiffCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        invalidDiffCts.CancelAfter(TimeSpan.FromSeconds(90));
+
+        var ex = Assert.CatchAsync<Exception>(
+            () => diffProvider.BackupAsync(
+                MakeConfig(Path.Combine(_diffOutputDir, "after-restore")),
+                restoredConnection,
+                invalidBaseContext,
+                invalidDiffCts.Token));
+
+        if (ex is OperationCanceledException)
+            Assert.Fail("pg_basebackup --incremental did not reject the newer full manifest within 90 seconds.");
+
+        Assert.That(ex, Is.TypeOf<InvalidOperationException>());
+    }
+
+    [Test]
     public void DiffWithoutBaseManifest_Throws()
     {
         var (_, diffProvider) = BuildProviders();
@@ -555,6 +651,40 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
         (5, "epsilon"),
         (6, "zeta"),
     ];
+
+    private static readonly (int Id, string Name)[] PostDiffRows =
+    [
+        (7, "eta"),
+        (8, "theta"),
+    ];
+
+    private static string ReadFirstWalRangeStartLsn(string manifestPath)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllBytes(manifestPath));
+        if (!document.RootElement.TryGetProperty("WAL-Ranges", out var ranges))
+            throw new InvalidOperationException($"backup_manifest '{manifestPath}' has no WAL-Ranges section.");
+
+        foreach (var range in ranges.EnumerateArray())
+        {
+            if (range.TryGetProperty("Start-LSN", out var startLsn))
+                return startLsn.GetString()
+                       ?? throw new InvalidOperationException($"backup_manifest '{manifestPath}' has empty Start-LSN.");
+        }
+
+        throw new InvalidOperationException($"backup_manifest '{manifestPath}' has empty WAL-Ranges section.");
+    }
+
+    private static int ComparePgLsn(string left, string right) =>
+        ParsePgLsn(left).CompareTo(ParsePgLsn(right));
+
+    private static ulong ParsePgLsn(string value)
+    {
+        var parts = value.Split('/');
+        if (parts.Length != 2)
+            throw new FormatException($"Invalid PostgreSQL LSN '{value}'.");
+
+        return (Convert.ToUInt64(parts[0], 16) << 32) + Convert.ToUInt64(parts[1], 16);
+    }
 
     private async Task<int> RunPgCombineBackupAsync(
         string fullStaging, string diffStaging, string outputDir, CancellationToken ct)
@@ -754,6 +884,8 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             "local   all   all                  trust",
             "host    all   all   127.0.0.1/32   trust",
             "host    all   all   ::1/128        trust",
+            "host    replication   all   127.0.0.1/32   trust",
+            "host    replication   all   ::1/128        trust",
             string.Empty,
         ]);
         File.WriteAllText(Path.Combine(pgData, "pg_hba.conf"), hba);
@@ -867,6 +999,14 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
 
         TestContext.Progress.WriteLine(
             $"WAL summarizer did not reach LSN {targetLsn} within 30s; incremental may fail.");
+    }
+
+    private static async Task<string> GetCurrentWalLsnAsync(ConnectionConfig connection, CancellationToken ct)
+    {
+        await using var conn = new NpgsqlConnection(BuildConnectionString(connection, "postgres"));
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand("SELECT pg_current_wal_lsn()::text;", conn);
+        return (string)(await cmd.ExecuteScalarAsync(ct))!;
     }
 
     private static async Task CreateSourceDatabaseAsync(ConnectionConfig connection, string dbName, CancellationToken ct)

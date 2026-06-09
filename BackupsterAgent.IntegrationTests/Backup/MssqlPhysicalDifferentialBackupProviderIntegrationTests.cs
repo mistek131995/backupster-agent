@@ -1,6 +1,7 @@
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
 using Microsoft.Data.SqlClient;
@@ -187,6 +188,89 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
     }
 
     [Test]
+    public async Task DiffAfterRestoreToOlderDiff_WithNewerFullAsBase_ThrowsChainBroken()
+    {
+        var fullProvider = new MssqlPhysicalBackupProvider(NullLogger<MssqlPhysicalBackupProvider>.Instance);
+        var diffProvider = new MssqlPhysicalDifferentialBackupProvider(
+            NullLogger<MssqlPhysicalDifferentialBackupProvider>.Instance,
+            fullProvider,
+            new MssqlDifferentialChainGuard());
+        var fullRestoreProvider = new MssqlPhysicalRestoreProvider(
+            NullLogger<MssqlPhysicalRestoreProvider>.Instance);
+        var diffRestoreProvider = new MssqlPhysicalDifferentialRestoreProvider(
+            NullLogger<MssqlPhysicalDifferentialRestoreProvider>.Instance,
+            fullRestoreProvider);
+
+        var config = MakeConfig();
+
+        var full1Result = await fullProvider.BackupAsync(config, _connection, _cts.Token);
+        try
+        {
+            await InsertRowsAsync(_connection, _srcDb, PostFullRows, _cts.Token);
+
+            var diff1Result = await diffProvider.BackupAsync(
+                config,
+                _connection,
+                new DifferentialBackupContext
+                {
+                    BaseBackupRecordId = Guid.NewGuid(),
+                    BaseDumpObjectKey = BuildDumpObjectKey(full1Result.FilePath),
+                },
+                _cts.Token);
+            try
+            {
+                await InsertRowsAsync(_connection, _srcDb, PostDiffRows, _cts.Token);
+
+                var full2Result = await fullProvider.BackupAsync(config, _connection, _cts.Token);
+                try
+                {
+                    var oldChain = new[]
+                    {
+                        new DifferentialRestoreChainItem
+                        {
+                            BackupRecordId = Guid.NewGuid(),
+                            DumpFilePath = full1Result.FilePath,
+                            BackupMode = BackupMode.Physical,
+                        },
+                        new DifferentialRestoreChainItem
+                        {
+                            BackupRecordId = Guid.NewGuid(),
+                            DumpFilePath = diff1Result.FilePath,
+                            BackupMode = BackupMode.PhysicalDifferential,
+                        },
+                    };
+
+                    await diffRestoreProvider.ValidatePermissionsAsync(_connection, _srcDb, _cts.Token);
+                    await diffRestoreProvider.ValidateRestoreSourceAsync(_connection, oldChain, _cts.Token);
+                    await diffRestoreProvider.PrepareTargetDatabaseAsync(_connection, _srcDb, _cts.Token);
+                    await diffRestoreProvider.RestoreAsync(_connection, _srcDb, oldChain, _cts.Token);
+
+                    var ex = await TryRunDivergedDiffAsync(
+                        diffProvider,
+                        config,
+                        full2Result.FilePath,
+                        _cts.Token);
+
+                    Assert.That(ex, Is.Not.Null);
+                    Assert.That(ex, Is.TypeOf<DifferentialChainBrokenException>());
+                }
+                finally
+                {
+                    await TryDeleteBakFileAsync(_connection, full2Result.FilePath);
+                }
+            }
+            finally
+            {
+                await TryDeleteBakFileAsync(_connection, diff1Result.FilePath);
+            }
+        }
+        finally
+        {
+            await TryDeleteBakFileAsync(_connection, full1Result.FilePath);
+        }
+    }
+
+    [Test]
     public void DiffWithoutPriorFull_Throws()
     {
         var fullProvider = new MssqlPhysicalBackupProvider(NullLogger<MssqlPhysicalBackupProvider>.Instance);
@@ -230,6 +314,39 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
         (4, "delta"),
         (5, "epsilon"),
     ];
+
+    private static readonly (int Id, string Name)[] PostDiffRows =
+    [
+        (6, "zeta"),
+        (7, "eta"),
+    ];
+
+    private async Task<Exception?> TryRunDivergedDiffAsync(
+        MssqlPhysicalDifferentialBackupProvider diffProvider,
+        DatabaseConfig config,
+        string full2Path,
+        CancellationToken ct)
+    {
+        try
+        {
+            var unexpectedResult = await diffProvider.BackupAsync(
+                config,
+                _connection,
+                new DifferentialBackupContext
+                {
+                    BaseBackupRecordId = Guid.NewGuid(),
+                    BaseDumpObjectKey = BuildDumpObjectKey(full2Path),
+                },
+                ct);
+
+            await TryDeleteBakFileAsync(_connection, unexpectedResult.FilePath);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex;
+        }
+    }
 
     private static async Task CreateSourceDatabaseAsync(ConnectionConfig connection, string dbName, CancellationToken ct)
     {

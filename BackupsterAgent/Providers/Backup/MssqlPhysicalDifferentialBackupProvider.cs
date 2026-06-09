@@ -162,6 +162,26 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
                     "Скорее всего, историю бэкапов на сервере очистил maintenance plan или DBA — теперь нельзя проверить, что цепочка не сломалась. " +
                     "Запускаем новый полный бэкап автоматически, чтобы восстановить цепочку.");
 
+            case MssqlDifferentialChainCheck.BaseUnknownOrAmbiguous:
+                _logger.LogWarning(
+                    "MSSQL differential chain check refused for '{Database}': current database differential base is unknown or ambiguous.",
+                    database);
+
+                throw new DifferentialChainBrokenException(
+                    $"Дифференциальный бэкап БД '{database}' отменён: SQL Server не смог однозначно определить текущую базу для дифференциального бэкапа. " +
+                    "Такое возможно, если полный бэкап для этой БД ещё не снимался, база была восстановлена частично или файлы данных опираются на разные базовые бэкапы. " +
+                    "Запускаем новый полный бэкап автоматически, чтобы восстановить цепочку.");
+
+            case MssqlDifferentialChainCheck.BaseDiverged:
+                _logger.LogWarning(
+                    "MSSQL differential chain check refused for '{Database}': current database differential base does not match parent FULL file '{ParentFile}'.",
+                    database, parentBackupFileName);
+
+                throw new DifferentialChainBrokenException(
+                    $"Дифференциальный бэкап БД '{database}' отменён: текущая база SQL Server для дифференциального бэкапа не совпадает с полным бэкапом Backupster, который выбрал дашборд. " +
+                    "Скорее всего, БД была восстановлена в более старую точку или цепочка была изменена вне Backupster. " +
+                    "Запускаем новый полный бэкап автоматически, чтобы восстановить цепочку.");
+
             case MssqlDifferentialChainCheck.ForeignFullDetected:
                 _logger.LogError(
                     "MSSQL differential chain check failed for '{Database}': foreign full-like backup(s) detected in msdb after parent file '{ParentFile}'.",
