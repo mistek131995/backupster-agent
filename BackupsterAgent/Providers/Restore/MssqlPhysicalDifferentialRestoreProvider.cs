@@ -1,6 +1,7 @@
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 
@@ -78,11 +79,19 @@ public sealed class MssqlPhysicalDifferentialRestoreProvider : IDifferentialRest
         _logger.LogInformation(
             "Step 2/2: RESTORE DIFFERENTIAL '{Path}' WITH RECOVERY", lastDiffItem.DumpFilePath);
 
-        await using (var conn = new SqlConnection(MssqlConnectionFactory.BuildMasterConnectionString(connection)))
+        try
         {
+            await using var conn = new SqlConnection(MssqlConnectionFactory.BuildMasterConnectionString(connection));
             await conn.OpenAsync(ct);
             await using var cmd = new SqlCommand(diffSql, conn) { CommandTimeout = 0 };
             await cmd.ExecuteNonQueryAsync(ct);
+        }
+        catch (SqlException ex) when (ex.Number == 3136)
+        {
+            throw new DifferentialChainBrokenException(
+                $"Цепочка восстановления MSSQL для БД '{targetDatabase}' сломана: дифференциальный бэкап '{lastDiffItem.DumpFilePath}' не соответствует восстановленному полному бэкапу '{fullItem.DumpFilePath}'. " +
+                "Скорее всего, выбранная цепочка опирается на другой full backup или база была восстановлена в более старое состояние. Запустите новый полный бэкап.",
+                ex);
         }
 
         _logger.LogInformation("MSSQL differential restore completed for database '{Database}'", targetDatabase);
