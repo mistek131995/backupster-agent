@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
@@ -56,6 +57,9 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
             throw new InvalidOperationException(
                 $"Файл backup_manifest от родительского бэкапа недоступен по пути '{context.BasePgBaseManifestPath}'. " +
                 "Возможно, файл повреждён или удалён.");
+
+        await EnsureBaseManifestIsReachableFromCurrentClusterAsync(
+            connection, context.BasePgBaseManifestPath, ct);
 
         var binary = await _binaryResolver.ResolveAsync(connection, "pg_basebackup", ct);
 
@@ -211,12 +215,13 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
                 "После включения дождитесь появления WAL summaries и повторите бэкап.");
     }
 
-    private static InvalidOperationException BuildPgBasebackupFailure(int exitCode, string stderr)
+    private static Exception BuildPgBasebackupFailure(int exitCode, string stderr)
     {
         if (IsWalSummaryFailure(stderr))
-            return new InvalidOperationException(
-                "Дифференциальный бэкап PostgreSQL не может быть снят: серверу не хватает WAL summaries для диапазона между родительским бэкапом и текущим бэкапом. " +
-                "Проверьте, что summarize_wal=on, WAL summarizer успел догнать текущий WAL, а wal_summary_keep_time не удалил summaries, нужные для родительского backup_manifest. " +
+            return new DifferentialChainBrokenException(
+                "Дифференциальная цепочка PostgreSQL сломана: текущий кластер не может продолжить инкрементальный бэкап от родительского backup_manifest. " +
+                "Серверу не хватает WAL summaries для диапазона между родительским бэкапом и текущим бэкапом. " +
+                "Запускаем новый полный бэкап автоматически, чтобы восстановить цепочку. " +
                 $"Ошибка pg_basebackup: {stderr}");
 
         return new InvalidOperationException(
@@ -227,6 +232,117 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
         stderr.Contains("WAL summaries", StringComparison.OrdinalIgnoreCase)
         || stderr.Contains("wal summaries", StringComparison.OrdinalIgnoreCase)
         || stderr.Contains("wal summar", StringComparison.OrdinalIgnoreCase);
+
+    private async Task EnsureBaseManifestIsReachableFromCurrentClusterAsync(
+        ConnectionConfig connection,
+        string baseManifestPath,
+        CancellationToken ct)
+    {
+        var required = ReadRequiredWalPosition(baseManifestPath);
+        var current = await GetCurrentWalPositionAsync(connection, ct);
+
+        if (current.Timeline == required.Timeline && ComparePgLsn(current.Lsn, required.EndLsn) >= 0)
+            return;
+
+        throw new DifferentialChainBrokenException(
+            $"Дифференциальная цепочка PostgreSQL сломана: текущая WAL-позиция кластера (timeline={current.Timeline}, lsn={current.Lsn}) не продолжает родительский backup_manifest (timeline={required.Timeline}, endLsn={required.EndLsn}). " +
+            "Скорее всего, БД была восстановлена в более старую точку или сменилась timeline. " +
+            "Запускаем новый полный бэкап автоматически, чтобы восстановить цепочку.");
+    }
+
+    private async Task<PgWalPosition> GetCurrentWalPositionAsync(ConnectionConfig connection, CancellationToken ct)
+    {
+        return await PostgresQueryRetry.ExecuteAsync(
+            _logger, "SELECT current PostgreSQL WAL position", connection.Name,
+            async innerCt =>
+            {
+                await using var conn = new NpgsqlConnection(PostgresConnectionFactory.BuildAdminConnectionString(connection));
+                await conn.OpenAsync(innerCt);
+                await using var cmd = new NpgsqlCommand("""
+                    WITH current_position AS (
+                        SELECT CASE
+                            WHEN pg_is_in_recovery() THEN pg_last_wal_replay_lsn()
+                            ELSE pg_current_wal_lsn()
+                        END AS lsn
+                    )
+                    SELECT lsn::text, pg_walfile_name(lsn)
+                    FROM current_position;
+                    """, conn);
+
+                await using var reader = await cmd.ExecuteReaderAsync(innerCt);
+                if (!await reader.ReadAsync(innerCt))
+                    throw new InvalidOperationException(
+                        $"PostgreSQL '{connection.Name}' не вернул текущую WAL-позицию.");
+
+                if (reader.IsDBNull(0) || reader.IsDBNull(1))
+                    throw new InvalidOperationException(
+                        $"PostgreSQL '{connection.Name}' вернул пустую текущую WAL-позицию.");
+
+                var lsn = reader.GetString(0);
+                var walFileName = reader.GetString(1);
+                return new PgWalPosition(ParseWalFileTimeline(walFileName), lsn);
+            }, ct);
+    }
+
+    internal static PgManifestWalRequirement ReadRequiredWalPosition(string manifestPath)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllBytes(manifestPath));
+        if (!document.RootElement.TryGetProperty("WAL-Ranges", out var ranges)
+            || ranges.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException(
+                $"backup_manifest '{manifestPath}' не содержит секцию WAL-Ranges.");
+
+        PgManifestWalRequirement? latest = null;
+        ulong latestEndLsnValue = 0;
+
+        foreach (var range in ranges.EnumerateArray())
+        {
+            if (!range.TryGetProperty("Timeline", out var timelineElement)
+                || !range.TryGetProperty("End-LSN", out var endLsnElement))
+                continue;
+
+            var endLsn = endLsnElement.GetString();
+            if (string.IsNullOrWhiteSpace(endLsn))
+                continue;
+
+            var value = ParsePgLsn(endLsn);
+            if (latest is not null && value <= latestEndLsnValue)
+                continue;
+
+            latest = new PgManifestWalRequirement(timelineElement.GetInt64(), endLsn);
+            latestEndLsnValue = value;
+        }
+
+        return latest ?? throw new InvalidOperationException(
+            $"backup_manifest '{manifestPath}' не содержит конечную WAL-позицию в секции WAL-Ranges.");
+    }
+
+    internal static string ReadRequiredWalEndLsn(string manifestPath)
+        => ReadRequiredWalPosition(manifestPath).EndLsn;
+
+    internal static long ParseWalFileTimeline(string walFileName)
+    {
+        if (walFileName.Length < 8)
+            throw new FormatException($"Некорректное имя WAL-файла PostgreSQL '{walFileName}'.");
+
+        return Convert.ToInt64(walFileName[..8], 16);
+    }
+
+    internal readonly record struct PgManifestWalRequirement(long Timeline, string EndLsn);
+
+    private readonly record struct PgWalPosition(long Timeline, string Lsn);
+
+    internal static int ComparePgLsn(string left, string right) =>
+        ParsePgLsn(left).CompareTo(ParsePgLsn(right));
+
+    internal static ulong ParsePgLsn(string value)
+    {
+        var parts = value.Split('/');
+        if (parts.Length != 2)
+            throw new FormatException($"Некорректный PostgreSQL LSN '{value}'.");
+
+        return (Convert.ToUInt64(parts[0], 16) << 32) + Convert.ToUInt64(parts[1], 16);
+    }
 
     private void TryDeleteDirectory(string path)
     {

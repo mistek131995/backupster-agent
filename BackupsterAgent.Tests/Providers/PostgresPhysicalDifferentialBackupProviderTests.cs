@@ -11,4 +11,46 @@ public sealed class PostgresPhysicalDifferentialBackupProviderTests
     {
         Assert.That(PostgresPhysicalDifferentialBackupProvider.IsWalSummaryFailure(stderr), Is.EqualTo(expected));
     }
+
+    [Test]
+    public void ReadRequiredWalEndLsn_ReturnsLargestManifestEndLsn()
+    {
+        var manifestPath = Path.Combine(TestContext.CurrentContext.WorkDirectory, $"{Guid.NewGuid():N}.backup_manifest");
+        File.WriteAllText(manifestPath, """
+            {
+              "PostgreSQL-Backup-Manifest-Version": 2,
+              "WAL-Ranges": [
+                { "Timeline": 1, "Start-LSN": "1/7F000028", "End-LSN": "1/81000158" },
+                { "Timeline": 1, "Start-LSN": "1/81000158", "End-LSN": "1/82000000" }
+              ]
+            }
+            """);
+
+        try
+        {
+            var required = PostgresPhysicalDifferentialBackupProvider.ReadRequiredWalPosition(manifestPath);
+            Assert.That(required.Timeline, Is.EqualTo(1));
+            Assert.That(required.EndLsn, Is.EqualTo("1/82000000"));
+        }
+        finally
+        {
+            File.Delete(manifestPath);
+        }
+    }
+
+    [TestCase("1/7F000028", "1/81000158", -1)]
+    [TestCase("1/81000158", "1/81000158", 0)]
+    [TestCase("1/82000000", "1/81000158", 1)]
+    public void ComparePgLsn_OrdersHexLsnValues(string left, string right, int expectedSign)
+    {
+        var actual = Math.Sign(PostgresPhysicalDifferentialBackupProvider.ComparePgLsn(left, right));
+        Assert.That(actual, Is.EqualTo(expectedSign));
+    }
+
+    [Test]
+    public void ParseWalFileTimeline_ReadsTimelinePrefix()
+    {
+        Assert.That(PostgresPhysicalDifferentialBackupProvider.ParseWalFileTimeline("00000002000000010000007F"),
+            Is.EqualTo(2));
+    }
 }

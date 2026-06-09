@@ -4,15 +4,27 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using BackupsterAgent.Configuration;
+using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Restore;
 using BackupsterAgent.Providers.Restore.PostgresPhysicalRestore;
+using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Backup;
+using BackupsterAgent.Services.Backup.Coordinator;
+using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Outbox;
 using BackupsterAgent.Services.Common.Processes;
+using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Dashboard;
+using BackupsterAgent.Services.Dashboard.Clients;
+using BackupsterAgent.Workers;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Npgsql;
 
 namespace BackupsterAgent.IntegrationTests.Backup;
@@ -362,7 +374,122 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
     }
 
     [Test]
-    public async Task DiffAfterRestoreToOlderChain_WithNewerFullManifest_FailsFast()
+    public async Task DiffAfterRestoreToOlderChain_WithNewerFullManifest_ThrowsChainBroken()
+    {
+        var scenario = await BuildDivergedPostgresChainAsync();
+
+        var invalidBaseContext = new DifferentialBackupContext
+        {
+            BaseBackupRecordId = Guid.NewGuid(),
+            BasePgBaseManifestPath = scenario.NewerFullResult.PgBaseManifestPath,
+        };
+
+        using var invalidDiffCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        invalidDiffCts.CancelAfter(TimeSpan.FromSeconds(90));
+
+        var ex = Assert.CatchAsync<Exception>(
+            () => scenario.DiffProvider.BackupAsync(
+                MakeConfig(Path.Combine(_diffOutputDir, "after-restore")),
+                scenario.RestoredConnection,
+                invalidBaseContext,
+                invalidDiffCts.Token));
+
+        if (ex is OperationCanceledException)
+            Assert.Fail("pg_basebackup --incremental did not reject the newer full manifest within 90 seconds.");
+
+        Assert.That(ex, Is.TypeOf<DifferentialChainBrokenException>());
+    }
+
+    [Test]
+    public async Task DiffAfterRestoreToOlderChain_WithNewerFullManifest_RunsAutoFull()
+    {
+        var scenario = await BuildDivergedPostgresChainAsync();
+        var storageName = "local-itest";
+        var storageRoot = Path.Combine(_diffOutputDir, "worker-storage");
+        var outputRoot = Path.Combine(_diffOutputDir, "worker-output");
+        Directory.CreateDirectory(outputRoot);
+
+        var encryption = CreateEncryptionService();
+        var uploader = new LocalFsUploadProvider(
+            new LocalFsSettings { RemotePath = storageRoot },
+            NullLogger<LocalFsUploadProvider>.Instance);
+        var parentManifestKey = await UploadEncryptedManifestAsync(
+            encryption,
+            uploader,
+            scenario.NewerFullResult.PgBaseManifestPath!,
+            "parent-full",
+            _cts.Token);
+
+        var baseRecordId = Guid.NewGuid();
+        var diffRecordId = Guid.NewGuid();
+        var fullRecordId = Guid.NewGuid();
+        var recordClient = new AutoFullRecordClient(
+            baseRecordId,
+            parentManifestKey,
+            diffRecordId,
+            fullRecordId);
+
+        var database = new DatabaseConfig
+        {
+            ConnectionName = scenario.RestoredConnection.Name,
+            StorageName = storageName,
+            Database = _srcDb,
+            OutputPath = outputRoot,
+            FilePaths = [],
+        };
+        var storage = new StorageConfig
+        {
+            Name = storageName,
+            Provider = UploadProvider.LocalFs,
+            LocalFs = new LocalFsSettings { RemotePath = storageRoot },
+        };
+
+        using var activityLock = new AgentActivityLock(NullLogger<AgentActivityLock>.Instance);
+        using var worker = new BackupWorker(
+            BuildBackupJob(
+                scenario.RestoredConnection,
+                encryption,
+                uploader,
+                storageName,
+                recordClient,
+                scenario.FullProvider,
+                scenario.DiffProvider),
+            schedule: null!,
+            encryption,
+            new ConnectionResolver([scenario.RestoredConnection]),
+            new StorageResolver([storage]),
+            activityLock,
+            runTracker: null!,
+            recordClient,
+            Options.Create(new List<DatabaseConfig> { database }),
+            NullLogger<BackupWorker>.Instance);
+
+        await worker.RunDueDatabasesAsync(
+        [
+            (database, BackupMode.PhysicalDifferential, storageName, DateTime.UtcNow),
+        ], _cts.Token);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                recordClient.Opened.Select(dto => dto.BackupMode).ToArray(),
+                Is.EqualTo(new BackupMode?[] { BackupMode.PhysicalDifferential, BackupMode.Physical }));
+            Assert.That(recordClient.Finalized, Has.Count.EqualTo(2));
+            Assert.That(recordClient.Finalized[diffRecordId].Status, Is.EqualTo(BackupStatus.Failed));
+            Assert.That(recordClient.Finalized[fullRecordId].Status, Is.EqualTo(BackupStatus.Success));
+            Assert.That(recordClient.Finalized[fullRecordId].DumpObjectKey, Is.Not.Null);
+            Assert.That(recordClient.Finalized[fullRecordId].PgBaseManifestKey, Is.Not.Null);
+        });
+
+        Assert.That(
+            await uploader.ExistsAsync(recordClient.Finalized[fullRecordId].DumpObjectKey!, _cts.Token),
+            Is.True);
+        Assert.That(
+            await uploader.ExistsAsync(recordClient.Finalized[fullRecordId].PgBaseManifestKey!, _cts.Token),
+            Is.True);
+    }
+
+    private async Task<DivergedPostgresChain> BuildDivergedPostgresChainAsync()
     {
         var (fullProvider, diffProvider) = BuildProviders();
 
@@ -434,26 +561,11 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             Is.LessThan(0),
             $"Test precondition failed: restored old branch LSN {restoredLsn} must be before newer full manifest Start-LSN {full2StartLsn}.");
 
-        var invalidBaseContext = new DifferentialBackupContext
-        {
-            BaseBackupRecordId = Guid.NewGuid(),
-            BasePgBaseManifestPath = full2Result.PgBaseManifestPath,
-        };
-
-        using var invalidDiffCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-        invalidDiffCts.CancelAfter(TimeSpan.FromSeconds(90));
-
-        var ex = Assert.CatchAsync<Exception>(
-            () => diffProvider.BackupAsync(
-                MakeConfig(Path.Combine(_diffOutputDir, "after-restore")),
-                restoredConnection,
-                invalidBaseContext,
-                invalidDiffCts.Token));
-
-        if (ex is OperationCanceledException)
-            Assert.Fail("pg_basebackup --incremental did not reject the newer full manifest within 90 seconds.");
-
-        Assert.That(ex, Is.TypeOf<InvalidOperationException>());
+        return new DivergedPostgresChain(
+            fullProvider,
+            diffProvider,
+            restoredConnection,
+            full2Result);
     }
 
     [Test]
@@ -628,6 +740,205 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
         var diff = new PostgresPhysicalDifferentialBackupProvider(
             NullLogger<PostgresPhysicalDifferentialBackupProvider>.Instance, _resolver, _runner, full);
         return (full, diff);
+    }
+
+    private BackupJob BuildBackupJob(
+        ConnectionConfig connection,
+        EncryptionService encryption,
+        IUploadProvider uploader,
+        string storageName,
+        IBackupRecordClient recordClient,
+        PostgresPhysicalBackupProvider fullProvider,
+        PostgresPhysicalDifferentialBackupProvider diffProvider)
+    {
+        var restoreOptions = Options.Create(new RestoreSettings
+        {
+            TempPath = Path.Combine(_diffOutputDir, "worker-manifest-temp"),
+        });
+
+        var pipeline = new DatabaseBackupPipeline(
+            new PostgresBackupProviderFactory(fullProvider, diffProvider),
+            new ConnectionResolver([connection]),
+            encryption,
+            new SingleUploadProviderFactory(storageName, uploader),
+            new FileBackupService(
+                new ContentDefinedChunker(),
+                encryption,
+                NullLogger<FileBackupService>.Instance),
+            new ManifestStore(
+                encryption,
+                restoreOptions,
+                NullLoggerFactory.Instance,
+                NullLogger<ManifestStore>.Instance),
+            NullLogger<DatabaseBackupPipeline>.Instance);
+
+        var coordinator = new BackupRunCoordinator(
+            recordClient,
+            new NullProgressReporterFactory(),
+            new NoopOutboxStore(),
+            new System.Diagnostics.ActivitySource("BackupsterAgent.IntegrationTests"),
+            NullLogger<BackupRunCoordinator>.Instance);
+
+        return new BackupJob(coordinator, pipeline);
+    }
+
+    private static EncryptionService CreateEncryptionService() =>
+        new(
+            Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(new byte[32]) }),
+            NullLogger<EncryptionService>.Instance);
+
+    private static async Task<string> UploadEncryptedManifestAsync(
+        EncryptionService encryption,
+        IUploadProvider uploader,
+        string manifestPath,
+        string folder,
+        CancellationToken ct)
+    {
+        var encryptedManifest = await encryption.EncryptAsync(manifestPath, ct);
+        try
+        {
+            await uploader.UploadAsync(encryptedManifest, folder, progress: null, ct);
+            return $"{folder}/{Path.GetFileName(encryptedManifest)}";
+        }
+        finally
+        {
+            TryDeleteFile(encryptedManifest, "encrypted parent manifest");
+        }
+    }
+
+    private sealed record DivergedPostgresChain(
+        PostgresPhysicalBackupProvider FullProvider,
+        PostgresPhysicalDifferentialBackupProvider DiffProvider,
+        ConnectionConfig RestoredConnection,
+        BackupResult NewerFullResult);
+
+    private sealed class PostgresBackupProviderFactory(
+        IBackupProvider fullProvider,
+        IDifferentialBackupProvider diffProvider) : IBackupProviderFactory
+    {
+        public IBackupProvider GetProvider(DatabaseType databaseType, BackupMode backupMode)
+        {
+            if (databaseType == DatabaseType.Postgres && backupMode == BackupMode.Physical)
+                return fullProvider;
+
+            throw new NotSupportedException(
+                $"Unexpected backup provider request: DatabaseType='{databaseType}', BackupMode='{backupMode}'.");
+        }
+
+        public IDifferentialBackupProvider GetDifferentialProvider(DatabaseType databaseType)
+        {
+            if (databaseType == DatabaseType.Postgres)
+                return diffProvider;
+
+            throw new NotSupportedException(
+                $"Unexpected differential provider request: DatabaseType='{databaseType}'.");
+        }
+    }
+
+    private sealed class SingleUploadProviderFactory(string storageName, IUploadProvider provider) : IUploadProviderFactory
+    {
+        public IUploadProvider GetProvider(string requestedStorageName)
+        {
+            if (requestedStorageName == storageName)
+                return provider;
+
+            throw new NotSupportedException($"Unexpected storage provider request: '{requestedStorageName}'.");
+        }
+    }
+
+    private sealed class NullProgressReporterFactory : IProgressReporterFactory
+    {
+        public IProgressReporter<RestoreStage> CreateForRestore(Guid taskId) =>
+            new NullProgressReporter<RestoreStage>();
+
+        public IProgressReporter<DeleteStage> CreateForDelete(Guid taskId) =>
+            new NullProgressReporter<DeleteStage>();
+
+        public IProgressReporter<BackupStage> CreateForBackup(Guid backupRecordId, bool offline = false) =>
+            new NullProgressReporter<BackupStage>();
+    }
+
+    private sealed class NoopOutboxStore : IOutboxStore
+    {
+        public Task EnqueueAsync(OutboxEntry entry, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<OutboxEntry>> ListAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<OutboxEntry>>(Array.Empty<OutboxEntry>());
+
+        public Task RemoveAsync(string clientTaskId, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task MoveToDeadAsync(string clientTaskId, string reason, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task<PruneResult> PruneAsync(
+            int maxEntries,
+            int maxAgeDays,
+            DateTime nowUtc,
+            CancellationToken ct) =>
+            Task.FromResult(PruneResult.Empty);
+    }
+
+    private sealed class AutoFullRecordClient(
+        Guid baseRecordId,
+        string baseManifestKey,
+        Guid diffRecordId,
+        Guid fullRecordId) : IBackupRecordClient
+    {
+        public List<OpenBackupRecordDto> Opened { get; } = [];
+        public Dictionary<Guid, FinalizeBackupRecordDto> Finalized { get; } = [];
+
+        public Task<OpenRecordResult> OpenAsync(OpenBackupRecordDto dto, CancellationToken ct)
+        {
+            Opened.Add(dto);
+
+            if (dto.BackupMode == BackupMode.PhysicalDifferential)
+            {
+                Assert.That(dto.BaseBackupRecordId, Is.EqualTo(baseRecordId));
+                return Task.FromResult(new OpenRecordResult(
+                    DashboardAvailability.Ok,
+                    diffRecordId,
+                    BasePgBaseManifestKey: baseManifestKey));
+            }
+
+            if (dto.BackupMode == BackupMode.Physical)
+            {
+                Assert.That(dto.BaseBackupRecordId, Is.Null);
+                return Task.FromResult(new OpenRecordResult(DashboardAvailability.Ok, fullRecordId));
+            }
+
+            throw new NotSupportedException($"Unexpected backup mode: '{dto.BackupMode}'.");
+        }
+
+        public Task ReportProgressAsync(Guid backupRecordId, BackupProgressDto progress, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task<FinalizeRecordResult> FinalizeAsync(
+            Guid backupRecordId,
+            FinalizeBackupRecordDto dto,
+            CancellationToken ct)
+        {
+            Finalized[backupRecordId] = dto;
+            return Task.FromResult(new FinalizeRecordResult(DashboardAvailability.Ok));
+        }
+
+        public Task<LastSuccessfulLookupResult> GetLastSuccessfulAsync(
+            string database,
+            string storage,
+            BackupMode mode,
+            CancellationToken ct)
+        {
+            Assert.That(mode, Is.EqualTo(BackupMode.Physical));
+            return Task.FromResult(new LastSuccessfulLookupResult(
+                LastSuccessfulLookupOutcome.Found,
+                new LastSuccessfulBackupResponseDto
+                {
+                    Id = baseRecordId,
+                    PgBaseManifestKey = baseManifestKey,
+                    BackupAt = DateTime.UtcNow.AddMinutes(-1),
+                }));
+        }
     }
 
     private DatabaseConfig MakeConfig(string outputDir) => new()
