@@ -3,7 +3,6 @@ using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Backup;
-using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.State;
 using Microsoft.Extensions.Options;
@@ -12,6 +11,9 @@ namespace BackupsterAgent.Workers.Handlers;
 
 public sealed class FileSetBackupTaskHandler : IAgentTaskHandler
 {
+    private const string GenericFileSetBackupTaskErrorMessage =
+        "Бэкап файлов не выполнен. Подробности смотрите в логах агента.";
+
     private readonly FileSetBackupJob _fileSetBackupJob;
     private readonly IBackupRunTracker _runTracker;
     private readonly StorageResolver _storages;
@@ -91,7 +93,7 @@ public sealed class FileSetBackupTaskHandler : IAgentTaskHandler
             return new PatchAgentTaskDto
             {
                 Status = AgentTaskStatus.Failed,
-                ErrorMessage = $"Неожиданная ошибка бэкапа файлов: {ex.Message}",
+                ErrorMessage = GenericFileSetBackupTaskErrorMessage,
             };
         }
 

@@ -82,9 +82,10 @@ public sealed class MysqlBackupExtractor
         catch (Exception ex)
         {
             throw new RestorePermissionException(
-                $"Бинарник {name} недоступен на хосте агента ({ex.Message}). " +
+                $"Бинарник {name} недоступен на хосте агента. " +
                 "Установите пакет percona-xtrabackup и убедитесь, что он находится в PATH " +
-                "(или задайте ConnectionConfig.BinPath).");
+                "(или задайте ConnectionConfig.BinPath).",
+                ex);
         }
 
         if (result.ExitCode != 0)

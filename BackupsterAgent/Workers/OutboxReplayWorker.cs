@@ -14,6 +14,10 @@ public sealed class OutboxReplayWorker : BackgroundService
 {
     private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(30);
     private const int MaxAttempts = 100;
+    private const string GenericReplayedBackupErrorMessage =
+        "Бэкап не выполнен. Подробности смотрите в логах агента.";
+    private const string GenericReplayedFileBackupErrorMessage =
+        "Файловый этап бэкапа не выполнен. Подробности смотрите в логах агента.";
 
     private readonly IOutboxStore _store;
     private readonly IBackupRecordClient _client;
@@ -198,15 +202,25 @@ public sealed class OutboxReplayWorker : BackgroundService
         SizeBytes = entry.SizeBytes,
         DurationMs = entry.DurationMs,
         DumpObjectKey = entry.DumpObjectKey,
-        ErrorMessage = entry.ErrorMessage,
+        ErrorMessage = BuildReplayErrorMessage(entry),
         BackupAt = entry.BackupAt,
         ManifestKey = entry.ManifestKey,
         FilesCount = entry.FilesCount,
         FilesTotalBytes = entry.FilesTotalBytes,
         NewChunksCount = entry.NewChunksCount,
-        FileBackupError = entry.FileBackupError,
+        FileBackupError = string.IsNullOrWhiteSpace(entry.FileBackupError)
+            ? null
+            : GenericReplayedFileBackupErrorMessage,
         PgBaseManifestKey = entry.PgBaseManifestKey,
     };
+
+    private static string? BuildReplayErrorMessage(OutboxEntry entry)
+    {
+        if (string.Equals(entry.Status, "success", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return GenericReplayedBackupErrorMessage;
+    }
 
     private enum TickDisposition
     {

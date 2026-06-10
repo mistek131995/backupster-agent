@@ -106,10 +106,12 @@ public sealed class SystemdServiceController
             ct, _restoreSettings.SystemctlTimeoutSeconds);
 
         if (result.ExitCode != 0)
+        {
+            LogPermissionCommandFailure("systemctl show", result);
             throw new RestorePermissionException(
                 $"Не удалось проверить {subject} '{serviceName}' (код {result.ExitCode}). " +
-                $"Physical restore не будет выполнять swap без однозначной связи systemd-сервиса с {processDescription}." +
-                FormatOutput(result));
+                $"Physical restore не будет выполнять swap без однозначной связи systemd-сервиса с {processDescription}.");
+        }
 
         var raw = result.Stdout.Trim();
         if (!int.TryParse(raw, out var mainPid) || mainPid != expectedPid)
@@ -161,6 +163,16 @@ public sealed class SystemdServiceController
     {
         var output = string.IsNullOrWhiteSpace(result.Stderr) ? result.Stdout : result.Stderr;
         return string.IsNullOrWhiteSpace(output) ? string.Empty : $" Вывод: {Truncate(output.Trim(), 2000)}";
+    }
+
+    private void LogPermissionCommandFailure(string operation, ExternalProcessResult result)
+    {
+        _logger.LogWarning(
+            "SystemdServiceController: {Operation} failed. ExitCode: {ExitCode}. Stdout: {Stdout}. Stderr: {Stderr}",
+            operation,
+            result.ExitCode,
+            Truncate(result.Stdout.Trim(), 2000),
+            Truncate(result.Stderr.Trim(), 2000));
     }
 
     private static string Truncate(string value, int maxLength) =>

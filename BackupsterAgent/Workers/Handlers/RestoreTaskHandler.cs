@@ -13,6 +13,9 @@ namespace BackupsterAgent.Workers.Handlers;
 
 public sealed class RestoreTaskHandler : IAgentTaskHandler
 {
+    private const string GenericStorageResolveErrorMessage =
+        "Не удалось подготовить хранилище для восстановления. Проверьте настройки Storages[] на агенте.";
+
     private readonly DatabaseRestoreService _databaseRestore;
     private readonly FileRestoreService _fileRestore;
     private readonly IUploadProviderFactory _uploadFactory;
@@ -87,7 +90,7 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
         {
             _logger.LogError(ex,
                 "RestoreTaskHandler: failed to resolve storage for task {TaskId}", task.Id);
-            return FailRestore(ex.Message);
+            return FailRestore(GenericStorageResolveErrorMessage);
         }
 
         var dbResult = isFileSet

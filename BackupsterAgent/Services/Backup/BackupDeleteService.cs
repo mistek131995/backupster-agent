@@ -2,13 +2,19 @@ using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Providers.Upload;
-using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Progress;
 
 namespace BackupsterAgent.Services.Backup;
 
 public sealed class BackupDeleteService(IUploadProviderFactory uploadFactory, ILogger<BackupDeleteService> logger)
 {
+    private const string ManifestDeleteErrorMessage =
+        "Не удалось удалить манифест из хранилища. Подробности смотрите в логах агента.";
+    private const string PgBaseManifestDeleteErrorMessage =
+        "Не удалось удалить PostgreSQL backup_manifest из хранилища. Подробности смотрите в логах агента.";
+    private const string DumpDeleteErrorMessage =
+        "Не удалось удалить дамп из хранилища. Подробности смотрите в логах агента.";
+
     public async Task<BackupDeleteResult> RunAsync(Guid correlationId, DeleteTaskPayload payload, 
         IProgressReporter<DeleteStage>? reporter, CancellationToken ct)
     {
@@ -49,8 +55,7 @@ public sealed class BackupDeleteService(IUploadProviderFactory uploadFactory, IL
                 logger.LogError(ex,
                     "BackupDeleteService: failed to delete manifest '{Key}' for {CorrelationId}",
                     payload.ManifestKey, correlationId);
-                return BackupDeleteResult.Failed(
-                    $"Не удалось удалить манифест '{payload.ManifestKey}' из хранилища: {ex.Message}");
+                return BackupDeleteResult.Failed(ManifestDeleteErrorMessage);
             }
         }
 
@@ -70,8 +75,7 @@ public sealed class BackupDeleteService(IUploadProviderFactory uploadFactory, IL
                 logger.LogError(ex,
                     "BackupDeleteService: failed to delete PostgreSQL backup_manifest '{Key}' for {CorrelationId}",
                     payload.PgBaseManifestKey, correlationId);
-                return BackupDeleteResult.Failed(
-                    $"Не удалось удалить PostgreSQL backup_manifest '{payload.PgBaseManifestKey}' из хранилища: {ex.Message}");
+                return BackupDeleteResult.Failed(PgBaseManifestDeleteErrorMessage);
             }
         }
 
@@ -91,8 +95,7 @@ public sealed class BackupDeleteService(IUploadProviderFactory uploadFactory, IL
                 logger.LogError(ex,
                     "BackupDeleteService: failed to delete dump '{Key}' for {CorrelationId}",
                     payload.DumpObjectKey, correlationId);
-                return BackupDeleteResult.Failed(
-                    $"Не удалось удалить дамп '{payload.DumpObjectKey}' из хранилища: {ex.Message}");
+                return BackupDeleteResult.Failed(DumpDeleteErrorMessage);
             }
         }
 

@@ -221,8 +221,7 @@ public sealed class PostgresPhysicalDifferentialBackupProvider : IDifferentialBa
             return new DifferentialChainBrokenException(
                 "Дифференциальная цепочка PostgreSQL сломана: текущий кластер не может продолжить инкрементальный бэкап от родительского backup_manifest. " +
                 "Серверу не хватает WAL summaries для диапазона между родительским бэкапом и текущим бэкапом. " +
-                "Запускаем новый полный бэкап автоматически, чтобы восстановить цепочку. " +
-                $"Ошибка pg_basebackup: {stderr}");
+                "Запускаем новый полный бэкап автоматически, чтобы восстановить цепочку.");
 
         return new InvalidOperationException(
             $"pg_basebackup --incremental завершился с кодом {exitCode}: {stderr}");

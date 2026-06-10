@@ -382,8 +382,9 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         catch (Exception ex)
         {
             throw new RestorePermissionException(
-                $"pg_ctl не найден на хосте агента ({ex.Message}). " +
-                "Установите postgresql и убедитесь, что pg_ctl есть в PATH.");
+                "pg_ctl не найден на хосте агента. " +
+                "Установите postgresql и убедитесь, что pg_ctl есть в PATH.",
+                ex);
         }
 
         if (process.ExitCode != 0)
@@ -417,8 +418,9 @@ public sealed class PostgresPhysicalRestoreProvider : IRestoreProvider
         catch (Exception ex)
         {
             throw new RestorePermissionException(
-                $"tar не найден на хосте агента ({ex.Message}). " +
-                "Установите GNU tar/bsdtar или добавьте tar в PATH: PostgreSQL physical restore использует его для распаковки base.tar.gz и pg_wal.tar.gz.");
+                "tar не найден на хосте агента. " +
+                "Установите GNU tar/bsdtar или добавьте tar в PATH: PostgreSQL physical restore использует его для распаковки base.tar.gz и pg_wal.tar.gz.",
+                ex);
         }
 
         if (process.ExitCode != 0)

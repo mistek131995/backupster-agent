@@ -16,6 +16,12 @@ public sealed class FileRestoreService
 {
     private const int MaxErrorMessageLength = 2000;
     private const int MaxReportedPerFileErrors = 20;
+    private const string GenericFileRestoreErrorMessage =
+        "Восстановление файлов не выполнено. Подробности смотрите в логах агента.";
+    private const string GenericSingleFileRestoreErrorMessage =
+        "ошибка восстановления файла; см. логи агента";
+    private const string GenericInvalidFileDataMessage =
+        "некорректные данные файла или манифеста";
 
     private readonly EncryptionService _encryption;
     private readonly ManifestStore _manifestStore;
@@ -82,8 +88,7 @@ public sealed class FileRestoreService
         catch (Exception ex)
         {
             _logger.LogError(ex, "FileRestoreService: failed to fetch manifest ({ManifestKey})", manifestKey);
-            return FileRestoreResult.Failed(
-                $"Не удалось получить манифест файлов '{manifestKey}': {ex.Message}");
+            return FileRestoreResult.Failed(GenericFileRestoreErrorMessage);
         }
 
         await using var _ = reader;
@@ -103,8 +108,7 @@ public sealed class FileRestoreService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "FileRestoreService: failed to reset landing zone");
-                return FileRestoreResult.Failed(
-                    $"Не удалось очистить служебную папку восстановления: {ex.Message}");
+                return FileRestoreResult.Failed(GenericFileRestoreErrorMessage);
             }
         }
 
@@ -171,7 +175,7 @@ public sealed class FileRestoreService
         {
             _logger.LogError(ex, "FileRestoreService: invalid manifest data mid-stream ({ManifestKey})", manifestKey);
             return FileRestoreResult.Failed(
-                $"Манифест '{manifestKey}' повреждён: {ex.Message}");
+                $"Манифест '{manifestKey}' повреждён или имеет неподдерживаемый формат.");
         }
         catch (System.Text.Json.JsonException ex)
         {
@@ -371,8 +375,8 @@ public sealed class FileRestoreService
         FileNotFoundException => "отсутствует чанк в хранилище",
         AuthenticationTagMismatchException => "ошибка расшифровки чанка (неверный ключ или повреждение)",
         CryptographicException => "ошибка криптографии чанка",
-        InvalidDataException e => e.Message,
-        _ => ex.Message,
+        InvalidDataException => GenericInvalidFileDataMessage,
+        _ => GenericSingleFileRestoreErrorMessage,
     };
 
     private static string BuildPartialErrorMessage(List<(string Path, string Reason)> failed)

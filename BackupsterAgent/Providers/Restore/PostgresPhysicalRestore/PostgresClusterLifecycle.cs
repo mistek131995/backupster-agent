@@ -261,10 +261,12 @@ public sealed class PostgresClusterLifecycle
             _restoreSettings.SystemctlTimeoutSeconds);
 
         if (result.ExitCode != 0)
+        {
+            LogPermissionCommandFailure("systemctl show", result);
             throw new RestorePermissionException(
                 $"Не удалось проверить systemd-юнит PostgreSQL '{unit}' (код {result.ExitCode}). " +
-                "Physical restore не будет выполнять swap без однозначной связи systemd-юнита с postmaster." +
-                FormatOutput(result));
+                "Physical restore не будет выполнять swap без однозначной связи systemd-юнита с postmaster.");
+        }
 
         var raw = result.Stdout.Trim();
         if (!int.TryParse(raw, out var mainPid) || mainPid != postmasterPid)
@@ -416,10 +418,12 @@ public sealed class PostgresClusterLifecycle
         }
 
         if (result.ExitCode != 0)
+        {
+            LogPermissionCommandFailure("chown staging directory", result);
             throw new RestorePermissionException(
                 $"Не удалось назначить владельца '{owner}' для staging-каталога PostgreSQL '{stagingPath}' (код {result.ExitCode}). " +
-                "Для managed restore агент должен иметь права на смену владельца PGDATA." +
-                FormatOutput(result));
+                "Для managed restore агент должен иметь права на смену владельца PGDATA.");
+        }
 
         _logger.LogInformation("Staging PostgreSQL PGDATA owner set to '{Owner}'", owner);
     }
@@ -434,10 +438,12 @@ public sealed class PostgresClusterLifecycle
 
         var result = await _processRunner.RunAsync(request, handleStdout: null, handleStdin: null, ct);
         if (result.ExitCode != 0)
+        {
+            LogPermissionCommandFailure("icacls staging directory", result);
             throw new RestorePermissionException(
                 $"Не удалось выдать Windows-сервису PostgreSQL '{serviceAccount}' доступ к staging-каталогу '{stagingPath}' (код {result.ExitCode}). " +
-                "Запустите агент с правами администратора или настройте ACL вручную." +
-                FormatOutput(result));
+                "Запустите агент с правами администратора или настройте ACL вручную.");
+        }
 
         _logger.LogInformation(
             "Granted PostgreSQL service account '{ServiceAccount}' access to staging PGDATA",
@@ -478,10 +484,12 @@ public sealed class PostgresClusterLifecycle
     {
         var result = await RunExternalAsync("chmod", [mode, stagingPath], ct, _restoreSettings.SystemctlTimeoutSeconds);
         if (result.ExitCode != 0)
+        {
+            LogPermissionCommandFailure("chmod staging directory", result);
             throw new RestorePermissionException(
                 $"Не удалось назначить права '{mode}' для staging-каталога PostgreSQL '{stagingPath}' (код {result.ExitCode}). " +
-                "Для physical restore агент должен иметь права на изменение прав PGDATA." +
-                FormatOutput(result));
+                "Для physical restore агент должен иметь права на изменение прав PGDATA.");
+        }
 
         _logger.LogInformation("Staging PostgreSQL PGDATA mode set to '{Mode}'", mode);
     }
@@ -572,9 +580,11 @@ public sealed class PostgresClusterLifecycle
     {
         var result = await RunExternalAsync("stat", ["-Lc", "%U", path], ct, _restoreSettings.SystemctlTimeoutSeconds);
         if (result.ExitCode != 0)
+        {
+            LogPermissionCommandFailure("stat PGDATA owner", result);
             throw new RestorePermissionException(
-                $"Не удалось прочитать владельца PGDATA '{path}' (код {result.ExitCode})." +
-                FormatOutput(result));
+                $"Не удалось прочитать владельца PGDATA '{path}' (код {result.ExitCode}).");
+        }
 
         var owner = result.Stdout.Trim();
         return string.IsNullOrWhiteSpace(owner) ? null : owner;
@@ -589,9 +599,11 @@ public sealed class PostgresClusterLifecycle
         File.WriteAllText(startLog, string.Empty);
         var result = await RunExternalAsync("chown", [runUser, startLog], ct, _restoreSettings.SystemctlTimeoutSeconds);
         if (result.ExitCode != 0)
+        {
+            LogPermissionCommandFailure("chown PostgreSQL start log", result);
             throw new RestorePermissionException(
-                $"Не удалось назначить владельца '{runUser}' для log-файла PostgreSQL '{startLog}' (код {result.ExitCode})." +
-                FormatOutput(result));
+                $"Не удалось назначить владельца '{runUser}' для log-файла PostgreSQL '{startLog}' (код {result.ExitCode}).");
+        }
     }
 
     private async Task WaitForPidExitCommonAsync(int? pid, TimeSpan timeout, CancellationToken ct)
@@ -774,6 +786,16 @@ public sealed class PostgresClusterLifecycle
     {
         var output = string.IsNullOrWhiteSpace(result.Stderr) ? result.Stdout : result.Stderr;
         return string.IsNullOrWhiteSpace(output) ? string.Empty : $" Вывод: {Truncate(output.Trim(), 2000)}";
+    }
+
+    private void LogPermissionCommandFailure(string operation, ExternalProcessResult result)
+    {
+        _logger.LogWarning(
+            "PostgresClusterLifecycle: {Operation} failed. ExitCode: {ExitCode}. Stdout: {Stdout}. Stderr: {Stderr}",
+            operation,
+            result.ExitCode,
+            Truncate(result.Stdout.Trim(), 2000),
+            Truncate(result.Stderr.Trim(), 2000));
     }
 
     private static string Truncate(string value, int maxLength) =>

@@ -19,6 +19,9 @@ namespace BackupsterAgent.Services.Restore;
 
 public sealed class DatabaseRestoreService
 {
+    private const string GenericDatabaseRestoreErrorMessage =
+        "Восстановление БД не выполнено. Подробности смотрите в логах агента.";
+
     private static readonly int[] MssqlPermissionErrorCodes = { 229, 262, 300, 916, 15247, 21089 };
 
     private readonly ConnectionResolver _connections;
@@ -238,7 +241,7 @@ public sealed class DatabaseRestoreService
         catch (Exception ex)
         {
             _logger.LogError(ex, "DatabaseRestoreService: unexpected error for task {TaskId}", taskId);
-            return DatabaseRestoreResult.Failed($"Ошибка восстановления БД: {ex.Message}");
+            return DatabaseRestoreResult.Failed(GenericDatabaseRestoreErrorMessage);
         }
         finally
         {

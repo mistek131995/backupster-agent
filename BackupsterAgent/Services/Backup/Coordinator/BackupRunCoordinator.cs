@@ -12,6 +12,9 @@ namespace BackupsterAgent.Services.Backup.Coordinator;
 
 public sealed class BackupRunCoordinator
 {
+    private const string GenericBackupErrorMessage =
+        "Бэкап не выполнен. Подробности смотрите в логах агента.";
+
     private readonly IBackupRecordClient _recordClient;
     private readonly IProgressReporterFactory _reporterFactory;
     private readonly IOutboxStore _outboxStore;
@@ -212,13 +215,16 @@ public sealed class BackupRunCoordinator
 
     private static string BuildUserErrorMessage(Exception ex)
     {
+        if (ex is BackupPermissionException or BackupUserFacingException)
+            return ex.Message;
+
         if (ex is UnauthorizedAccessException)
             return BuildAccessDeniedMessage(ex.Message);
 
         if (ex is DirectoryNotFoundException)
             return BuildPathUnavailableMessage(ex.Message);
 
-        return ex.Message;
+        return GenericBackupErrorMessage;
     }
 
     private static string BuildAccessDeniedMessage(string message)

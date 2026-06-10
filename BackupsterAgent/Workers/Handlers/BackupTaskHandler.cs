@@ -12,6 +12,9 @@ namespace BackupsterAgent.Workers.Handlers;
 
 public sealed class BackupTaskHandler : IAgentTaskHandler
 {
+    private const string GenericBackupTaskErrorMessage =
+        "Бэкап не выполнен. Подробности смотрите в логах агента.";
+
     private readonly IBackupJobRunner _backupJob;
     private readonly IBackupRunTracker _runTracker;
     private readonly StorageResolver _storages;
@@ -141,7 +144,7 @@ public sealed class BackupTaskHandler : IAgentTaskHandler
             return new PatchAgentTaskDto
             {
                 Status = AgentTaskStatus.Failed,
-                ErrorMessage = $"Неожиданная ошибка бэкапа: {ex.Message}",
+                ErrorMessage = GenericBackupTaskErrorMessage,
             };
         }
 

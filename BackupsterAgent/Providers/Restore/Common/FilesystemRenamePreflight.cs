@@ -36,11 +36,10 @@ public sealed class FilesystemRenamePreflight
             var message =
                 $"Не удалось выполнить атомарный rename для {subject} '{livePath}'. " +
                 $"Physical restore требует, чтобы каталог и его родительский каталог '{parent}' поддерживали атомарный rename внутри одной файловой системы. " +
-                "Не подходят: отдельная точка монтирования Linux прямо на data directory, Windows volume mount point, cross-FS symlink или каталог без прав на rename. " +
-                $"Подробности: {ex.Message}";
+                "Не подходят: отдельная точка монтирования Linux прямо на data directory, Windows volume mount point, cross-FS symlink или каталог без прав на rename.";
 
             if (throwRestorePermissionException)
-                throw new RestorePermissionException(message);
+                throw new RestorePermissionException(message, ex);
 
             throw new InvalidOperationException(message, ex);
         }

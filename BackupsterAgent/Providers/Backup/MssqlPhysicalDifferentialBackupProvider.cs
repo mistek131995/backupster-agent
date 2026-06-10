@@ -10,6 +10,7 @@ namespace BackupsterAgent.Providers.Backup;
 public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBackupProvider
 {
     private const int DifferentialChainLockTimeoutMs = 60_000;
+    private static readonly int[] PermissionErrorNumbers = { 229, 262, 300, 916, 15247, 21089 };
 
     private readonly ILogger<MssqlPhysicalDifferentialBackupProvider> _logger;
     private readonly MssqlPhysicalBackupProvider _fullProvider;
@@ -39,9 +40,9 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
 
         if (string.IsNullOrWhiteSpace(config.OutputPath))
         {
-            throw new InvalidOperationException(
+            throw new BackupUserFacingException(
                 $"Для БД '{config.Database}' не задан OutputPath. " +
-                "Для MSSQL differential backup укажите Databases[].OutputPath — каталог, доступный агенту и SQL Server.");
+                "Для MSSQL differential backup укажите Databases[].OutputPath - каталог, доступный агенту и SQL Server.");
         }
 
         var outputPath = Path.GetFullPath(config.OutputPath);
@@ -87,7 +88,7 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
 
             if (!File.Exists(agentFilePath))
             {
-                throw new InvalidOperationException(
+                throw new BackupUserFacingException(
                     $"Файл дифференциального бэкапа '{agentFilePath}' недоступен на хосте агента. " +
                     "Проверьте, что OutputPath указывает на каталог, доступный агенту и SQL Server.");
             }
@@ -116,13 +117,10 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
             TryDeleteFile(agentFilePath);
             throw;
         }
-        catch (SqlException ex) when (ex.Number == 3035)
+        catch (SqlException ex)
         {
-            throw new InvalidOperationException(
-                $"MSSQL отказался создать дифференциальный бэкап БД '{config.Database}': " +
-                "у базы нет ни одного предыдущего полного бэкапа (msdb о нём не знает). " +
-                "Возможно, полный бэкап был сделан другим инструментом или удалён напрямую из msdb. " +
-                "Запустите сначала полный бэкап.", ex);
+            TryDeleteFile(agentFilePath);
+            throw BuildSqlBackupException(ex, config, connection, sqlFilePath);
         }
     }
 
@@ -140,7 +138,7 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
                 "Cannot detect external FULL backups that would re-base the differential chain.",
                 database);
 
-            throw new InvalidOperationException(
+            throw new BackupUserFacingException(
                 $"Дифференциальный бэкап БД '{database}' отменён: нет предыдущего полного бэкапа, на который можно опереться, — дашборд не передал данные о родительском полном бэкапе, и нельзя убедиться, что цепочка не сломана. " +
                 "Обновите дашборд до версии 1.4.0 или новее.");
         }
@@ -194,7 +192,7 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
                     "Запускаем новый полный бэкап автоматически, чтобы восстановить цепочку.");
 
             default:
-                throw new InvalidOperationException(
+                throw new BackupUserFacingException(
                     $"Дифференциальный бэкап БД '{database}' отменён: неизвестный результат проверки цепочки MSSQL ({checkResult}).");
         }
     }
@@ -230,9 +228,76 @@ SELECT @result;";
             "MSSQL differential chain app lock refused for '{Database}'. Resource: '{Resource}', Result: {Result}",
             database, resource, result);
 
-        throw new InvalidOperationException(
+        throw new BackupUserFacingException(
             $"Дифференциальный бэкап БД '{database}' отменён: не удалось получить эксклюзивную блокировку цепочки MSSQL в течение {DifferentialChainLockTimeoutMs / 1000} секунд. " +
             "Вероятно, для этой БД уже выполняется другой бэкап Backupster. Повторите запуск позже.");
+    }
+
+    private static Exception BuildSqlBackupException(
+        SqlException ex,
+        DatabaseConfig config,
+        ConnectionConfig connection,
+        string sqlFilePath)
+    {
+        if (HasError(ex, PermissionErrorNumbers))
+        {
+            return new BackupPermissionException(
+                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для MSSQL differential backup БД '{config.Database}'. " +
+                "Требуются права BACKUP DATABASE или членство в роли db_backupoperator, db_owner либо sysadmin.",
+                ex);
+        }
+
+        if (HasError(ex, 3035))
+        {
+            return new BackupUserFacingException(
+                $"MSSQL отказался создать дифференциальный бэкап БД '{config.Database}': у базы нет предыдущего полного бэкапа в msdb. " +
+                "Запустите сначала полный бэкап.",
+                ex);
+        }
+
+        if (HasError(ex, 911))
+        {
+            return new BackupUserFacingException(
+                $"БД '{config.Database}' не найдена на MSSQL-сервере подключения '{connection.Name}'. Проверьте имя БД в Databases[].Database.",
+                ex);
+        }
+
+        if (HasError(ex, 924, 927, 942, 945, 952))
+        {
+            return new BackupUserFacingException(
+                $"БД '{config.Database}' недоступна для MSSQL differential backup. Проверьте, что база online и файлы БД доступны SQL Server.",
+                ex);
+        }
+
+        if (HasError(ex, 3201, 3202, 18204, 18210))
+        {
+            return new BackupUserFacingException(
+                $"SQL Server не смог записать файл дифференциального бэкапа по пути '{sqlFilePath}'. " +
+                "Проверьте, что Databases[].OutputPath виден SQL Server и у service account SQL Server есть права на запись.",
+                ex);
+        }
+
+        if (HasError(ex, 3013, 3041))
+        {
+            return new BackupUserFacingException(
+                $"MSSQL не смог создать differential backup БД '{config.Database}'. Проверьте права, состояние БД и доступность Databases[].OutputPath для SQL Server.",
+                ex);
+        }
+
+        return new BackupUserFacingException(
+            $"MSSQL не смог создать differential backup БД '{config.Database}'. Подробности смотрите в логах агента.",
+            ex);
+    }
+
+    private static bool HasError(SqlException ex, params int[] errorNumbers)
+    {
+        foreach (SqlError error in ex.Errors)
+        {
+            if (Array.IndexOf(errorNumbers, error.Number) >= 0)
+                return true;
+        }
+
+        return false;
     }
 
     private static string? ResolveParentBackupFileName(string? baseDumpObjectKey)

@@ -177,9 +177,10 @@ public sealed class MongoRestoreProvider : IRestoreProvider
         catch (Exception ex)
         {
             throw new RestorePermissionException(
-                $"Бинарник {name} недоступен на хосте агента ({ex.Message}). " +
+                $"Бинарник {name} недоступен на хосте агента. " +
                 "Установите MongoDB Database Tools и убедитесь, что mongorestore находится в PATH " +
-                "(или задайте ConnectionConfig.BinPath).");
+                "(или задайте ConnectionConfig.BinPath).",
+                ex);
         }
 
         if (result.ExitCode != 0)
