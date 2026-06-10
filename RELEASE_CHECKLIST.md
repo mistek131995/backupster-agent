@@ -41,11 +41,11 @@
 | **Хранилища** |  |  |  |  |
 | S3 — upload | ✓ |  |  | ✓ |
 | S3 — download | ✓ |  |  | ✓ |
-| SFTP — upload | ✓ |  |  |  |
-| SFTP — download | ✓ |  |  |  |
+| SFTP — upload | ✓ |  |  | ✓ |
+| SFTP — download | ✓ |  |  | ✓ |
 | Azure Blob — upload |  |  |  |  |
 | Azure Blob — download |  |  |  |  |
-| WebDAV — upload | ✓ |  |  |  |
-| WebDAV — download | ✓ |  |  |  |
+| WebDAV — upload | ✓ |  |  | ✓ |
+| WebDAV — download | ✓ |  |  | ✓ |
 | LocalFs — upload | ✓ |  |  |  |
 | LocalFs — download | ✓ |  |  |  |
