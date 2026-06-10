@@ -22,9 +22,9 @@
 | MySQL — logical | ✓ |  |  | ✓ |
 | MySQL — physical | N/A | N/A | N/A | ✓ |
 | MongoDB — logical | N/A | N/A | N/A | ✓ |
-| MSSQL — logical | ✓ | ✓ | ✓ |  |
-| MSSQL — physical | ✓ | ✓ | ✓ |  |
-| MSSQL — physical differential | ✓ | ✓ | ✓ |  |
+| MSSQL — logical | ✓ | ✓ | ✓ | ✓ |
+| MSSQL — physical | ✓ | ✓ | ✓ | ✓ |
+| MSSQL — physical differential | ✓ | ✓ | ✓ | ✓ |
 | File-set | ✓ |  |  |  |
 | **Восстановление** |  |  |  |  |
 | Postgres — logical | ✓ | ✓ |  | ✓ |
@@ -33,9 +33,9 @@
 | MySQL — logical | ✓ |  |  | ✓ |
 | MySQL — physical | N/A | N/A | N/A | ✓ |
 | MongoDB — logical | N/A | N/A | N/A | ✓ |
-| MSSQL — logical | ✓ | ✓ | ✓ |  |
-| MSSQL — physical | ✓ | ✓ | ✓ |  |
-| MSSQL — physical differential | ✓ | ✓ | ✓ |  |
+| MSSQL — logical | ✓ | ✓ | ✓ | ✓ |
+| MSSQL — physical | ✓ | ✓ | ✓ | ✓ |
+| MSSQL — physical differential | ✓ | ✓ | ✓ | ✓ |
 | БД + файлы вместе | ✓ |  |  |  |
 | File-set only | ✓ |  |  |  |
 | **Хранилища** |  |  |  |  |
