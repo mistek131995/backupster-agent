@@ -49,6 +49,7 @@ install -d -m 0750 -o backupster -g backupster /var/lib/backupster-agent/config
 install -d -m 0750 -o backupster -g backupster /var/lib/backupster-agent/outbox
 install -d -m 0750 -o backupster -g backupster /var/lib/backupster-agent/runs
 install -d -m 0750 -o backupster -g backupster /var/lib/backupster-agent/temp
+install -d -m 0750 -o backupster -g backupster /var/lib/backupster-agent/.net
 
 if [ -f /etc/backupster-agent/env ]; then
     chown root:backupster /etc/backupster-agent/env
