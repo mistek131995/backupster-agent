@@ -29,12 +29,12 @@
     <PackageReference Include="SSH.NET" Version="2025.1.0" />
   </ItemGroup>
 
-  <!-- Microsoft.Data.SqlClient requires ICU; bundle it app-local so the self-contained
-       linux package works on hosts without libicu. Version must match the package pin. -->
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64'">
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  <PropertyGroup>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
   </PropertyGroup>
 
+  <!-- Microsoft.Data.SqlClient requires ICU; bundle it app-local so the self-contained
+       linux package works on hosts without libicu. Version must match the package pin. -->
   <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64'">
     <PackageReference Include="Microsoft.ICU.ICU4C.Runtime" Version="72.1.0.3" />
     <RuntimeHostConfigurationOption Include="System.Globalization.AppLocalIcu" Value="72.1.0.3" />
