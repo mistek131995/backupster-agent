@@ -39,12 +39,13 @@ SELECT IS_MEMBER('db_owner')     AS is_owner,
 
         if (isOwner || (isDatareader && canViewDef && canViewState)) return;
 
+        var member = MssqlConnectionFactory.GrantMemberName(connection);
         throw new BackupPermissionException(
-            $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для logical бэкапа БД '{database}'. " +
+            $"{MssqlConnectionFactory.DescribeUser(connection)} не имеет прав для logical бэкапа БД '{database}'. " +
             "Требуется членство в db_owner, либо одновременно: db_datareader + VIEW DEFINITION + VIEW DATABASE STATE. " +
-            $"Пример: ALTER ROLE db_datareader ADD MEMBER [{connection.Username}]; " +
-            $"GRANT VIEW DEFINITION TO [{connection.Username}]; " +
-            $"GRANT VIEW DATABASE STATE TO [{connection.Username}];");
+            $"Пример: ALTER ROLE db_datareader ADD MEMBER [{member}]; " +
+            $"GRANT VIEW DEFINITION TO [{member}]; " +
+            $"GRANT VIEW DATABASE STATE TO [{member}];");
     }
 
     public async Task<BackupResult> BackupAsync(DatabaseConfig config, ConnectionConfig connection, CancellationToken ct)
@@ -56,10 +57,11 @@ SELECT IS_MEMBER('db_owner')     AS is_owner,
         Directory.CreateDirectory(config.OutputPath);
 
         var connectionString = MssqlConnectionFactory.BuildDatabaseConnectionString(connection, config.Database);
+        var dataSource = MssqlConnectionFactory.DescribeDataSource(connection);
 
         logger.LogInformation(
-            "Starting MSSQL logical backup. Database: '{Database}', Host: '{Host}:{Port}', Output: '{Output}'",
-            config.Database, connection.Host, connection.Port, outputFile);
+            "Starting MSSQL logical backup. Database: '{Database}', DataSource: '{DataSource}', Output: '{Output}'",
+            config.Database, dataSource, outputFile);
 
         var dac = new DacServices(connectionString);
         dac.Message += OnDacMessage;

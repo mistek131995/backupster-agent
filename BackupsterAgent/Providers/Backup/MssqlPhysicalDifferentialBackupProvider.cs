@@ -50,11 +50,12 @@ public sealed class MssqlPhysicalDifferentialBackupProvider : IDifferentialBacku
 
         var sqlFilePath = Path.Combine(outputPath, fileName);
         var agentFilePath = sqlFilePath;
+        var dataSource = MssqlConnectionFactory.DescribeDataSource(connection);
 
         _logger.LogInformation(
-            "Starting MSSQL differential backup. Database: '{Database}', Host: '{Host}:{Port}', " +
+            "Starting MSSQL differential backup. Database: '{Database}', DataSource: '{DataSource}', " +
             "SQL path: '{SqlPath}', Agent path: '{AgentPath}', BaseRecordId: '{BaseRecordId}'",
-            config.Database, connection.Host, connection.Port, sqlFilePath, agentFilePath, context.BaseBackupRecordId);
+            config.Database, dataSource, sqlFilePath, agentFilePath, context.BaseBackupRecordId);
 
         var escapedDb = config.Database.Replace("]", "]]");
         var escapedPath = sqlFilePath.Replace("'", "''");
@@ -242,7 +243,7 @@ SELECT @result;";
         if (HasError(ex, PermissionErrorNumbers))
         {
             return new BackupPermissionException(
-                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для MSSQL differential backup БД '{config.Database}'. " +
+                $"{MssqlConnectionFactory.DescribeUser(connection)} не имеет прав для MSSQL differential backup БД '{config.Database}'. " +
                 "Требуются права BACKUP DATABASE или членство в роли db_backupoperator, db_owner либо sysadmin.",
                 ex);
         }

@@ -1,6 +1,7 @@
 # Установка и запуск
 
 - [Требования](#требования)
+- [Linux (скрипт установки)](#linux-скрипт-установки)
 - [Linux (.deb / .rpm)](#linux-deb--rpm)
 - [Linux (ручная установка из zip)](#linux-ручная-установка-из-zip)
 - [Windows (служба)](#windows-служба)
@@ -18,6 +19,28 @@
 - `mongodump` / `mongorestore` в `PATH` — для MongoDB logical (backup + restore)
 - Для MSSQL внешние утилиты не требуются — агент работает по TDS через `Microsoft.Data.SqlClient` и `Microsoft.SqlServer.DacFx` in-process (logical `.bacpac`, physical `BACKUP DATABASE`)
 - Зарегистрированный агент на [backupster.io](https://backupster.io/) (нужен токен)
+
+## Linux (скрипт установки)
+
+Рекомендуемый способ для дистрибутивов с systemd. Скрипт определяет дистрибутив и архитектуру, скачивает последний `.deb` или `.rpm` с GitHub Releases, устанавливает пакет, интерактивно спрашивает токен (ввод скрыт, в историю команд не попадает) и запускает службу:
+
+```bash
+curl -fsSL https://app.backupster.io/install-agent.sh | sudo bash
+```
+
+Для self-hosted дашборда передайте его адрес — он подставится в подсказку при вводе:
+
+```bash
+curl -fsSL https://<ваш-дашборд>/install-agent.sh | sudo bash -s -- --dashboard-url https://<ваш-дашборд>
+```
+
+- Повторный запуск обновляет пакет до последней версии и сохраняет существующий `/etc/backupster-agent/env`.
+- Для замены токена или адреса дашборда добавьте `--reconfigure`.
+- Для автоматизации без терминала заранее создайте `/etc/backupster-agent/env` с заполненными `AgentSettings__Token` и `AgentSettings__DashboardUrl` — скрипт ничего не спрашивает и просто ставит пакет. Если `AgentSettings__DashboardUrl` в файле нет, скрипт допишет его сам из `--dashboard-url` или дефолтного адреса.
+
+После установки заполните `/var/lib/backupster-agent/config/appsettings.json` и перезапустите службу — см. шаг 4 раздела ниже. Ключ шифрования агент генерирует в шаблоне автоматически — **сохраните его в надёжном месте**, без него бэкапы не восстановить. Клиентские утилиты СУБД (`pg_dump`, `mysqldump` и т.д.) ставятся отдельно — см. [Требования](#требования).
+
+---
 
 ## Linux (.deb / .rpm)
 
@@ -55,7 +78,7 @@ journalctl -u backupster-agent -f
 
 ### 4. Заполните конфиг и перезапустите
 
-При первом запуске агент создаёт шаблон `/var/lib/backupster-agent/config/appsettings.json`. Заполните подключения к БД, ключ шифрования и хранилище (см. [configuration.md](configuration.md)), затем:
+При первом запуске агент создаёт шаблон `/var/lib/backupster-agent/config/appsettings.json` с уже сгенерированным ключом шифрования (`EncryptionSettings.Key`) — **сохраните ключ в надёжном месте**, без него бэкапы не восстановить. Заполните подключения к БД и хранилище (см. [configuration.md](configuration.md)), затем:
 
 ```bash
 sudo systemctl restart backupster-agent
@@ -89,6 +112,7 @@ After=network.target
 [Service]
 WorkingDirectory=/opt/backupster-agent
 ExecStart=/opt/backupster-agent/BackupsterAgent
+Environment=CONFIG_PATH=/opt/backupster-agent/config
 Environment=AgentSettings__Token=<токен>
 Environment=AgentSettings__DashboardUrl=<url дашборда>
 Restart=always
@@ -102,7 +126,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now backupster-agent
 ```
 
-При первом запуске агент создаст шаблон `/opt/backupster-agent/config/appsettings.json`. Заполните его и перезапустите службу:
+При первом запуске агент создаст шаблон `/opt/backupster-agent/config/appsettings.json` с уже сгенерированным ключом шифрования — **сохраните ключ в надёжном месте**. Заполните остальные поля и перезапустите службу:
 
 ```bash
 sudo systemctl restart backupster-agent
@@ -151,7 +175,7 @@ Start-Service BackupsterAgent
 
 ### 3. Заполните конфиг и перезапустите службу
 
-При первом запуске агент создаст шаблон `C:\Services\BackupsterAgent\config\appsettings.json`. Заполните его (подключения к БД, хранилище, ключ шифрования — см. [configuration.md](configuration.md)) и перезапустите службу:
+При первом запуске агент создаст шаблон `C:\Services\BackupsterAgent\config\appsettings.json` с уже сгенерированным ключом шифрования — **сохраните ключ в надёжном месте**. Заполните остальное (подключения к БД, хранилище — см. [configuration.md](configuration.md)) и перезапустите службу:
 
 ```powershell
 Restart-Service BackupsterAgent
@@ -189,7 +213,7 @@ dotnet run --project BackupsterAgent/BackupsterAgent.csproj
 
 Агент **не падает** если конфигурация не заполнена:
 
-- Нет ключа шифрования — логирует warning, пропускает бэкапы
+- Нет ключа шифрования — логирует warning, пропускает бэкапы. В новом шаблоне ключ генерируется автоматически; если конфиг создан вручную и ключ пустой — задайте его сами (см. [configuration.md](configuration.md))
 - Нет настроек хранилища у storage — при первом обращении клиент упадёт с явной ошибкой; другие БД с корректным storage продолжат работать
 - Нет баз данных — логирует warning, пропускает бэкапы
 - Token и DashboardUrl пустые — расписание не загружается, агент простаивает

@@ -48,9 +48,9 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
             if (isSysadmin || isOwner || isBackupOperator) return;
 
             throw new BackupPermissionException(
-                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для physical бэкапа БД '{database}'. " +
+                $"{MssqlConnectionFactory.DescribeUser(connection)} не имеет прав для physical бэкапа БД '{database}'. " +
                 "Требуется членство в server-роли sysadmin, либо в db_owner или db_backupoperator целевой БД. " +
-                $"Пример: USE [{database}]; ALTER ROLE db_backupoperator ADD MEMBER [{connection.Username}];");
+                $"Пример: USE [{database}]; ALTER ROLE db_backupoperator ADD MEMBER [{MssqlConnectionFactory.GrantMemberName(connection)}];");
         }
         catch (SqlException ex)
         {
@@ -75,11 +75,12 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
 
         var sqlFilePath = Path.Combine(outputPath, fileName);
         var agentFilePath = sqlFilePath;
+        var dataSource = MssqlConnectionFactory.DescribeDataSource(connection);
 
         _logger.LogInformation(
-            "Starting MSSQL physical backup. Database: '{Database}', Host: '{Host}:{Port}', " +
+            "Starting MSSQL physical backup. Database: '{Database}', DataSource: '{DataSource}', " +
             "SQL path: '{SqlPath}', Agent path: '{AgentPath}'",
-            config.Database, connection.Host, connection.Port, sqlFilePath, agentFilePath);
+            config.Database, dataSource, sqlFilePath, agentFilePath);
 
         var escapedDb = config.Database.Replace("]", "]]");
         var escapedPath = sqlFilePath.Replace("'", "''");
@@ -151,7 +152,7 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
         if (HasError(ex, PermissionErrorNumbers))
         {
             return new BackupPermissionException(
-                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для MSSQL physical backup БД '{config.Database}'. " +
+                $"{MssqlConnectionFactory.DescribeUser(connection)} не имеет прав для MSSQL physical backup БД '{config.Database}'. " +
                 "Требуются права BACKUP DATABASE или членство в роли db_backupoperator, db_owner либо sysadmin.",
                 ex);
         }
@@ -198,8 +199,8 @@ SELECT IS_SRVROLEMEMBER('sysadmin')      AS is_sysadmin,
         if (HasError(ex, 18456) || HasError(ex, PermissionErrorNumbers))
         {
             return new BackupPermissionException(
-                $"Не удалось проверить права MSSQL пользователя '{connection.Username}' подключения '{connection.Name}' для physical backup БД '{database}'. " +
-                "Проверьте логин, пароль и права пользователя.",
+                $"Не удалось проверить права MSSQL-пользователя подключения '{connection.Name}' для physical backup БД '{database}'. " +
+                "Проверьте учётные данные подключения и права пользователя.",
                 ex);
         }
 

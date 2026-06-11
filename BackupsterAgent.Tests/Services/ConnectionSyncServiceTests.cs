@@ -260,6 +260,154 @@ public sealed class ConnectionSyncServiceTests
     }
 
     [Test]
+    public async Task SyncAsync_MssqlConnectionUri_SendsSanitizedTopology()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.NoContent);
+        var service = Build(handler,
+        [
+            new ConnectionConfig
+            {
+                Name = "mssql-uri",
+                DatabaseType = DatabaseType.Mssql,
+                ConnectionUri = "Server=tcp:sql.example.net,1444;User ID=sql-user;Password=super-secret;Encrypt=True;TrustServerCertificate=False",
+            },
+        ]);
+
+        var ok = await service.SyncAsync();
+
+        Assert.That(ok, Is.True);
+        Assert.That(handler.Calls, Has.Count.EqualTo(1));
+
+        var payload = handler.Calls[0].DeserializeBody<ConnectionSyncRequestDto>();
+        Assert.That(payload, Is.Not.Null);
+        Assert.That(payload!.Connections, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(payload.Connections[0].Name, Is.EqualTo("mssql-uri"));
+            Assert.That(payload.Connections[0].DatabaseType, Is.EqualTo("Mssql"));
+            Assert.That(payload.Connections[0].Host, Is.EqualTo("sql.example.net"));
+            Assert.That(payload.Connections[0].Port, Is.EqualTo(1444));
+        });
+
+        var body = System.Text.Encoding.UTF8.GetString(handler.Calls[0].Body);
+        Assert.Multiple(() =>
+        {
+            Assert.That(body, Does.Not.Contain("super-secret"));
+            Assert.That(body, Does.Not.Contain("sql-user"));
+            Assert.That(body, Does.Not.Contain("TrustServerCertificate"));
+        });
+    }
+
+    [Test]
+    public async Task SyncAsync_MssqlMixedConnectionUriAndLegacyFields_SkipsHttpWithoutLeakingSecrets()
+    {
+        var handler = new CapturingHandler();
+        var logger = new CapturingLogger<ConnectionSyncService>();
+        var service = Build(handler,
+        [
+            new ConnectionConfig
+            {
+                Name = "mssql-mixed",
+                DatabaseType = DatabaseType.Mssql,
+                ConnectionUri = "Server=sql.example.net,1444;User ID=sql-user;Password=super-secret",
+                Host = "legacy-host",
+                Port = 15433,
+                Username = "legacy-user",
+                Password = "legacy-secret",
+            },
+        ],
+        logger: logger);
+
+        var ok = await service.SyncAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Is.Empty);
+        });
+
+        var logText = string.Join(Environment.NewLine, logger.Messages);
+        Assert.Multiple(() =>
+        {
+            Assert.That(logText, Does.Not.Contain("super-secret"));
+            Assert.That(logText, Does.Not.Contain("legacy-secret"));
+            Assert.That(logText, Does.Not.Contain("sql-user"));
+            Assert.That(logText, Does.Not.Contain("sql.example.net"));
+            Assert.That(logText, Does.Not.Contain("legacy-host"));
+        });
+    }
+
+    [Test]
+    public async Task SyncAsync_MssqlConnectionUriNamedInstance_SkipsHttpWithoutLeakingUriParts()
+    {
+        var handler = new CapturingHandler();
+        var logger = new CapturingLogger<ConnectionSyncService>();
+        var service = Build(handler,
+        [
+            new ConnectionConfig
+            {
+                Name = "mssql-uri",
+                DatabaseType = DatabaseType.Mssql,
+                ConnectionUri = "Server=sql.example.net\\reporting;User ID=sql-user;Password=super-secret;Encrypt=True",
+            },
+        ],
+        logger: logger);
+
+        var ok = await service.SyncAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Is.Empty);
+        });
+
+        var logText = string.Join(Environment.NewLine, logger.Messages);
+        Assert.Multiple(() =>
+        {
+            Assert.That(logText, Does.Contain("cannot be mapped"));
+            Assert.That(logText, Does.Not.Contain("super-secret"));
+            Assert.That(logText, Does.Not.Contain("sql-user"));
+            Assert.That(logText, Does.Not.Contain("sql.example.net"));
+            Assert.That(logText, Does.Not.Contain("reporting"));
+        });
+    }
+
+    [Test]
+    public async Task SyncAsync_InvalidMssqlConnectionUri_DoesNotLogSensitiveUriParts()
+    {
+        var handler = new CapturingHandler();
+        var logger = new CapturingLogger<ConnectionSyncService>();
+        var service = Build(handler,
+        [
+            new ConnectionConfig
+            {
+                Name = "mssql-uri",
+                DatabaseType = DatabaseType.Mssql,
+                ConnectionUri = "Server=sql.example.net;User ID=sql-user;Password=super-secret;Unsupported Keyword=value",
+            },
+        ],
+        logger: logger);
+
+        var ok = await service.SyncAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Is.Empty);
+        });
+
+        var logText = string.Join(Environment.NewLine, logger.Messages);
+        Assert.Multiple(() =>
+        {
+            Assert.That(logText, Does.Contain("ConnectionUri is invalid"));
+            Assert.That(logText, Does.Not.Contain("super-secret"));
+            Assert.That(logText, Does.Not.Contain("sql-user"));
+            Assert.That(logText, Does.Not.Contain("Unsupported Keyword"));
+            Assert.That(logText, Does.Not.Contain("sql.example.net"));
+        });
+    }
+
+    [Test]
     public async Task SyncAsync_EmptyToken_SkipsHttpAndReturnsFalse()
     {
         var handler = new CapturingHandler();

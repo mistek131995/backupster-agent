@@ -30,7 +30,7 @@ var defaultConfigDir = OperatingSystem.IsWindows()
     ? Path.Combine(AppContext.BaseDirectory, "config")
     : "/app/config";
 var configDir = Environment.GetEnvironmentVariable("CONFIG_PATH") ?? defaultConfigDir;
-ConfigBootstrapper.EnsureTemplate(configDir);
+var bootstrapResult = ConfigBootstrapper.EnsureTemplate(configDir);
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -191,5 +191,22 @@ var host = builder.Build();
 
 var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("BackupsterAgent");
 startupLogger.LogInformation("BackupsterAgent {Version} starting", AgentVersion.Current);
+
+if (bootstrapResult.TemplateCreated)
+{
+    startupLogger.LogInformation(
+        "Config not found. Template created at '{FilePath}'. Fill in the required fields and restart the agent.",
+        bootstrapResult.FilePath);
+    startupLogger.LogWarning(
+        "Encryption key generated in '{FilePath}' (EncryptionSettings.Key). Back it up securely: backups cannot be restored without it.",
+        bootstrapResult.FilePath);
+}
+else if (bootstrapResult.Failure is not null)
+{
+    startupLogger.LogError(
+        bootstrapResult.Failure,
+        "Failed to create config template at '{FilePath}'",
+        bootstrapResult.FilePath);
+}
 
 host.Run();

@@ -19,7 +19,7 @@
 
 Конфиг разбит на три списка:
 
-- `Connections[]` — реквизиты серверов БД (хост, логин, пароль, тип).
+- `Connections[]` — реквизиты серверов БД (хост, логин, пароль, тип) или строка подключения там, где она поддерживается.
 - `Storages[]` — хранилища для бэкапов (S3, SFTP, Azure Blob, WebDAV или локальный путь); у каждого уникальное имя и собственный набор настроек.
 - `Databases[]` — список баз; каждая ссылается на подключение и на хранилище по имени.
 
@@ -50,6 +50,11 @@
     "Port": 1433,
     "Username": "sa",
     "Password": "secret"
+  },
+  {
+    "Name": "reporting-mssql-uri",
+    "DatabaseType": "Mssql",
+    "ConnectionUri": "Server=tcp:sql.example.net,1433;Integrated Security=true;Encrypt=True;TrustServerCertificate=False"
   },
   {
     "Name": "local-mongo",
@@ -113,6 +118,8 @@
 - `ConnectionName` и `StorageName` у БД обязаны ссылаться на существующие записи — иначе эта БД будет пропущена с ошибкой в логе, остальные продолжат работать.
 - `OutputPath` — папка для временных файлов дампа. Для MSSQL physical этот же путь передаётся SQL Server в `BACKUP DATABASE ... TO DISK` / `RESTORE DATABASE ... FROM DISK`, поэтому агент и SQL Server должны видеть каталог одинаково. Файлы удаляются после загрузки или restore.
 - `FilePaths` — список путей к файлам или директориям для файлового бэкапа. Директории обходятся рекурсивно. Файлы режутся на content-defined chunks (FastCDC, ~4 МиБ) и дедуплицируются внутри одного хранилища. Работает на всех провайдерах: S3, SFTP, Azure Blob, WebDAV, LocalFs. На SFTP операции идут через persistent SSH-сессию серийно; на WebDAV каждый чанк требует отдельный HTTPS round-trip. Поле необязательное.
+- Для MSSQL используйте **либо** `ConnectionUri` — полную SQL Server connection string, **либо** `Host` + `Port` + `Username` + `Password`. Смешанный вариант не синхронизируется на дашборд и не используется для backup/restore. Агент программно меняет в строке только `Initial Catalog`/`Database`, чтобы открыть нужную БД или `master` для `BACKUP`/`RESTORE`.
+- Для topology sync MSSQL с `ConnectionUri` агент извлекает только безопасные `host`/`port` из `Data Source` (`server`, `server,1433`, `tcp:server,1433`). Если `Data Source` нельзя надёжно представить как host/port (например, named instance, LocalDB, named pipes, административное подключение `admin:`), sync подключения пропускается с warning; backup/restore по `ConnectionUri` не блокируется. Локальные синонимы `.` и `(local)` отображаются как `localhost`.
 - Для MongoDB используйте **либо** `ConnectionUri`, **либо** `Host` + `Port` + `Username` + `Password`. Смешанный вариант не синхронизируется на дашборд и не используется для backup/restore.
 - `BinPath` — **для PostgreSQL, MySQL и MongoDB**, необязательное. Каталог с клиентскими бинарниками: `pg_dump`/`pg_basebackup`/`psql`/`pg_ctl` для PG, `mysqldump`/`mysql`/`xtrabackup`/`xbstream`/`mysqld` для MySQL, `mongodump`/`mongorestore` для MongoDB. Override авто-резолва. По умолчанию агент сам ищет клиент: для PG — под мажорную версию сервера (реестр Windows + стандартные каталоги установки → `PATH`); для MySQL — `C:\Program Files\MySQL\MySQL Server *\bin` (высшая версия) / `/usr/local/mysql/bin` → `PATH`; для MongoDB — стандартные каталоги MongoDB Database Tools / MongoDB Server → `PATH`. Задавайте поле только при нестандартной установке, когда авто-резолв не находит нужный каталог, либо когда `PATH` службы не содержит нужный bin-каталог. Для MSSQL поле не используется. Подробнее — [postgres.md](postgres.md), [mysql.md](mysql.md).
 
@@ -157,7 +164,9 @@
 }
 ```
 
-Сгенерировать ключ:
+При создании шаблона `appsettings.json` агент генерирует ключ автоматически. **Сохраните его в надёжном месте** — без ключа бэкапы восстановить невозможно, а его смена ломает дешифровку уже сделанных бэкапов.
+
+Если конфиг создан вручную и ключ пустой, сгенерируйте его сами:
 
 ```bash
 # Linux / macOS

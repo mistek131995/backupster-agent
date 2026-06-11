@@ -47,13 +47,13 @@ SELECT
 
         if (!isSysadmin && !isDbcreator)
             throw new RestorePermissionException(
-                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для восстановления БД '{targetDatabase}'. " +
+                $"{MssqlConnectionFactory.DescribeUser(connection)} не имеет прав для восстановления БД '{targetDatabase}'. " +
                 "Требуется членство в server-роли sysadmin или dbcreator. " +
-                $"Выдайте права: ALTER SERVER ROLE dbcreator ADD MEMBER [{connection.Username}];.");
+                $"Выдайте права: ALTER SERVER ROLE dbcreator ADD MEMBER [{MssqlConnectionFactory.GrantMemberName(connection)}];.");
 
         if (targetExists && !canDropExisting)
             throw new RestorePermissionException(
-                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав удалить существующую БД '{targetDatabase}' для перезаписи. " +
+                $"{MssqlConnectionFactory.DescribeUser(connection)} не имеет прав удалить существующую БД '{targetDatabase}' для перезаписи. " +
                 "Требуется членство в server-роли sysadmin, владение БД (db_owner) или CONTROL permission на эту БД.");
     }
 

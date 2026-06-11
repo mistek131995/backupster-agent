@@ -41,13 +41,13 @@ SELECT
 
         if (!isSysadmin && !isDbcreator)
             throw new RestorePermissionException(
-                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав для восстановления БД '{targetDatabase}'. " +
+                $"{MssqlConnectionFactory.DescribeUser(connection)} не имеет прав для восстановления БД '{targetDatabase}'. " +
                 "Требуется членство в server-роли sysadmin или dbcreator. " +
-                $"Выдайте права: ALTER SERVER ROLE dbcreator ADD MEMBER [{connection.Username}];.");
+                $"Выдайте права: ALTER SERVER ROLE dbcreator ADD MEMBER [{MssqlConnectionFactory.GrantMemberName(connection)}];.");
 
         if (targetExists && !canDropExisting)
             throw new RestorePermissionException(
-                $"Пользователь '{connection.Username}' подключения '{connection.Name}' не имеет прав удалить существующую БД '{targetDatabase}' для перезаписи. " +
+                $"{MssqlConnectionFactory.DescribeUser(connection)} не имеет прав удалить существующую БД '{targetDatabase}' для перезаписи. " +
                 "Требуется членство в server-роли sysadmin, владение БД (db_owner) или CONTROL permission на эту БД.");
     }
 
@@ -77,9 +77,11 @@ SELECT
 
     public async Task RestoreAsync(ConnectionConfig connection, string targetDatabase, string sourceDatabaseName, string restoreFilePath, CancellationToken ct)
     {
+        var dataSource = MssqlConnectionFactory.DescribeDataSource(connection);
+
         logger.LogInformation(
-            "Starting MSSQL logical restore. Database: '{Database}', Host: '{Host}:{Port}', Source: '{Source}'",
-            targetDatabase, connection.Host, connection.Port, restoreFilePath);
+            "Starting MSSQL logical restore. Database: '{Database}', DataSource: '{DataSource}', Source: '{Source}'",
+            targetDatabase, dataSource, restoreFilePath);
 
         var dac = new DacServices(MssqlConnectionFactory.BuildMasterConnectionString(connection));
         dac.Message += OnDacMessage;

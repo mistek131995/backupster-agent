@@ -1,8 +1,54 @@
+using System.Security.Cryptography;
+
 namespace BackupsterAgent.Services.Common;
 
 public static class ConfigBootstrapper
 {
-    private const string Template = """
+    public sealed record Result(bool TemplateCreated, string FilePath, Exception? Failure);
+
+    public static Result EnsureTemplate(string configDir)
+    {
+        var filePath = Path.Combine(configDir, "appsettings.json");
+
+        if (File.Exists(filePath))
+            return new Result(false, filePath, null);
+
+        try
+        {
+            var encryptionKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            var template = BuildTemplate(encryptionKey);
+
+            if (OperatingSystem.IsWindows())
+            {
+                Directory.CreateDirectory(configDir);
+                File.WriteAllText(filePath, template);
+            }
+            else
+            {
+                const UnixFileMode ownerOnlyDirectory = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+                Directory.CreateDirectory(configDir, ownerOnlyDirectory);
+                File.SetUnixFileMode(configDir, ownerOnlyDirectory);
+
+                var fileOptions = new FileStreamOptions
+                {
+                    Mode = FileMode.CreateNew,
+                    Access = FileAccess.Write,
+                    UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite
+                };
+                using var stream = new FileStream(filePath, fileOptions);
+                using var writer = new StreamWriter(stream);
+                writer.Write(template);
+            }
+
+            return new Result(true, filePath, null);
+        }
+        catch (Exception ex)
+        {
+            return new Result(false, filePath, ex);
+        }
+    }
+
+    private static string BuildTemplate(string encryptionKey) => $$"""
         {
           "Connections": [
             {
@@ -38,30 +84,8 @@ public static class ConfigBootstrapper
           ],
           "FileSets": [],
           "EncryptionSettings": {
-            "Key": ""
+            "Key": "{{encryptionKey}}"
           }
         }
         """;
-
-    public static void EnsureTemplate(string configDir)
-    {
-        var filePath = Path.Combine(configDir, "appsettings.json");
-
-        if (File.Exists(filePath))
-            return;
-
-        try
-        {
-            Directory.CreateDirectory(configDir);
-            File.WriteAllText(filePath, Template);
-            Console.WriteLine(
-                $"[ConfigBootstrapper] Config not found. Template created at '{filePath}'. " +
-                "Fill in the required fields and restart the container.");
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine(
-                $"[ConfigBootstrapper] Failed to create config template at '{filePath}': {ex.Message}");
-        }
-    }
 }

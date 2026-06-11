@@ -113,6 +113,30 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
                     continue;
                 }
             }
+            else if (conn.DatabaseType == DatabaseType.Mssql && MssqlConnectionFactory.HasConnectionUri(conn))
+            {
+                try
+                {
+                    var endpoint = MssqlConnectionFactory.BuildTopologyEndpoint(conn);
+                    if (endpoint is null)
+                    {
+                        _logger.LogWarning(
+                            "ConnectionSyncService: skipping MSSQL connection '{Name}' because ConnectionUri Data Source cannot be mapped to host/port topology.",
+                            conn.Name);
+                        continue;
+                    }
+
+                    host = endpoint.Host;
+                    port = endpoint.Port;
+                }
+                catch (InvalidOperationException)
+                {
+                    _logger.LogWarning(
+                        "ConnectionSyncService: skipping MSSQL connection '{Name}' because ConnectionUri is invalid. Check MSSQL connection settings.",
+                        conn.Name);
+                    continue;
+                }
+            }
 
             if (string.IsNullOrWhiteSpace(host))
             {
