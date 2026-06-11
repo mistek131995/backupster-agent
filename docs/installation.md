@@ -13,7 +13,9 @@
 
 - Готовые артефакты (`.deb`, `.rpm`, `linux-x64.zip`, `win-x64.zip`) self-contained — .NET Runtime ставить не нужно. SDK нужен только для сборки из исходников.
 - `pg_dump` / `psql` в `PATH` — для PostgreSQL (backup + restore)
-- `mysqldump` / `mysql` в `PATH` — для MySQL/MariaDB (backup + restore)
+- `mysqldump` / `mysql` в `PATH` — для MySQL/MariaDB logical (backup + restore)
+- `xtrabackup` / `xbstream` в `PATH` — для MySQL/MariaDB physical на Linux
+- `mongodump` / `mongorestore` в `PATH` — для MongoDB logical (backup + restore)
 - Для MSSQL внешние утилиты не требуются — агент работает по TDS через `Microsoft.Data.SqlClient` и `Microsoft.SqlServer.DacFx` in-process (logical `.bacpac`, physical `BACKUP DATABASE`)
 - Зарегистрированный агент на [backupster.io](https://backupster.io/) (нужен токен)
 
@@ -31,7 +33,7 @@ sudo apt install ./backupster-agent_*_amd64.deb
 sudo dnf install ./backupster-agent-*.x86_64.rpm
 ```
 
-Дополнительно поставьте клиент СУБД: `pg_dump` / `psql` (PostgreSQL) или `mysqldump` / `mysql` (MySQL / MariaDB). Для MSSQL внешних бинарников не требуется.
+Дополнительно поставьте клиент СУБД: `pg_dump` / `psql` (PostgreSQL), `mysqldump` / `mysql` (MySQL / MariaDB), `mongodump` / `mongorestore` (MongoDB Database Tools). Для MySQL physical поставьте Percona XtraBackup (`xtrabackup` / `xbstream`). Для MSSQL внешних бинарников не требуется.
 
 ### 2. Впишите токен в env-файл
 
@@ -123,9 +125,10 @@ Expand-Archive -Path "BackupsterAgent-*-win-x64.zip" -DestinationPath "C:\Servic
 
 - **PostgreSQL** — `pg_dump` / `psql` ([PostgreSQL Server](https://www.postgresql.org/download/windows/) или Command Line Tools).
 - **MySQL / MariaDB** — `mysqldump` / `mysql` из [MySQL Community Server](https://dev.mysql.com/downloads/mysql/) или MariaDB.
+- **MongoDB** — `mongodump` / `mongorestore` из MongoDB Database Tools.
 - **MSSQL** — клиентских утилит не нужно, агент работает по TDS in-process.
 
-Убедитесь, что каталоги с `pg_dump.exe` / `mysqldump.exe` попали в системную переменную `Path`, иначе служба их не увидит.
+Убедитесь, что каталоги с `pg_dump.exe` / `mysqldump.exe` / `mongodump.exe` / `mongorestore.exe` попали в системную переменную `Path`, иначе служба их не увидит. MySQL physical на Windows не поддерживается — используйте logical-режим.
 
 ### 2. Зарегистрируйте службу Windows
 

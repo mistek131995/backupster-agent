@@ -112,9 +112,9 @@
 - `Name` подключения и `Name` хранилища должны быть уникальны в пределах своих списков.
 - `ConnectionName` и `StorageName` у БД обязаны ссылаться на существующие записи — иначе эта БД будет пропущена с ошибкой в логе, остальные продолжат работать.
 - `OutputPath` — папка для временных файлов дампа. Для MSSQL physical этот же путь передаётся SQL Server в `BACKUP DATABASE ... TO DISK` / `RESTORE DATABASE ... FROM DISK`, поэтому агент и SQL Server должны видеть каталог одинаково. Файлы удаляются после загрузки или restore.
-- `FilePaths` — список путей к файлам или директориям для файлового бэкапа. Директории обходятся рекурсивно. Файлы режутся на content-defined chunks (FastCDC, ~4 МиБ) и дедуплицируются внутри одного хранилища. Работает на S3, Azure Blob и LocalFs (везде, где есть дешёвый `HEAD`/листинг для дедупа). На SFTP и WebDAV дамп загрузится, файлы пропустятся с warning. Поле необязательное.
+- `FilePaths` — список путей к файлам или директориям для файлового бэкапа. Директории обходятся рекурсивно. Файлы режутся на content-defined chunks (FastCDC, ~4 МиБ) и дедуплицируются внутри одного хранилища. Работает на всех провайдерах: S3, SFTP, Azure Blob, WebDAV, LocalFs. На SFTP операции идут через persistent SSH-сессию серийно; на WebDAV каждый чанк требует отдельный HTTPS round-trip. Поле необязательное.
 - Для MongoDB используйте **либо** `ConnectionUri`, **либо** `Host` + `Port` + `Username` + `Password`. Смешанный вариант не синхронизируется на дашборд и не используется для backup/restore.
-- `BinPath` — **для PostgreSQL, MySQL и MongoDB**, необязательное. Каталог с клиентскими бинарниками: `pg_dump`/`pg_basebackup`/`psql`/`pg_ctl` для PG, `mysqldump`/`mysql` для MySQL, `mongodump`/`mongorestore` для MongoDB. Override авто-резолва. По умолчанию агент сам ищет клиент: для PG — под мажорную версию сервера (реестр Windows + стандартные каталоги установки → `PATH`); для MySQL — `C:\Program Files\MySQL\MySQL Server *\bin` (высшая версия) / `/usr/local/mysql/bin` → `PATH`; для MongoDB — стандартные каталоги MongoDB Database Tools / MongoDB Server → `PATH`. Задавайте поле только при нестандартной установке, когда авто-резолв не находит нужный каталог, либо когда `PATH` службы не содержит нужный bin-каталог. Для MSSQL поле не используется. Подробнее — [postgres.md](postgres.md), [mysql.md](mysql.md).
+- `BinPath` — **для PostgreSQL, MySQL и MongoDB**, необязательное. Каталог с клиентскими бинарниками: `pg_dump`/`pg_basebackup`/`psql`/`pg_ctl` для PG, `mysqldump`/`mysql`/`xtrabackup`/`xbstream`/`mysqld` для MySQL, `mongodump`/`mongorestore` для MongoDB. Override авто-резолва. По умолчанию агент сам ищет клиент: для PG — под мажорную версию сервера (реестр Windows + стандартные каталоги установки → `PATH`); для MySQL — `C:\Program Files\MySQL\MySQL Server *\bin` (высшая версия) / `/usr/local/mysql/bin` → `PATH`; для MongoDB — стандартные каталоги MongoDB Database Tools / MongoDB Server → `PATH`. Задавайте поле только при нестандартной установке, когда авто-резолв не находит нужный каталог, либо когда `PATH` службы не содержит нужный bin-каталог. Для MSSQL поле не используется. Подробнее — [postgres.md](postgres.md), [mysql.md](mysql.md).
 
 ---
 
@@ -136,14 +136,14 @@
 ```
 
 - `Name` — уникальное имя набора. Используется как идентификатор в дашборде.
-- `StorageName` — ссылается на запись в `Storages[]` по имени. Должно указывать на S3-, Azure Blob- или LocalFs-хранилище — SFTP и WebDAV для file-set'ов не поддерживаются.
+- `StorageName` — ссылается на запись в `Storages[]` по имени. Может указывать на любой поддерживаемый провайдер: S3, SFTP, Azure Blob, WebDAV или LocalFs.
 - `Paths` — список путей к файлам или директориям. Директории обходятся рекурсивно.
 
 Пайплайн: **Open → Capture → Finalize** — тот же content-defined chunking (FastCDC, ~4 МиБ) и дедупликация по sha256, что и у файлового этапа БД-бэкапа. Дамп базы не создаётся.
 
 Расписание — индивидуальное per-file-set, задаётся через дашборд.
 
-**Работает на S3, Azure Blob и LocalFs.** При указании SFTP- или WebDAV-хранилища бэкап завершится с ошибкой и статусом `failed` в дашборде.
+**Работает на всех провайдерах:** S3, SFTP, Azure Blob, WebDAV, LocalFs. На SFTP операции идут серийно через persistent SSH-сессию; на WebDAV каждый чанк требует отдельный HTTPS round-trip.
 
 > Набор файлов регистрируется в дашборде автоматически при первом открытии записи бэкапа — отдельной настройки через UI не требуется.
 
@@ -354,13 +354,15 @@ AgentSettings__DashboardUrl=http://your-server:8080
 ```
 {database}/{yyyy-MM-dd_HH-mm-ss}/
   {database}_{yyyyMMdd_HHmmss}.sql.gz.enc    ← PostgreSQL / MySQL дамп (logical)
+  {database}_{yyyyMMdd_HHmmss}.archive.gz.enc ← MongoDB дамп (logical, mongodump --archive)
+  {database}_{yyyyMMdd_HHmmss}.xbstream.gz.enc ← MySQL physical (XtraBackup)
   {database}_{yyyyMMdd_HHmmss}.tar.gz.enc    ← PostgreSQL physical (pg_basebackup, архив PGDATA + WAL)
   {database}_{yyyyMMdd_HHmmss}.bacpac.enc    ← MSSQL дамп (logical, через DacFx)
   {database}_{yyyyMMdd_HHmmss}.bak.enc       ← MSSQL дамп (physical, через BACKUP DATABASE)
   manifest.json.gz.enc                       ← манифест файлового бэкапа (если FilePaths непуст)
   manifest.json.enc                          ← легаси-формат старых бэкапов (читается новым агентом)
 
-chunks/{sha256}                              ← общий пул дедуплицированных чанков (S3 / Azure Blob / LocalFs)
+chunks/{sha256}                              ← общий пул дедуплицированных чанков (S3 / SFTP / Azure Blob / WebDAV / LocalFs)
 ```
 
 Манифест нового формата — gzip-сжатый JSON, зашифрованный framed-GCM; reader стримит его через `PipeReader` + `Utf8JsonReader` без полного разворачивания в RAM. Это позволяет бэкапить и восстанавливать файловые хранилища с миллионами мелких файлов без всплеска памяти.

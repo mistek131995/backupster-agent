@@ -25,6 +25,7 @@
 - **[docs/postgres.md](docs/postgres.md)** — логический бэкап (`pg_dump`/`psql`) и физический (`pg_basebackup`): права, сценарии развёртывания, ограничения.
 - **[docs/mssql.md](docs/mssql.md)** — логический бэкап (`.bacpac` через DacFx, без внешних бинарников) и физический (`.bak` через `OutputPath`): права, сценарии, ограничения.
 - **[docs/mysql.md](docs/mysql.md)** — логический бэкап (`mysqldump`) и физический (Percona XtraBackup): права, требования к инфраструктуре, ограничения.
+- **MongoDB** — логический бэкап (`mongodump`/`mongorestore`) через `ConnectionUri` или `Host` + `Port` + credentials; настройки описаны в [docs/configuration.md](docs/configuration.md). Physical-режим для MongoDB сейчас не реализован.
 
 ---
 
@@ -40,11 +41,11 @@ Dump → Encrypt → Upload → Cleanup → File Backup (S3 / SFTP / Azure Blob 
 
 Три режима бэкапа на БД, у каждого своё независимое cron-расписание:
 
-- **Logical** — для PG/MySQL/MSSQL. Полный снимок одной БД в виде SQL/`.bacpac`. Универсальный, легко переносится между версиями и серверами.
+- **Logical** — для PG/MySQL/MSSQL/MongoDB. Полный снимок одной БД в виде SQL/`.bacpac`/MongoDB archive. Универсальный, легко переносится между версиями и серверами.
 - **Physical** — для PG/MySQL/MSSQL. Полный снимок на уровне файлов/страниц. Быстрее на больших БД, требовательнее к инфраструктуре. MySQL — через Percona XtraBackup (агент и MySQL на одном хосте), всегда снимает весь инстанс/datadir; имя БД используется как привязка записи и расписания, а не как scope бэкапа. Подробности — [postgres.md](docs/postgres.md), [mssql.md](docs/mssql.md), [mysql.md](docs/mysql.md).
 - **PhysicalDifferential** — для PG 17+ и MSSQL. Снимок только изменений с момента последнего полного физического бэкапа; восстановление склеивает цепочку FULL+DIFFs обратно. PG-провайдер использует `pg_basebackup --incremental` + `pg_combinebackup`, MSSQL — `BACKUP DATABASE ... WITH DIFFERENTIAL`. Без живого FULL дифференциалы не запускаются — DIFF-расписания молча пропускают тики с предупреждением в логе.
 
-1. **Dump** — для PostgreSQL вызывает `pg_dump` (logical) или `pg_basebackup` (physical/differential), для MySQL — `mysqldump` (logical, стрим в gzip без промежуточного `.sql`) или `xtrabackup --backup --stream=xbstream` (physical, полный инстанс/datadir, стрим в gzip), для MSSQL работает in-process по TDS через `Microsoft.Data.SqlClient` + `Microsoft.SqlServer.DacFx` (logical — `.bacpac`, physical/differential — T-SQL `BACKUP DATABASE` с/без `WITH DIFFERENTIAL`), внешние бинарники MSSQL не требуются.
+1. **Dump** — для PostgreSQL вызывает `pg_dump` (logical) или `pg_basebackup` (physical/differential), для MySQL — `mysqldump` (logical, стрим в gzip без промежуточного `.sql`) или `xtrabackup --backup --stream=xbstream` (physical, полный инстанс/datadir, стрим в gzip), для MSSQL работает in-process по TDS через `Microsoft.Data.SqlClient` + `Microsoft.SqlServer.DacFx` (logical — `.bacpac`, physical/differential — T-SQL `BACKUP DATABASE` с/без `WITH DIFFERENTIAL`), для MongoDB вызывает `mongodump --archive` и сжимает поток в gzip. Внешние бинарники MSSQL не требуются.
 2. **Encrypt** — AES-256-GCM, дамп режется на фреймы по 1 МиБ (каждый со своим nonce и tag). Файл начинается с header `BK02`; AAD каждого фрейма — его порядковый номер (uint32 big-endian), что делает перестановку фреймов или склейку с другим дампом невалидной. Чанки файлового бэкапа шифруются с AAD = sha256 плейнтекста. Манифест нового формата шифруется тем же framed-GCM; легаси-манифест (`manifest.json.enc`) шифрован одним блоком с AAD = UTF-8 своего object key. Добавляется суффикс `.enc`.
 3. **Upload** — загружает зашифрованный файл в выбранное хранилище (S3, SFTP, Azure Blob, WebDAV или локальный путь / смонтированную сетевую шару).
 4. **Cleanup** — удаляет оба локальных файла (дамп + зашифрованный), всегда, даже при ошибке.
@@ -85,19 +86,19 @@ Backup и restore/delete на одном агенте не идут паралл
 
 ### Поддерживаемое
 
-- **БД:** PostgreSQL, MySQL/MariaDB, MSSQL.
-- **Режимы бэкапа БД:** Logical (все три СУБД), Physical (PG, MySQL, MSSQL), PhysicalDifferential (PG 17+ и MSSQL).
+- **БД:** PostgreSQL, MySQL/MariaDB, MSSQL, MongoDB.
+- **Режимы бэкапа БД:** Logical (PostgreSQL, MySQL/MariaDB, MSSQL, MongoDB), Physical (PG, MySQL, MSSQL), PhysicalDifferential (PG 17+ и MSSQL). MongoDB physical сейчас не реализован.
 - **Файловые наборы:** произвольные каталоги с рекурсивным обходом (S3, SFTP, Azure Blob, WebDAV, LocalFs).
 - **Хранилища:** все провайдеры — полный функционал, включая дедуплицированный файловый бэкап, file-set'ы и chunk GC.
   - **S3-совместимые** (MinIO, Yandex Object Storage, AWS S3, Cloudflare R2), **Azure Blob**, **LocalFs** (локальная папка / смонтированная NFS/CIFS-шара) — максимальная скорость.
   - **SFTP** — одна persistent SSH-сессия, операции серийные под семафором; ~50–150 мс на чанк, заметно медленнее S3 на больших коллекциях.
   - **WebDAV** (Яндекс.Диск, Nextcloud, ownCloud, Apache mod_dav) — каждая операция чанка отдельный HTTPS round-trip; ~200–500 мс на чанк, на коллекциях >10k чанков предпочтительнее S3/SFTP/LocalFs. Листинг идёт через `PROPFIND Depth: 1` BFS (без `Depth: infinity` — Яндекс.Диск его не отдаёт).
 
-### Клиентские бинарники PostgreSQL
+### Клиентские бинарники БД
 
 Агент сам выбирает `pg_dump`/`pg_basebackup`/`psql`/`pg_ctl` под мажорную версию сервера, к которому подключается: спрашивает `SHOW server_version_num` и ищет бинарь в стандартном месте установки (Windows-реестр + `C:\Program Files\PostgreSQL\<MAJOR>\bin`; на Linux — `/usr/lib/postgresql/<MAJOR>/bin` для Debian/Ubuntu и `/usr/pgsql-<MAJOR>/bin` для RHEL/PGDG). Если каталог не найден — fallback на `PATH`. На хосте с несколькими PG-версиями это избавляет от ошибок `incompatible server version` и от возни с `PATH` / перезагрузкой Windows для обновления кеша `services.exe`.
 
-Нестандартную установку можно задать явно — полем `BinPath` в `Connections[]` (единое поле для PG и MySQL; см. [docs/postgres.md](docs/postgres.md), [docs/mysql.md](docs/mysql.md)).
+Нестандартную установку можно задать явно — полем `BinPath` в `Connections[]` (единое поле для PostgreSQL, MySQL/MariaDB и MongoDB; см. [docs/postgres.md](docs/postgres.md), [docs/mysql.md](docs/mysql.md), [docs/configuration.md](docs/configuration.md)). Для MySQL physical в том же каталоге должны быть `xtrabackup` и `xbstream`; для MongoDB logical — `mongodump` и `mongorestore`.
 
 ---
 
@@ -142,7 +143,7 @@ Backup и restore/delete на одном агенте не идут паралл
 
 Благодаря этому регистрация агента на дашборде — это одно поле «Название»: после создания получаете токен, вставляете его в `appsettings.json` на хосте агента, и все сущности появятся в UI автоматически при старте.
 
-**Credentials никогда не покидают хост агента.** `Username`, `Password` и MongoDB `ConnectionUri` из `Connections[]`, ключ шифрования, ключи S3/SFTP/Azure Blob/WebDAV (у LocalFs credentials нет — только путь) — всё живёт только в `appsettings.json` и используется локально при вызове `pg_dump` / `mysqldump` / `mongodump`, подключении к MSSQL по TDS (`SqlClient` + DacFx) и загрузке в хранилище.
+**Credentials никогда не покидают хост агента.** `Username`, `Password` и MongoDB `ConnectionUri` из `Connections[]`, ключ шифрования, ключи S3/SFTP/Azure Blob/WebDAV (у LocalFs credentials нет — только путь) — всё живёт только в `appsettings.json` и используется локально при вызове `pg_dump` / `mysqldump` / `xtrabackup` / `mongodump`, подключении к MSSQL по TDS (`SqlClient` + DacFx) и загрузке в хранилище.
 
 Каждый sync выполняется один раз на старте. Если дашборд недоступен — агент ретраит с экспоненциальным backoff (до 5 минут между попытками). После успеха sync-worker останавливается. Чтобы повторить синхронизацию (например, после добавления новой БД или переименования file-set'а в `appsettings.json`), перезапустите агент.
 

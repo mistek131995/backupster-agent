@@ -21,9 +21,11 @@ Poll task → Download → Decrypt → Restore DB → Restore Files → Report
    - **Postgres physical** — остановка кластера через `systemctl` / Windows Service / `pg_ctl` → атомарный swap PGDATA (`Directory.Move`) → запуск тем же способом. Восстанавливается **весь кластер целиком**, не одна БД. Требует доступа к PGDATA и прав на управление сервисом, если кластер managed — см. [postgres.md](postgres.md).
    - **Postgres physicalDifferential** — скачивание всей цепочки (FULL + промежуточные DIFF) → распаковка каждого звена в свой подкаталог → склейка через `pg_combinebackup -o <staging> chain-0 chain-1 …` → дальше та же swap-логика, что у physical. Требует PostgreSQL 17+ и `pg_combinebackup` в PATH/`BinPath`. Подробности — в [postgres.md](postgres.md#дифференциальный-бэкап).
    - **MySQL logical** — `DROP DATABASE IF EXISTS` → `CREATE DATABASE` → `mysql` поверх stdin со стримом `gzip` (без промежуточного `.sql`).
+   - **MySQL physical** — распаковка `.xbstream.gz` через `xbstream` → `xtrabackup --prepare` → остановка MySQL → атомарная подмена `datadir` → запуск MySQL и health-check. Восстанавливается **весь инстанс целиком**, не одна БД; Windows не поддерживается. Подробности — в [mysql.md](mysql.md#физический-бэкап-xtrabackup).
    - **MSSQL logical** — `DROP DATABASE IF EXISTS` → `DacServices.ImportBacpac` по TDS (in-process, без внешних бинарников).
    - **MSSQL physical** — `DROP DATABASE IF EXISTS` → `RESTORE DATABASE ... WITH FILE = 1, REPLACE, RECOVERY` + автоматические `MOVE`-клозы для логических имён файлов.
    - **MSSQL physicalDifferential** — скачивание цепочки → `RESTORE DATABASE [target] FROM DISK = '<full>.bak' WITH FILE = 1, REPLACE, NORECOVERY, MOVE ...` → `RESTORE DATABASE [target] FROM DISK = '<last-diff>.bak' WITH FILE = 1, RECOVERY`. Применяется только последний DIFF цепочки — SQL Server DIFF кумулятивный, промежуточные `.bak` не нужны (но скачиваются ради целостности). Подробности — в [mssql.md](mssql.md#дифференциальный-бэкап).
+   - **MongoDB logical** — `DropDatabase` target-БД → `mongorestore --archive --drop`; при восстановлении под другим именем используются `--nsFrom` / `--nsTo`.
 
    Если file-set-бэкап (`DumpObjectKey` пустой) — этот шаг пропускается полностью, выполняется только пункт 3.
 3. **File restore** — если в бэкапе были файлы (`ManifestKey`), скачивает зашифрованный манифест, поштучно собирает каждый файл из чанков, атомарно переименовывает `.restore-tmp` → target. Падение одного файла не валит задачу — статус `partial` с подробностями.
@@ -101,12 +103,21 @@ GRANT CREATE, DROP ON *.* TO 'restore_user'@'%';
 FLUSH PRIVILEGES;
 ```
 
+Для **physical**-режима MySQL дополнительно нужны требования из [mysql.md](mysql.md#физический-бэкап-xtrabackup): Linux, доступ агента к `datadir`, Percona XtraBackup (`xtrabackup`/`xbstream`) и права на остановку/запуск MySQL.
+
+**MongoDB** — пользователю target-подключения нужна роль `dbOwner` на target-БД:
+
+```javascript
+use admin
+db.grantRolesToUser('restore_user', [{ role: 'dbOwner', db: 'mydb' }])
+```
+
 ---
 
 ## Поведение при восстановлении
 
 - **Всё или ничего внутри DB-бэкапа.** Если source — это DB-бэкап и в нём были файлы (`ManifestKey != null`), они восстанавливаются всегда вместе с БД. Селективный режим «только БД» или «только файлы» внутри DB-бэкапа не поддерживается — привело бы к рассинхрону между таблицами и файловой системой.
 - **File-set-бэкапы восстанавливаются как только файлы.** У file-set-записи `DumpObjectKey = null`, поэтому DB-этап автоматически пропускается (`RestoreTaskHandler` ставит `DatabaseRestoreResult.Success()` и идёт сразу к file-restore). Это не специальный режим, а естественное поведение для записей без дампа.
-- **Target БД перезаписывается.** Перед восстановлением агент делает `DROP DATABASE IF EXISTS` (Postgres) или `SET SINGLE_USER WITH ROLLBACK IMMEDIATE` + `DROP DATABASE` (MSSQL). Активные соединения принудительно закрываются.
+- **Target БД перезаписывается.** Перед logical-restore агент удаляет target-БД/коллекции штатными средствами СУБД; для MSSQL дополнительно переводит БД в `SINGLE_USER`. MySQL physical перезаписывает весь target-инстанс через подмену `datadir`.
 - **Файлы перезаписываются.** Каждый файл собирается в `.restore-tmp` и атомарно переименовывается. Ошибка на одном файле → статус задачи `partial`, список упавших файлов — в `ErrorMessage`.
 - **Кросс-платформа пока не поддерживается.** Windows-бэкап на Linux-агент (или наоборот) может не заработать из-за особенностей путей и прав. Восстанавливайте на ту же ОС, что делала бэкап.
