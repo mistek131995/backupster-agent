@@ -37,7 +37,7 @@
 | MSSQL — physical | ✓ | ✓ | ✓ | ✓ |
 | MSSQL — physical differential | ✓ | ✓ | ✓ | ✓ |
 | БД + файлы вместе | ✓ |  |  |  |
-| File-set only | ✓ |  |  |  |
+| File-set only | ✓ |  |  | ✓ |
 | **Хранилища** |  |  |  |  |
 | S3 — upload | ✓ |  |  | ✓ |
 | S3 — download | ✓ |  |  | ✓ |
@@ -47,5 +47,5 @@
 | Azure Blob — download |  |  |  |  |
 | WebDAV — upload | ✓ |  |  | ✓ |
 | WebDAV — download | ✓ |  |  | ✓ |
-| LocalFs — upload | ✓ |  |  |  |
-| LocalFs — download | ✓ |  |  |  |
+| LocalFs — upload | ✓ |  |  | ✓ |
+| LocalFs — download | ✓ |  |  | ✓ |
