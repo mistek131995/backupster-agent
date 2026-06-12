@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Providers.Backup;
+using BackupsterAgent.Providers.Backup.MssqlPhysicalDifferentialBackup;
 using BackupsterAgent.Providers.Restore;
 using BackupsterAgent.Providers.Restore.Common;
 using BackupsterAgent.Providers.Restore.PostgresPhysicalRestore;

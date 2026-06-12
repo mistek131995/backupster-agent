@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace BackupsterAgent.Providers.Backup;
+namespace BackupsterAgent.Providers.Backup.MssqlLogicalBackup;
 
 internal sealed class MssqlLogicalPreflightResult
 {

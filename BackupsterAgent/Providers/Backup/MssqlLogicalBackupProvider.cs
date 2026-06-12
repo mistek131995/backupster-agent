@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Providers.Backup.MssqlLogicalBackup;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Dac;

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Providers.Backup.MssqlPhysicalDifferentialBackup;
 using BackupsterAgent.Services.Common.Resolvers;
 using Microsoft.Data.SqlClient;
 

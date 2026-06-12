@@ -1,4 +1,4 @@
-using BackupsterAgent.Providers.Backup;
+using BackupsterAgent.Providers.Backup.MssqlLogicalBackup;
 using Microsoft.SqlServer.Dac;
 
 namespace BackupsterAgent.Tests.Providers;

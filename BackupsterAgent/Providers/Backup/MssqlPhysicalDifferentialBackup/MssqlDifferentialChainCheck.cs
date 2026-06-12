@@ -1,4 +1,4 @@
-namespace BackupsterAgent.Providers.Backup;
+namespace BackupsterAgent.Providers.Backup.MssqlPhysicalDifferentialBackup;
 
 public enum MssqlDifferentialChainCheck
 {

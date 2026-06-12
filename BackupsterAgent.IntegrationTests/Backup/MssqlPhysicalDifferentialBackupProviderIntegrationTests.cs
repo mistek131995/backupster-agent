@@ -3,6 +3,7 @@ using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
+using BackupsterAgent.Providers.Backup.MssqlPhysicalDifferentialBackup;
 using BackupsterAgent.Providers.Restore;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging.Abstractions;

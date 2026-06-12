@@ -1,6 +1,6 @@
 using Microsoft.Data.SqlClient;
 
-namespace BackupsterAgent.Providers.Backup;
+namespace BackupsterAgent.Providers.Backup.MssqlPhysicalDifferentialBackup;
 
 public sealed class MssqlDifferentialChainGuard
 {

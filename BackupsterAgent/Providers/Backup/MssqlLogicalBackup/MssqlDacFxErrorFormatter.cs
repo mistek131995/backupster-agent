@@ -1,6 +1,6 @@
 using Microsoft.SqlServer.Dac;
 
-namespace BackupsterAgent.Providers.Backup;
+namespace BackupsterAgent.Providers.Backup.MssqlLogicalBackup;
 
 internal static class MssqlDacFxErrorFormatter
 {
