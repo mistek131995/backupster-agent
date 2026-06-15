@@ -89,9 +89,12 @@ public sealed class SystemdServiceController
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "Failed to check if systemd service '{ServiceName}' is active - assuming active",
+                "Failed to check if systemd service '{ServiceName}' is active",
                 serviceName);
-            return true;
+            throw new InvalidOperationException(
+                $"Не удалось проверить состояние systemd-сервиса '{serviceName}'. " +
+                "Восстановление прервано: агент не может безопасно определить, запущен ли сервис.",
+                ex);
         }
     }
 

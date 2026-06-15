@@ -12,7 +12,7 @@
 
 ## Требования
 
-- Готовые артефакты (`.deb`, `.rpm`, `linux-x64.zip`, `win-x64.zip`) self-contained — .NET Runtime ставить не нужно. SDK нужен только для сборки из исходников.
+- Готовые артефакты (`.deb`, `.rpm`, `linux-x64.zip`, `linux-arm64.zip`, `win-x64.zip`) self-contained — .NET Runtime ставить не нужно. SDK нужен только для сборки из исходников.
 - `pg_dump` / `psql` в `PATH` — для PostgreSQL (backup + restore)
 - `mysqldump` / `mysql` в `PATH` — для MySQL/MariaDB logical (backup + restore)
 - `xtrabackup` / `xbstream` в `PATH` — для MySQL/MariaDB physical на Linux
@@ -22,7 +22,7 @@
 
 ## Linux (скрипт установки)
 
-Рекомендуемый способ для дистрибутивов с systemd. Скрипт определяет дистрибутив и архитектуру, скачивает последний `.deb` или `.rpm` с GitHub Releases, устанавливает пакет, интерактивно спрашивает токен (ввод скрыт, в историю команд не попадает) и запускает службу:
+Рекомендуемый способ для дистрибутивов с systemd. Скрипт определяет дистрибутив и архитектуру (`x86_64`/`amd64` или `aarch64`/`arm64`), скачивает последний `.deb` или `.rpm` с GitHub Releases, устанавливает пакет, интерактивно спрашивает токен (ввод скрыт, в историю команд не попадает) и запускает службу:
 
 ```bash
 curl -fsSL https://app.backupster.io/install-agent.sh | sudo bash
@@ -52,8 +52,14 @@ curl -fsSL https://<ваш-дашборд>/install-agent.sh | sudo bash -s -- --
 # Debian / Ubuntu
 sudo apt install ./backupster-agent_*_amd64.deb
 
+# Debian / Ubuntu on ARM64
+sudo apt install ./backupster-agent_*_arm64.deb
+
 # RHEL / Rocky / Fedora
 sudo dnf install ./backupster-agent-*.x86_64.rpm
+
+# RHEL / Rocky / Fedora on ARM64
+sudo dnf install ./backupster-agent-*.aarch64.rpm
 ```
 
 Дополнительно поставьте клиент СУБД: `pg_dump` / `psql` (PostgreSQL), `mysqldump` / `mysql` (MySQL / MariaDB), `mongodump` / `mongorestore` (MongoDB Database Tools). Для MySQL physical поставьте Percona XtraBackup (`xtrabackup` / `xbstream`). Для MSSQL внешних бинарников не требуется.
@@ -101,7 +107,8 @@ sudo dnf remove backupster-agent     # RHEL / Rocky / Fedora
 
 ```bash
 sudo mkdir -p /opt/backupster-agent
-sudo unzip BackupsterAgent-*-linux-x64.zip -d /opt/backupster-agent
+RID=linux-x64     # use linux-arm64 on ARM64 hosts
+sudo unzip "BackupsterAgent-*-${RID}.zip" -d /opt/backupster-agent
 sudo chmod +x /opt/backupster-agent/BackupsterAgent
 
 sudo tee /etc/systemd/system/backupster-agent.service <<EOF

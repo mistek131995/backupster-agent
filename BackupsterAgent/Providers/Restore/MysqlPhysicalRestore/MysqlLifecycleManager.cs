@@ -73,7 +73,7 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
             return;
         }
 
-        var mysqld = ResolveMysqld(connection);
+        var mysqld = ResolveMysqld(connection, instanceInfo);
 
         var psi = new ProcessStartInfo
         {
@@ -113,9 +113,9 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
                         $"mysqld завершился с кодом {process.ExitCode} во время запуска. " +
                         $"Логи смотрите в '{datadir}' (файл *.err).");
 
-                if (await TryTcpConnectAsync(connection.Host, connection.Port, ct))
+                if (await _probe.ProbeReadyAsync(connection, ct) == MysqlConnectionProbeResult.Reachable)
                 {
-                    _logger.LogInformation("MySQL accepting connections on port {Port}", connection.Port);
+                    _logger.LogInformation("MySQL is ready to accept SQL queries on port {Port}", connection.Port);
                     return;
                 }
             }
@@ -131,8 +131,21 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
         }
     }
 
-    public string ResolveMysqld(ConnectionConfig connection)
+    public string ResolveMysqld(ConnectionConfig connection, MysqlInstanceInfo? instanceInfo = null)
     {
+        if (instanceInfo?.MysqldPath is { Length: > 0 } capturedPath)
+        {
+            if (File.Exists(capturedPath))
+            {
+                _logger.LogInformation("Using captured mysqld executable path '{Path}'", capturedPath);
+                return capturedPath;
+            }
+
+            _logger.LogWarning(
+                "Captured mysqld executable path '{Path}' is no longer available, falling back to configured binary resolver",
+                capturedPath);
+        }
+
         var xtrabackup = _binaryResolver.Resolve(connection, "xtrabackup");
         var mysqld = Path.Combine(Path.GetDirectoryName(xtrabackup) ?? string.Empty, "mysqld");
 
@@ -203,9 +216,9 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
                     $"MySQL-сервис '{serviceName}' завершился во время запуска. " +
                     "Проверьте error log MySQL.");
 
-            if (await TryTcpConnectAsync(connection.Host, connection.Port, ct))
+            if (await _probe.ProbeReadyAsync(connection, ct) == MysqlConnectionProbeResult.Reachable)
             {
-                _logger.LogInformation("MySQL service '{ServiceName}' started, accepting connections on port {Port}",
+                _logger.LogInformation("MySQL service '{ServiceName}' started, accepting SQL queries on port {Port}",
                     serviceName, connection.Port);
                 return;
             }
@@ -270,13 +283,17 @@ public sealed class MysqlLifecycleManager : IMysqlLifecycleManager
             $"MySQL не остановился в течение 60 секунд (порт {port} всё ещё принимает подключения).");
     }
 
-    private static async Task<bool> TryTcpConnectAsync(string host, int port, CancellationToken ct)
+    internal static async Task<bool> TryTcpConnectAsync(string host, int port, CancellationToken ct)
     {
         try
         {
             using var client = new TcpClient();
             await client.ConnectAsync(host, port, ct);
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch
         {

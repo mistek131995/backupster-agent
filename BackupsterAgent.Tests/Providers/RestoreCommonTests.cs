@@ -136,6 +136,21 @@ public sealed class RestoreCommonTests
             controller.IsActiveAsync("postgresql.service", cts.Token));
     }
 
+    [Test]
+    public void IsActiveAsync_RunnerThrows_ThrowsDiagnosticError()
+    {
+        var runner = new ThrowingRunner();
+        var controller = new SystemdServiceController(
+            NullLogger<SystemdServiceController>.Instance,
+            runner,
+            Options.Create(new RestoreSettings()));
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(() =>
+            controller.IsActiveAsync("mysql.service", CancellationToken.None));
+
+        Assert.That(ex!.Message, Does.Contain("mysql.service"));
+    }
+
     private static void WriteMarker(string dir, DateTime timestamp)
     {
         File.WriteAllText(
@@ -181,5 +196,15 @@ public sealed class RestoreCommonTests
                 Stderr = string.Empty,
             });
         }
+    }
+
+    private sealed class ThrowingRunner : IExternalProcessRunner
+    {
+        public Task<ExternalProcessResult> RunAsync(
+            ExternalProcessRequest request,
+            Func<Stream, CancellationToken, Task>? handleStdout,
+            Func<StreamWriter, CancellationToken, Task>? handleStdin,
+            CancellationToken ct) =>
+            throw new InvalidOperationException("systemctl unavailable");
     }
 }

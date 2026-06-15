@@ -31,12 +31,14 @@ public sealed class MysqlInstanceInspector
         string? ownerUser = null;
         string? ownerGroup = null;
         string? serviceName = null;
+        string? mysqldPath = null;
 
         var pid = await _probe.GetMysqlPidAsync(connection, ct);
 
         if (pid.HasValue)
         {
             originalArgs = ReadProcessArgsFromProc(pid.Value);
+            mysqldPath = ResolveProcessExecutablePath(pid.Value);
             serviceName = await DetectSystemdUnitAsync(pid.Value, ct);
             if (serviceName is not null)
                 await _systemd.EnsureMainPidAsync(serviceName, pid.Value, ct);
@@ -44,7 +46,7 @@ public sealed class MysqlInstanceInspector
 
         (ownerUser, ownerGroup) = ReadDirectoryOwner(datadir);
 
-        return new MysqlInstanceInfo(originalArgs, pid, ownerUser, ownerGroup, serviceName);
+        return new MysqlInstanceInfo(originalArgs, pid, ownerUser, ownerGroup, serviceName, mysqldPath);
     }
 
     public async Task<string?> DetectServiceNameAsync(ConnectionConfig connection, CancellationToken ct)
@@ -93,6 +95,37 @@ public sealed class MysqlInstanceInspector
         {
             _logger.LogDebug(ex, "Failed to read mysqld args from /proc/{Pid}", pid);
             return [];
+        }
+    }
+
+    private string? ResolveProcessExecutablePath(int pid)
+    {
+        try
+        {
+            var exeLink = new FileInfo($"/proc/{pid}/exe");
+            if (!exeLink.Exists) return null;
+
+            var target = exeLink.ResolveLinkTarget(returnFinalTarget: true);
+            var path = target?.FullName;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                return null;
+
+            var fileName = Path.GetFileName(path);
+            if (!fileName.Contains("mysqld", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning(
+                    "PID {Pid} executable '{Path}' does not look like mysqld - skipping exact executable reuse",
+                    pid, path);
+                return null;
+            }
+
+            _logger.LogInformation("Resolved mysqld executable path from /proc/{Pid}/exe: '{Path}'", pid, path);
+            return path;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to resolve mysqld executable path from /proc/{Pid}/exe", pid);
+            return null;
         }
     }
 

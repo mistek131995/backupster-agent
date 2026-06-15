@@ -15,6 +15,14 @@ public enum MysqlConnectionProbeResult
 
 public sealed class MysqlServerProbe : IMysqlServerProbe
 {
+    internal const string ReadinessSql = "SELECT 1";
+
+    internal const string ShutdownPrivilegeSql =
+        "SELECT COUNT(*) FROM information_schema.user_privileges " +
+        "WHERE GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''', " +
+        "SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''') " +
+        "AND privilege_type = 'SHUTDOWN'";
+
     private readonly ILogger<MysqlServerProbe> _logger;
 
     public MysqlServerProbe(ILogger<MysqlServerProbe> logger)
@@ -43,11 +51,7 @@ public sealed class MysqlServerProbe : IMysqlServerProbe
         await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildServerConnectionString(connection));
         await conn.OpenAsync(ct);
 
-        await using var cmd = new MySqlCommand(
-            "SELECT COUNT(*) FROM information_schema.user_privileges " +
-            "WHERE GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''', " +
-            "SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''') " +
-            "AND privilege_type IN ('SHUTDOWN', 'SUPER')", conn);
+        await using var cmd = new MySqlCommand(ShutdownPrivilegeSql, conn);
 
         var count = Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
 
@@ -107,6 +111,10 @@ public sealed class MysqlServerProbe : IMysqlServerProbe
             await conn.OpenAsync(ct);
             return MysqlConnectionProbeResult.Reachable;
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex) when (IsServerGoneException(ex))
         {
             return MysqlConnectionProbeResult.ServerGone;
@@ -114,6 +122,34 @@ public sealed class MysqlServerProbe : IMysqlServerProbe
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Transient error while waiting for MySQL to stop — retrying");
+            return MysqlConnectionProbeResult.TransientError;
+        }
+    }
+
+    public async Task<MysqlConnectionProbeResult> ProbeReadyAsync(ConnectionConfig connection, CancellationToken ct)
+    {
+        try
+        {
+            await using var conn = new MySqlConnection(MysqlConnectionFactory.BuildServerConnectionString(connection));
+            await conn.OpenAsync(ct);
+
+            await using var cmd = new MySqlCommand(ReadinessSql, conn);
+            var result = await cmd.ExecuteScalarAsync(ct);
+            return Convert.ToInt32(result) == 1
+                ? MysqlConnectionProbeResult.Reachable
+                : MysqlConnectionProbeResult.TransientError;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (IsServerGoneException(ex))
+        {
+            return MysqlConnectionProbeResult.ServerGone;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Transient error while waiting for MySQL readiness — retrying");
             return MysqlConnectionProbeResult.TransientError;
         }
     }

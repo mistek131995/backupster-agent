@@ -10,6 +10,52 @@ namespace BackupsterAgent.Tests.Providers;
 public sealed class MysqlLifecycleManagerTests
 {
     [Test]
+    public void ResolveMysqld_UsesCapturedExecutablePathWhenAvailable()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "backupster-mysql-lifecycle-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var mysqld = Path.Combine(tempDir, "mysqld");
+        File.WriteAllText(mysqld, "");
+
+        try
+        {
+            var lifecycle = CreateLifecycle(new RecordingSystemctlRunner());
+            var instanceInfo = new MysqlInstanceInfo(
+                OriginalArgs: [],
+                Pid: 42,
+                OwnerUser: "mysql",
+                OwnerGroup: "mysql",
+                ServiceName: null,
+                MysqldPath: mysqld);
+
+            var result = lifecycle.ResolveMysqld(Connection(), instanceInfo);
+
+            Assert.That(result, Is.EqualTo(mysqld));
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [Test]
+    public void TryTcpConnectAsync_CanceledToken_PropagatesCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.CatchAsync<OperationCanceledException>(() =>
+            MysqlLifecycleManager.TryTcpConnectAsync("127.0.0.1", 3306, cts.Token));
+    }
+
+    [Test]
     public void StopMysql_ServiceStopFails_UnmasksByDefault()
     {
         var runner = new RecordingSystemctlRunner { ExitCodes = { ["stop"] = 1 } };

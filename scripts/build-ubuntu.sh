@@ -6,6 +6,11 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROJECT_PATH="${ROOT_DIR}/BackupsterAgent/BackupsterAgent.csproj"
 CONFIGURATION="${CONFIGURATION:-Release}"
 RUNTIME="${RUNTIME:-linux-x64}"
+case "${RUNTIME}" in
+  linux-x64) ARCH=amd64 ;;
+  linux-arm64) ARCH=arm64 ;;
+  *) echo "Unsupported RUNTIME for packaging: ${RUNTIME}" >&2; exit 1 ;;
+esac
 PUBLISH_DIR="${ROOT_DIR}/publish/${RUNTIME}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-${ROOT_DIR}/artifacts}"
 NFPM_VERSION="${NFPM_VERSION:-2.41.0}"
@@ -79,6 +84,6 @@ dotnet publish "${PROJECT_PATH}" \
 ensure_nfpm
 (
   cd "${ROOT_DIR}"
-  VERSION="${VERSION}" "${NFPM_BIN}" pkg --packager deb --config packaging/nfpm.yaml --target "${ARTIFACTS_DIR}/"
+  VERSION="${VERSION}" ARCH="${ARCH}" RID="${RUNTIME}" "${NFPM_BIN}" pkg --packager deb --config packaging/nfpm.yaml --target "${ARTIFACTS_DIR}/"
 )
-echo "Created ${ARTIFACTS_DIR}/backupster-agent_${VERSION}_amd64.deb"
+echo "Created ${ARTIFACTS_DIR}/backupster-agent_${VERSION}_${ARCH}.deb"

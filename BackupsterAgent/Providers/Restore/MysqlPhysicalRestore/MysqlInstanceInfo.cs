@@ -5,4 +5,5 @@ public sealed record MysqlInstanceInfo(
     int? Pid,
     string? OwnerUser,
     string? OwnerGroup,
-    string? ServiceName);
+    string? ServiceName,
+    string? MysqldPath = null);

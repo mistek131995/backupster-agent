@@ -1,5 +1,5 @@
 name: backupster-agent
-arch: amd64
+arch: ${ARCH}
 platform: linux
 version: ${VERSION}
 section: utils
@@ -13,8 +13,18 @@ description: |
   Agent service for automated database and file-set backups.
   Runs as a systemd service. Pairs with the dashboard at https://app.backupster.io.
 
+overrides:
+  deb:
+    depends:
+      - ca-certificates
+      - passwd
+  rpm:
+    depends:
+      - ca-certificates
+      - shadow-utils
+
 contents:
-  - src: ./publish/linux-x64/BackupsterAgent
+  - src: ./publish/${RID}/BackupsterAgent
     dst: /usr/bin/backupster-agent
     file_info:
       mode: 0755

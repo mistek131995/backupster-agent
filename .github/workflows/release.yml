@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rid: [linux-x64, win-x64]
+        rid: [linux-x64, linux-arm64, win-x64]
     steps:
       - uses: actions/checkout@v6
 
@@ -49,9 +49,16 @@ jobs:
 
   # Linux packages (.deb + .rpm via nfpm)
   package-linux:
-    name: Package (.deb + .rpm)
+    name: Package (${{ matrix.arch }})
     needs: [build]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rid: linux-x64
+            arch: amd64
+          - rid: linux-arm64
+            arch: arm64
     steps:
       - uses: actions/checkout@v6
 
@@ -59,16 +66,16 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Download linux-x64 artifact
+      - name: Download ${{ matrix.rid }} artifact
         uses: actions/download-artifact@v8
         with:
-          name: BackupsterAgent-linux-x64
+          name: BackupsterAgent-${{ matrix.rid }}
           path: ./
 
-      - name: Unzip linux-x64 archive
+      - name: Unzip ${{ matrix.rid }} archive
         run: |
-          mkdir -p ./publish/linux-x64
-          unzip -o BackupsterAgent-${{ github.ref_name }}-linux-x64.zip -d ./publish/linux-x64
+          mkdir -p ./publish/${{ matrix.rid }}
+          unzip -o BackupsterAgent-${{ github.ref_name }}-${{ matrix.rid }}.zip -d ./publish/${{ matrix.rid }}
 
       - name: Install nfpm
         run: |
@@ -80,17 +87,21 @@ jobs:
       - name: Build .deb
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          RID: ${{ matrix.rid }}
         run: nfpm pkg --packager deb --config packaging/nfpm.yaml --target ./
 
       - name: Build .rpm
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          RID: ${{ matrix.rid }}
         run: nfpm pkg --packager rpm --config packaging/nfpm.yaml --target ./
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: BackupsterAgent-linux-packages
+          name: BackupsterAgent-linux-packages-${{ matrix.arch }}
           path: |
             *.deb
             *.rpm

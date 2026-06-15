@@ -13,7 +13,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="AWSSDK.S3" Version="4.0.24.3" />
+    <PackageReference Include="AWSSDK.S3" Version="4.0.24.4" />
     <PackageReference Include="Azure.Storage.Blobs" Version="12.29.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.5" />
     <PackageReference Include="Microsoft.SqlServer.DacFx" Version="170.*" />
@@ -35,7 +35,7 @@
 
   <!-- Microsoft.Data.SqlClient requires ICU; bundle it app-local so the self-contained
        linux package works on hosts without libicu. Version must match the package pin. -->
-  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64'">
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64' or '$(RuntimeIdentifier)' == 'linux-arm64'">
     <PackageReference Include="Microsoft.ICU.ICU4C.Runtime" Version="72.1.0.3" />
     <RuntimeHostConfigurationOption Include="System.Globalization.AppLocalIcu" Value="72.1.0.3" />
   </ItemGroup>

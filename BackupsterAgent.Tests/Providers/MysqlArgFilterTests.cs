@@ -79,6 +79,15 @@ public sealed class MysqlArgFilterTests
     }
 
     [Test]
+    public void Keeps_defaults_file_before_other_args()
+    {
+        var input = new[] { "--defaults-file=/etc/mysql/my.cnf", "--datadir=/var/lib/mysql", "--max-connections=2000" };
+        var result = MysqldArgsSanitizer.FilterOriginalArgs(input, StripDefaults());
+
+        Assert.That(result, Is.EqualTo(new[] { "--defaults-file=/etc/mysql/my.cnf", "--max-connections=2000" }));
+    }
+
+    [Test]
     public void Drops_flag_form_without_consuming_next_dash_arg()
     {
         var input = new[] { "--skip-grant-tables", "--server-id=99" };
