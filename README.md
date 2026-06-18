@@ -133,13 +133,14 @@ Backup и restore/delete на одном агенте не идут паралл
 
 ## Синхронизация топологии
 
-На старте агент пушит на дашборд три списка из `appsettings.json` — **только топологию**, без credentials:
+На старте агент пушит на дашборд четыре списка из `appsettings.json` — **только топологию**, без credentials:
 
 | Список | Что уходит | Эндпоинт |
 |---|---|---|
 | Подключения | `Name`, `DatabaseType`, `Host`, `Port`; для MongoDB/MSSQL с `ConnectionUri` — только безопасные host/port из URI/connection string | `POST /api/v1/agent/connections` |
 | Базы данных | `Name`, `DatabaseType` (резолвится из `Connections`) | `POST /api/v1/agent/databases` |
-| Наборы файлов | `Name`, `StorageName` | `POST /api/v1/agent/filesets` |
+| Наборы файлов | `Name` | `POST /api/v1/agent/filesets` |
+| Хранилища | `Name`, `Provider` | `POST /api/v1/agent/storages` |
 
 Благодаря этому регистрация агента на дашборде — это одно поле «Название»: после создания получаете токен, вставляете его в `appsettings.json` на хосте агента, и все сущности появятся в UI автоматически при старте.
 

@@ -416,19 +416,17 @@ Heartbeat-отчёт о текущей стадии бэкапа. Шлётся �
 {
   "fileSets": [
     {
-      "name": "config-backups",
-      "storageName": "prod-s3"
+      "name": "config-backups"
     }
   ]
 }
 ```
 
-| Поле (элемента) | Тип    | Описание                                                                 |
-|-----------------|--------|--------------------------------------------------------------------------|
-| `name`          | string | Имя file-set из `FileSets[].Name`                                        |
-| `storageName`   | string | Имя хранилища из `FileSets[].StorageName` (должно быть в `Storages[]`)   |
+| Поле (элемента) | Тип    | Описание                          |
+|-----------------|--------|-----------------------------------|
+| `name`          | string | Имя file-set из `FileSets[].Name` |
 
-Бэкенд делает upsert по `(AgentId, Name)` среди записей с `DatabaseType = FileSet`. Stale-записи не чистятся. Коллизия: имя file-set не может совпасть с именем зарегистрированной БД на том же агенте — такой запрос отклоняется с `BadRequest`. Записи с пустым `Name` или неизвестным `StorageName` в payload не попадают (warning в лог).
+Бэкенд делает upsert по `(AgentId, Name)` среди записей с `DatabaseType = FileSet`. Stale-записи не чистятся. Коллизия: имя file-set не может совпасть с именем зарегистрированной БД на том же агенте — такой запрос отклоняется с `BadRequest`. Записи с пустым `Name` в payload не попадают (warning в лог). Хранилище для запуска выбирается расписанием через `storageNames`; если поле отсутствует или пустое, агент использует legacy-fallback `FileSetConfig.StorageName`.
 
 ---
 
@@ -514,7 +512,7 @@ Heartbeat-отчёт о текущей стадии бэкапа. Шлётся �
 | `dumpObjectKey`        | string  | Ключ дампа в хранилище                                                                             |
 | `targetDatabaseName`   | string? | Куда восстановить БД. `null` = тот же `sourceDatabaseName`                                         |
 | `manifestKey`          | string? | Ключ манифеста файлов. `null` = файловой части нет, восстанавливаем только БД                      |
-| `targetFileRoot`       | string? | Куда класть файлы. `null` = в служебную папку агента (`RestoreSettings.FileRestoreBasePath`, дефолт `restore-files/`); она очищается перед каждым restore и доступна только на хосте агента |
+| `targetFileRoot`       | string? | Куда класть файлы. Если задан — один корень манифеста или legacy кладётся прямо под `targetFileRoot`, несколько корней кладутся в подпапки `targetFileRoot/{safe-root}_{rootIndex}`. Если `null` и манифест v2 содержит `roots[]` — файлы возвращаются в исходные корни `roots[rootIndex]`; если `roots[]` нет или он пустой — используется landing zone `RestoreSettings.FileRestoreBasePath` (дефолт `restore-files/`) с очисткой перед restore |
 | `targetConnectionName` | string? | Override подключения. `null` = подключение из `DatabaseConfig` исходной БД                         |
 | `storageName`          | string? | Override хранилища. `null` = хранилище из `DatabaseConfig` исходной БД                             |
 | `backupMode`           | enum (string)? | `logical`, `physical` или `physicalDifferential` — режим, в котором был снят бэкап. Если `null` (старый дашборд), агент инференсит по `DatabaseType`: `Mssql` → `Physical`, остальные → `Logical` |
@@ -586,7 +584,7 @@ Heartbeat-отчёт о текущей стадии бэкапа. Шлётся �
 | `storageName`  | string?         | Имя хранилища из `Storages[].Name`, в которое класть бэкап. `null` (или поле отсутствует, старый дашборд) → агент использует `DatabaseConfig.StorageName`/`FileSetConfig.StorageName` как legacy-fallback. Если значение задано, но storage не найден в конфиге агента — задача завершается `Failed` с RU-сообщением |
 | `baseBackupRecordId` | Guid?     | Только для `backupMode = physicalDifferential`. Идентификатор корневого полного бэкапа, который дашборд уже зарезолвил. Агент кладёт его в `OpenBackupRecordDto.baseBackupRecordId` при открытии записи (секция 1). Для других режимов — `null` |
 
-Прогресс бэкапа идёт через **record-канал** (`/api/v1/agent/backup-record/{id}/progress`, секция 3), не через task-progress — это те же стадии, что у cron-бэкапов. Task-строка в «Историю задач» показывает только финальный статус; интерактивный прогресс UI берёт из соответствующего `BackupRecord`.
+Прогресс бэкапа идёт через **record-канал** (`/api/v1/agent/backup-record/{id}/progress`, секция 2), не через task-progress — это те же стадии, что у cron-бэкапов. Task-строка в «Историю задач» показывает только финальный статус; интерактивный прогресс UI берёт из соответствующего `BackupRecord`.
 
 ---
 
@@ -661,7 +659,7 @@ Heartbeat задачи. Шлётся не чаще раза в 5 секунд + 
 
 | Поле          | Тип     | Описание                                                                                                                                                                  |
 |---------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `stage`       | string  | camelCase-имя стадии. Словарь значений зависит от `type` задачи: для `restore` — `downloadingDump`, `decryptingDump`, `decompressingDump`, `preparingDatabase`, `restoringDatabase`, `downloadingManifest`, `restoringFiles`; для `delete` — `resolving`, `deletingManifest`, `deletingDump`, `completed`. Для `type=backup` task-progress не отправляется — прогресс идёт через record-канал (секция 3) |
+| `stage`       | string  | camelCase-имя стадии. Словарь значений зависит от `type` задачи: для `restore` — `downloadingDump`, `decryptingDump`, `decompressingDump`, `preparingDatabase`, `restoringDatabase`, `downloadingManifest`, `restoringFiles`; для `delete` — `resolving`, `deletingManifest`, `deletingDump`, `completed`. Для `type=backup` task-progress не отправляется — прогресс идёт через record-канал (секция 2) |
 | `processed`   | long?   | Обработано единиц                                                                                                                                                         |
 | `total`       | long?   | Всего единиц                                                                                                                                                              |
 | `unit`        | string? | `"bytes"` или `"files"`                                                                                                                                                   |

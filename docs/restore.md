@@ -35,16 +35,20 @@ Poll task → Download → Decrypt → Restore DB → Restore Files → Report
 
 ---
 
-## `RestoreSettings` — рабочий каталог
+## `RestoreSettings` — рабочий каталог и таймауты
 
 ```json
 "RestoreSettings": {
   "TempPath": "/mnt/restore-temp",
-  "FileRestoreBasePath": "/mnt/restored-files"
+  "FileRestoreBasePath": "/mnt/restored-files",
+  "PgCtlStartTimeoutSeconds": 600,
+  "ChownTimeoutSeconds": 1800,
+  "SystemctlTimeoutSeconds": 60,
+  "SystemctlStopStartTimeoutSeconds": 1800
 }
 ```
 
-Оба поля опциональны и в шаблон `appsettings.json` не входят.
+Все поля опциональны и в шаблон `appsettings.json` не входят.
 
 ### `TempPath`
 
@@ -56,11 +60,23 @@ Poll task → Download → Decrypt → Restore DB → Restore Files → Report
 
 ### `FileRestoreBasePath`
 
-Служебная landing-директория для восстановления файлов, когда задача пришла **без** `targetFileRoot`. Перед каждым restore очищается полностью. Доступна только на хосте агента — ни дашборд, ни оператор через UI её содержимое не видят.
+Служебная landing-директория для восстановления файлов из legacy-манифестов без `roots[]`, когда задача пришла **без** `targetFileRoot`. Перед таким restore директория очищается полностью. Доступна только на хосте агента — ни дашборд, ни оператор через UI её содержимое не видят.
 
 - **По умолчанию не задано** — используется хардкод `./restore-files`, который резолвится относительно директории исполняемого файла (та же логика, что у `TempPath`).
 - **Абсолютный путь** используется как есть.
 - Если оператор в задаче restore указал `targetFileRoot` — файлы кладутся туда, а `FileRestoreBasePath` не трогается.
+- Если `targetFileRoot` не указан и манифест v2 содержит `roots[]`, файлы восстанавливаются в исходные корни из манифеста (`roots[entry.rootIndex] / entry.path`), а `FileRestoreBasePath` не используется.
+
+### Таймауты physical restore
+
+Timeout-поля используются не всеми restore-провайдерами. Они нужны для PostgreSQL/MySQL physical restore и операций управления сервисами/правами:
+
+- **`PgCtlStartTimeoutSeconds`** — таймаут запуска PostgreSQL через `pg_ctl start` для unmanaged-кластера. Дефолт: 600 секунд.
+- **`ChownTimeoutSeconds`** — таймаут `chown -R` для staging PGDATA PostgreSQL и datadir MySQL. Дефолт: 1800 секунд.
+- **`SystemctlTimeoutSeconds`** — таймаут коротких service/helper-команд: `systemctl mask/unmask/is-active/show`, а также часть inspection-команд PostgreSQL physical restore (`stat`, `chmod`, PowerShell service detection). Дефолт: 60 секунд.
+- **`SystemctlStopStartTimeoutSeconds`** — таймаут долгих stop/start операций для systemd/Windows Service и related control path в PostgreSQL/MySQL physical restore. Дефолт: 1800 секунд.
+
+Logical restore PostgreSQL/MySQL/MSSQL/MongoDB и MSSQL restore эти timeout-поля не используют.
 
 ---
 
@@ -119,5 +135,5 @@ db.grantRolesToUser('restore_user', [{ role: 'dbOwner', db: 'mydb' }])
 - **Всё или ничего внутри DB-бэкапа.** Если source — это DB-бэкап и в нём были файлы (`ManifestKey != null`), они восстанавливаются всегда вместе с БД. Селективный режим «только БД» или «только файлы» внутри DB-бэкапа не поддерживается — привело бы к рассинхрону между таблицами и файловой системой.
 - **File-set-бэкапы восстанавливаются как только файлы.** У file-set-записи `DumpObjectKey = null`, поэтому DB-этап автоматически пропускается (`RestoreTaskHandler` ставит `DatabaseRestoreResult.Success()` и идёт сразу к file-restore). Это не специальный режим, а естественное поведение для записей без дампа.
 - **Target БД перезаписывается.** Перед logical-restore агент удаляет target-БД/коллекции штатными средствами СУБД; для MSSQL дополнительно переводит БД в `SINGLE_USER`. MySQL physical перезаписывает весь target-инстанс через подмену `datadir`.
-- **Файлы перезаписываются.** Каждый файл собирается в `.restore-tmp` и атомарно переименовывается. Ошибка на одном файле → статус задачи `partial`, список упавших файлов — в `ErrorMessage`.
+- **Файлы перезаписываются.** Каждый файл собирается в `.restore-tmp` и атомарно переименовывается. Без `targetFileRoot` v2-манифест с `roots[]` пишет в исходные корни; legacy/v1-манифест или пустой `roots[]` пишет в `FileRestoreBasePath`. С `targetFileRoot` один корень кладётся прямо под него, а несколько корней раскладываются по безопасным подпапкам `{safe-root}_{rootIndex}`. Ошибка на одном файле → статус задачи `partial`, список упавших файлов — в `ErrorMessage`.
 - **Кросс-платформа пока не поддерживается.** Windows-бэкап на Linux-агент (или наоборот) может не заработать из-за особенностей путей и прав. Восстанавливайте на ту же ОС, что делала бэкап.

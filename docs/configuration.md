@@ -21,7 +21,7 @@
 
 - `Connections[]` — реквизиты серверов БД (хост, логин, пароль, тип) или строка подключения там, где она поддерживается.
 - `Storages[]` — хранилища для бэкапов (S3, SFTP, Azure Blob, WebDAV или локальный путь); у каждого уникальное имя и собственный набор настроек.
-- `Databases[]` — список баз; каждая ссылается на подключение и на хранилище по имени.
+- `Databases[]` — список баз; каждая ссылается на подключение по имени. `StorageName` остаётся как legacy-fallback для старых расписаний без `storageNames`.
 
 Такое разделение позволяет не дублировать реквизиты сервера для нескольких БД и класть разные БД в разные бакеты/хранилища.
 
@@ -115,7 +115,8 @@
 ```
 
 - `Name` подключения и `Name` хранилища должны быть уникальны в пределах своих списков.
-- `ConnectionName` и `StorageName` у БД обязаны ссылаться на существующие записи — иначе эта БД будет пропущена с ошибкой в логе, остальные продолжат работать.
+- `ConnectionName` у БД обязан ссылаться на существующую запись — иначе эта БД будет пропущена с ошибкой в логе, остальные продолжат работать.
+- `StorageName` у БД опционален и используется только как legacy-fallback, когда расписание не прислало `storageNames`. Пустое или невалидное значение само по себе БД не блокирует: расписания с явным `storageNames` всё равно будут запускаться, а fallback без валидного storage будет пропущен с warning.
 - `OutputPath` — папка для временных файлов дампа. Для MSSQL physical этот же путь передаётся SQL Server в `BACKUP DATABASE ... TO DISK` / `RESTORE DATABASE ... FROM DISK`, поэтому агент и SQL Server должны видеть каталог одинаково. Файлы удаляются после загрузки или restore.
 - `FilePaths` — список путей к файлам или директориям для файлового бэкапа. Директории обходятся рекурсивно. Файлы режутся на content-defined chunks (FastCDC, ~4 МиБ) и дедуплицируются внутри одного хранилища. Работает на всех провайдерах: S3, SFTP, Azure Blob, WebDAV, LocalFs. На SFTP операции идут через persistent SSH-сессию серийно; на WebDAV каждый чанк требует отдельный HTTPS round-trip. Поле необязательное.
 - Для MSSQL используйте **либо** `ConnectionUri` — полную SQL Server connection string, **либо** `Host` + `Port` + `Username` + `Password`. Смешанный вариант не синхронизируется на дашборд и не используется для backup/restore. Агент программно меняет в строке только `Initial Catalog`/`Database`, чтобы открыть нужную БД или `master` для `BACKUP`/`RESTORE`.
@@ -233,7 +234,7 @@ openssl rand -base64 32
 > # 256 SHA256:abcDEF123...   backup.example.com (RSA)
 > ```
 
-> **Файловый бэкап (`FilePaths`) не работает на SFTP- и WebDAV-хранилищах** — у этих протоколов нет дешёвого `HEAD` и префикс-листинга для дедупликации кусков. При непустом `FilePaths` для базы, смотрящей на SFTP/WebDAV, дамп загрузится, файлы будут пропущены с warning. На LocalFs file-backup и file-set'ы поддерживаются полностью (`File.Exists` + рекурсивный `Directory.EnumerateFiles`).
+Файловый бэкап (`FilePaths`/`FileSets`), дедупликация чанков и chunk GC поддерживаются. Операции идут через одну persistent SSH-сессию серийно под семафором, поэтому на больших файловых наборах SFTP заметно медленнее S3/Azure Blob/LocalFs.
 
 **Azure Blob-хранилище:**
 
@@ -287,7 +288,7 @@ openssl rand -base64 32
 - `Username` / `Password` — basic-auth. Для Яндекс.Диска **обязательно** [пароль приложения](https://id.yandex.ru/security/app-passwords), не основной пароль аккаунта (двухфакторка ломает обычную авторизацию по WebDAV).
 - `RemotePath` — базовый каталог под аккаунтом. Дефолт `/`. Промежуточные каталоги (`MKCOL`) создаются автоматически при первой загрузке.
 - Покрывает Яндекс.Диск, Облако МТС и любые WebDAV-совместимые серверы (Nextcloud / ownCloud / Apache mod_dav).
-- Файловый бэкап и chunk GC — **не поддерживаются** (см. предупреждение выше). Дамп БД, restore и retention работают штатно.
+- Файловый бэкап (`FilePaths`/`FileSets`), дедупликация чанков и chunk GC поддерживаются. Каждая операция чанка — отдельный HTTPS round-trip; листинг идёт через `PROPFIND Depth: 1` BFS, без `Depth: infinity`.
 
 **Локальная папка (LocalFs):**
 
@@ -365,7 +366,10 @@ AgentSettings__DashboardUrl=http://your-server:8080
   {database}_{yyyyMMdd_HHmmss}.sql.gz.enc    ← PostgreSQL / MySQL дамп (logical)
   {database}_{yyyyMMdd_HHmmss}.archive.gz.enc ← MongoDB дамп (logical, mongodump --archive)
   {database}_{yyyyMMdd_HHmmss}.xbstream.gz.enc ← MySQL physical (XtraBackup)
-  {database}_{yyyyMMdd_HHmmss}.tar.gz.enc    ← PostgreSQL physical (pg_basebackup, архив PGDATA + WAL)
+  {database}_{yyyyMMdd_HHmmss}.pgbase.tar.enc ← PostgreSQL physical full (pg_basebackup, tar-контейнер base.tar.gz + pg_wal.tar.gz)
+  {database}_{yyyyMMdd_HHmmss}_diff.pgbase.tar.enc ← PostgreSQL physical differential
+  {database}_{yyyyMMdd_HHmmss}.backup_manifest.enc ← PostgreSQL physical sidecar для future DIFF/restore chain
+  {database}_{yyyyMMdd_HHmmss}.tar.gz.enc    ← legacy PostgreSQL physical (читается новым агентом, новые не пишутся)
   {database}_{yyyyMMdd_HHmmss}.bacpac.enc    ← MSSQL дамп (logical, через DacFx)
   {database}_{yyyyMMdd_HHmmss}.bak.enc       ← MSSQL дамп (physical, через BACKUP DATABASE)
   manifest.json.gz.enc                       ← манифест файлового бэкапа (если FilePaths непуст)
