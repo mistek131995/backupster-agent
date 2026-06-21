@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Backup;
@@ -135,6 +136,54 @@ public sealed class DatabaseBackupPipelineTests
         });
     }
 
+    [Test]
+    public void ExecuteAsync_DifferentialWithoutBaseRecord_ThrowsUserFacingException()
+    {
+        var pipeline = BuildPipeline(
+            CreateEncryption(),
+            new FakeUploadProvider(),
+            new RecordingDifferentialBackupProvider());
+
+        var ex = Assert.ThrowsAsync<BackupUserFacingException>(
+            () => pipeline.ExecuteAsync(
+                new BackupRunExecution(
+                    RecordId: Guid.NewGuid(),
+                    IsOffline: false,
+                    StartedAt: DateTime.UtcNow,
+                    Reporter: TestHelpers.NullReporter<BackupStage>()),
+                PgConfig(),
+                S3Storage(),
+                BackupMode.PhysicalDifferential,
+                baseBackupRecordId: null,
+                CancellationToken.None));
+
+        Assert.That(ex, Is.Not.Null);
+    }
+
+    [Test]
+    public void ExecuteAsync_PostgresDifferentialWithoutBaseManifest_ThrowsUserFacingException()
+    {
+        var pipeline = BuildPipeline(
+            CreateEncryption(),
+            new FakeUploadProvider(),
+            new RecordingDifferentialBackupProvider());
+
+        var ex = Assert.ThrowsAsync<BackupUserFacingException>(
+            () => pipeline.ExecuteAsync(
+                new BackupRunExecution(
+                    RecordId: Guid.NewGuid(),
+                    IsOffline: false,
+                    StartedAt: DateTime.UtcNow,
+                    Reporter: TestHelpers.NullReporter<BackupStage>()),
+                PgConfig(),
+                S3Storage(),
+                BackupMode.PhysicalDifferential,
+                baseBackupRecordId: Guid.NewGuid(),
+                CancellationToken.None));
+
+        Assert.That(ex, Is.Not.Null);
+    }
+
     private DatabaseBackupPipeline BuildPipeline(
         EncryptionService encryption,
         IUploadProvider uploader,
@@ -174,6 +223,21 @@ public sealed class DatabaseBackupPipelineTests
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(key) }),
             NullLogger<EncryptionService>.Instance);
     }
+
+    private DatabaseConfig PgConfig() => new()
+    {
+        ConnectionName = "pg-main",
+        Database = "db1",
+        OutputPath = _tempRoot,
+        FilePaths = [],
+    };
+
+    private static StorageConfig S3Storage() => new()
+    {
+        Name = "s3-main",
+        Provider = UploadProvider.S3,
+        S3 = new S3Settings(),
+    };
 
     private sealed class RecordingDifferentialBackupProvider : IDifferentialBackupProvider
     {

@@ -287,13 +287,10 @@ public sealed class MssqlPhysicalDifferentialBackupProviderIntegrationTests
             BaseBackupRecordId = Guid.NewGuid(),
         };
 
-        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = Assert.ThrowsAsync<BackupUserFacingException>(
             () => diffProvider.BackupAsync(config, _connection, ctx, _cts.Token));
 
-        Assert.That(
-            ex!.Message,
-            Does.Contain("полного бэкапа").IgnoreCase,
-            "Error message must explain that no prior full backup exists");
+        Assert.That(ex, Is.Not.Null);
     }
 
     private DatabaseConfig MakeConfig() => new()

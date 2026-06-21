@@ -1,6 +1,7 @@
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Backup;
 using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Backup.Coordinator;
@@ -70,7 +71,7 @@ public sealed class DatabaseBackupPipeline
             if (mode == BackupMode.PhysicalDifferential)
             {
                 if (baseBackupRecordId is null || baseBackupRecordId.Value == Guid.Empty)
-                    throw new InvalidOperationException(
+                    throw new BackupUserFacingException(
                         "Дифференциальный бэкап невозможен: дашборд не передал идентификатор родительского полного бэкапа.");
 
                 var diffProvider = _factory.GetDifferentialProvider(connection.DatabaseType);
@@ -84,7 +85,7 @@ public sealed class DatabaseBackupPipeline
                 if (connection.DatabaseType == DatabaseType.Postgres)
                 {
                     if (string.IsNullOrWhiteSpace(exec.BasePgBaseManifestKey))
-                        throw new InvalidOperationException(
+                        throw new BackupUserFacingException(
                             "Дифференциальный бэкап PostgreSQL невозможен: дашборд не передал ключ backup_manifest родительского бэкапа.");
 
                     var baseManifest = await DownloadAndDecryptManifestAsync(

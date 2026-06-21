@@ -186,6 +186,26 @@ public sealed class BackupJobRunTests
     }
 
     [Test]
+    public async Task RunAsync_UserFacingFailure_FinalizesWithOriginalMessage()
+    {
+        const string expected = "USER_FACING_SENTINEL";
+        var serverId = Guid.NewGuid();
+        _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.Ok, serverId);
+        _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
+        _provider.ThrowOnBackup = new BackupUserFacingException(expected);
+
+        var result = await BuildJob().RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.ErrorMessage, Is.EqualTo(expected));
+            Assert.That(_recordClient.LastFinalize!.Status, Is.EqualTo(BackupStatus.Failed));
+            Assert.That(_recordClient.LastFinalize!.ErrorMessage, Is.EqualTo(expected));
+        });
+    }
+
+    [Test]
     public async Task RunAsync_UploadFails_FinalizesWithFailedStatus_AndCleansLocalFiles()
     {
         var serverId = Guid.NewGuid();
