@@ -96,16 +96,29 @@ public sealed class PostgresClusterLifecycleTests
     [Test]
     public void Stop_Unmanaged_UsesPgCtlFastStop()
     {
-        var runner = new RecordingPostgresProcessRunner();
+        var runner = new RecordingPostgresProcessRunner
+        {
+            Stdout = { ["stat"] = "postgres" },
+        };
         var lifecycle = CreateLifecycle(runner);
         var control = new PostgresClusterControl(PostgresClusterControlKind.Unmanaged, null, null, null);
 
         Assert.DoesNotThrowAsync(() =>
             lifecycle.StopAsync(control, "pg_ctl", "/pgdata", CancellationToken.None));
 
-        var request = runner.Requests.Single();
-        Assert.That(request.FileName, Is.EqualTo("pg_ctl"));
-        Assert.That(request.Arguments, Is.EqualTo(new[] { "stop", "-D", "/pgdata", "-m", "fast", "-w" }));
+        var commands = runner.Requests.Select(r => $"{r.FileName} {string.Join(" ", r.Arguments)}").ToArray();
+        if (IsLinuxRootProcess())
+        {
+            Assert.That(commands, Is.EqualTo(new[]
+            {
+                "stat -Lc %U /pgdata",
+                "runuser -u postgres -- pg_ctl stop -D /pgdata -m fast -w",
+            }));
+        }
+        else
+        {
+            Assert.That(commands, Is.EqualTo(new[] { "pg_ctl stop -D /pgdata -m fast -w" }));
+        }
     }
 
     [Test]
@@ -176,6 +189,9 @@ public sealed class PostgresClusterLifecycleTests
         return new PostgresClusterLifecycle(
             NullLogger<PostgresClusterLifecycle>.Instance, runner, settings);
     }
+
+    private static bool IsLinuxRootProcess() =>
+        OperatingSystem.IsLinux() && string.Equals(Environment.UserName, "root", StringComparison.Ordinal);
 
     private sealed class RecordingPostgresProcessRunner : IExternalProcessRunner
     {
