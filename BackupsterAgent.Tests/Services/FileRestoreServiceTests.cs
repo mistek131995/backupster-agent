@@ -9,6 +9,7 @@ using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using BackupsterAgent.Services.Restore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -44,6 +45,7 @@ public sealed class FileRestoreServiceTests
         _key = RandomNumberGenerator.GetBytes(32);
         _encryption = new EncryptionService(
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_key) }),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             NullLogger<EncryptionService>.Instance);
 
         _upload = new FakeUploadProvider();

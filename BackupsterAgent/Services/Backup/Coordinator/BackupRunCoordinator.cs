@@ -215,7 +215,7 @@ public sealed class BackupRunCoordinator
 
     private static string BuildUserErrorMessage(Exception ex)
     {
-        if (ex is BackupPermissionException or BackupUserFacingException)
+        if (ex is BackupPermissionException or BackupUserFacingException or SecretResolutionException)
             return ex.Message;
 
         if (ex is UnauthorizedAccessException)

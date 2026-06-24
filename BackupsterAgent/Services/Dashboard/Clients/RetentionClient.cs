@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Options;
 using Polly;
 
@@ -16,8 +17,9 @@ public sealed class RetentionClient : DashboardClientBase, IRetentionClient
         HttpClient http,
         IOptions<AgentSettings> settings,
         IDashboardAuthGuard authGuard,
+        ISecretResolver secrets,
         ILogger<RetentionClient> logger)
-        : base(settings.Value, authGuard)
+        : base(settings.Value, authGuard, secrets)
     {
         _http = http;
         _logger = logger;
@@ -26,12 +28,13 @@ public sealed class RetentionClient : DashboardClientBase, IRetentionClient
 
     public async Task<IReadOnlyList<ExpiredBackupRecordDto>> GetExpiredAsync(int limit, CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(RetentionClient))) return Array.Empty<ExpiredBackupRecordDto>();
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(RetentionClient), ct);
+        if (token is null) return Array.Empty<ExpiredBackupRecordDto>();
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/backup-records/expired?limit={limit}";
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("X-Agent-Token", Settings.Token);
+        request.Headers.Add("X-Agent-Token", token);
 
         using var response = await _http.SendAsync(request, ct);
         ThrowIfUnauthorized(response, $"{nameof(RetentionClient)}.{nameof(GetExpiredAsync)}", _logger);
@@ -43,14 +46,15 @@ public sealed class RetentionClient : DashboardClientBase, IRetentionClient
 
     public async Task DeleteAsync(Guid recordId, CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(RetentionClient))) return;
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(RetentionClient), ct);
+        if (token is null) return;
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/backup-records/{recordId}";
 
         await _writePipeline.ExecuteAsync(async innerCt =>
         {
             using var request = new HttpRequestMessage(HttpMethod.Delete, url);
-            request.Headers.Add("X-Agent-Token", Settings.Token);
+            request.Headers.Add("X-Agent-Token", token);
 
             using var response = await _http.SendAsync(request, innerCt);
             ThrowIfUnauthorized(response, $"{nameof(RetentionClient)}.{nameof(DeleteAsync)}", _logger);
@@ -60,7 +64,8 @@ public sealed class RetentionClient : DashboardClientBase, IRetentionClient
 
     public async Task MarkStorageUnreachableAsync(IReadOnlyList<Guid> ids, CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(RetentionClient))) return;
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(RetentionClient), ct);
+        if (token is null) return;
         if (ids.Count == 0) return;
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/backup-records/mark-unreachable";
@@ -69,7 +74,7 @@ public sealed class RetentionClient : DashboardClientBase, IRetentionClient
         await _writePipeline.ExecuteAsync(async innerCt =>
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
-            request.Headers.Add("X-Agent-Token", Settings.Token);
+            request.Headers.Add("X-Agent-Token", token);
             request.Content = JsonContent.Create(dto, options: JsonOptions);
 
             using var response = await _http.SendAsync(request, innerCt);

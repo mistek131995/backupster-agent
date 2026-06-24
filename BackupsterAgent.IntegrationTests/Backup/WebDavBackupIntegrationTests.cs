@@ -5,6 +5,7 @@ using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using BackupsterAgent.Services.Restore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -61,6 +62,7 @@ public sealed class WebDavBackupIntegrationTests
 
         _encryption = new EncryptionService(
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_encryptionKey) }),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             NullLogger<EncryptionService>.Instance);
 
         var restoreSettings = Options.Create(new RestoreSettings { TempPath = _testTempRoot });

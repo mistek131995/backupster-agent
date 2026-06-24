@@ -16,6 +16,7 @@ using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using BackupsterAgent.Services.Common.State;
 using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Services.Dashboard.Clients;
@@ -126,6 +127,7 @@ builder.Services.AddSingleton<IOutboxStore>(sp =>
 builder.Services.AddSingleton<PostgresBinaryResolver>();
 builder.Services.AddSingleton<MysqlBinaryResolver>();
 builder.Services.AddSingleton<MongoBinaryResolver>();
+builder.Services.AddSingleton<ISecretResolver, SecretResolver>();
 builder.Services.AddSingleton<IExternalProcessRunner, ExternalProcessRunner>();
 builder.Services.AddSingleton(sp =>
     new ConnectionResolver(sp.GetRequiredService<IOptions<List<ConnectionConfig>>>().Value));

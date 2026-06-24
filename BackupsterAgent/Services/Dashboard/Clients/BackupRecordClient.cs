@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Options;
 using Polly;
 
@@ -18,8 +19,9 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         HttpClient http,
         IOptions<AgentSettings> settings,
         IDashboardAuthGuard authGuard,
+        ISecretResolver secrets,
         ILogger<BackupRecordClient> logger)
-        : base(settings.Value, authGuard)
+        : base(settings.Value, authGuard, secrets)
     {
         _http = http;
         _logger = logger;
@@ -28,7 +30,8 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
 
     public async Task<OpenRecordResult> OpenAsync(OpenBackupRecordDto dto, CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(BackupRecordClient)))
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct);
+        if (token is null)
             return new OpenRecordResult(DashboardAvailability.PermanentSkip);
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/backup-record";
@@ -38,7 +41,7 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
             var response = await _retryPipeline.ExecuteAsync(async innerCt =>
             {
                 using var request = new HttpRequestMessage(HttpMethod.Post, url);
-                request.Headers.Add("X-Agent-Token", Settings.Token);
+                request.Headers.Add("X-Agent-Token", token);
                 request.Content = JsonContent.Create(dto, options: JsonOptions);
 
                 var resp = await _http.SendAsync(request, innerCt);
@@ -89,7 +92,8 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
 
     public async Task ReportProgressAsync(Guid backupRecordId, BackupProgressDto progress, CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(BackupRecordClient))) return;
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct);
+        if (token is null) return;
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/backup-record/{backupRecordId}/progress";
 
@@ -97,7 +101,7 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.Add("X-Agent-Token", Settings.Token);
+        request.Headers.Add("X-Agent-Token", token);
         request.Content = JsonContent.Create(progress, options: JsonOptions);
 
         using var response = await _http.SendAsync(request, timeoutCts.Token);
@@ -108,7 +112,8 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
     public async Task<FinalizeRecordResult> FinalizeAsync(
         Guid backupRecordId, FinalizeBackupRecordDto dto, CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(BackupRecordClient)))
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct);
+        if (token is null)
             return new FinalizeRecordResult(DashboardAvailability.PermanentSkip);
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/backup-record/{backupRecordId}";
@@ -120,7 +125,7 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
             await _retryPipeline.ExecuteAsync(async innerCt =>
             {
                 using var request = new HttpRequestMessage(HttpMethod.Patch, url);
-                request.Headers.Add("X-Agent-Token", Settings.Token);
+                request.Headers.Add("X-Agent-Token", token);
                 request.Content = JsonContent.Create(dto, options: JsonOptions);
 
                 using var response = await _http.SendAsync(request, innerCt);
@@ -164,7 +169,8 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         BackupMode mode,
         CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(BackupRecordClient)))
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct);
+        if (token is null)
             return new LastSuccessfulLookupResult(LastSuccessfulLookupOutcome.DashboardUnavailable);
 
         var modeQuery = mode switch
@@ -183,7 +189,7 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Add("X-Agent-Token", Settings.Token);
+            request.Headers.Add("X-Agent-Token", token);
 
             using var response = await _http.SendAsync(request, ct);
             ThrowIfUnauthorized(response, $"{nameof(BackupRecordClient)}.{nameof(GetLastSuccessfulAsync)}", _logger);

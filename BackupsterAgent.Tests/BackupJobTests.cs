@@ -8,6 +8,7 @@ using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -136,6 +137,7 @@ public sealed class BackupJobTests
         var encKey = RandomNumberGenerator.GetBytes(32);
         var encryption = new EncryptionService(
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(encKey) }),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             NullLogger<EncryptionService>.Instance);
 
         var chunker = new ContentDefinedChunker();
@@ -149,6 +151,7 @@ public sealed class BackupJobTests
         return new DatabaseBackupPipeline(
             new StubBackupProviderFactory(),
             new ConnectionResolver([]),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             encryption,
             new StubUploadProviderFactory(_uploader),
             fileBackup,
@@ -204,7 +207,8 @@ public sealed class BackupJobTests
 
     private sealed class StubUploadProviderFactory(IUploadProvider service) : IUploadProviderFactory
     {
-        public IUploadProvider GetProvider(string storageName) => service;
+        public Task<IUploadProvider> GetProviderAsync(string storageName, CancellationToken ct) =>
+            Task.FromResult(service);
     }
 
     private sealed class StubBackupProviderFactory : BackupsterAgent.Providers.Backup.IBackupProviderFactory

@@ -4,6 +4,7 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Common.Secrets;
 using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Services.Dashboard.Sync;
 using Microsoft.Extensions.Logging;
@@ -117,6 +118,84 @@ public sealed class ConnectionSyncServiceTests
     }
 
     [Test]
+    public async Task SyncAsync_TokenSecret_DoesNotLogResolvedToken()
+    {
+        const string token = "secret-token-from-file";
+        var tokenPath = Path.Combine(Path.GetTempPath(), $"backupster-token-{Guid.NewGuid():N}");
+        await File.WriteAllTextAsync(tokenPath, token);
+
+        try
+        {
+            var handler = new CapturingHandler(HttpStatusCode.NoContent);
+            var logger = new CapturingLogger<ConnectionSyncService>();
+            var service = Build(handler,
+            [
+                new ConnectionConfig { Name = "a", DatabaseType = DatabaseType.Postgres, Host = "h1", Port = 5432 },
+            ],
+            token: "",
+            tokenSecret: new SecretRef { Provider = "file", Path = tokenPath },
+            logger: logger);
+
+            var ok = await service.SyncAsync();
+
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Has.Count.EqualTo(1));
+            Assert.That(handler.Calls[0].AgentToken, Is.EqualTo(token));
+
+            var logs = string.Join(Environment.NewLine, logger.Messages);
+            Assert.Multiple(() =>
+            {
+                Assert.That(logs, Does.Not.Contain(token));
+                Assert.That(logs, Does.Not.Contain(token[..8]));
+            });
+        }
+        finally
+        {
+            try { File.Delete(tokenPath); } catch { }
+        }
+    }
+
+    [TestCase(DatabaseType.Postgres, 5432)]
+    [TestCase(DatabaseType.Mysql, 3306)]
+    public async Task SyncAsync_StaticEndpointConnectionUriSecretMissing_SendsHostPortWithoutReadingSecret(
+        DatabaseType databaseType,
+        int port)
+    {
+        var handler = new CapturingHandler(HttpStatusCode.NoContent);
+        var service = Build(handler,
+        [
+            new ConnectionConfig
+            {
+                Name = "static-endpoint",
+                DatabaseType = databaseType,
+                Host = "db.internal",
+                Port = port,
+                ConnectionUriSecret = new SecretRef
+                {
+                    Provider = "file",
+                    Path = Path.Combine(Path.GetTempPath(), $"missing-backupster-{databaseType}-{Guid.NewGuid():N}"),
+                },
+            },
+        ]);
+
+        var ok = await service.SyncAsync();
+
+        Assert.That(ok, Is.True);
+        Assert.That(handler.Calls, Has.Count.EqualTo(1));
+
+        var payload = handler.Calls[0].DeserializeBody<ConnectionSyncRequestDto>();
+        Assert.That(payload, Is.Not.Null);
+        Assert.That(payload!.Connections, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(payload.Connections[0].Name, Is.EqualTo("static-endpoint"));
+            Assert.That(payload.Connections[0].DatabaseType, Is.EqualTo(databaseType.ToString()));
+            Assert.That(payload.Connections[0].Host, Is.EqualTo("db.internal"));
+            Assert.That(payload.Connections[0].Port, Is.EqualTo(port));
+        });
+    }
+
+    [Test]
     public async Task SyncAsync_MongoConnectionUri_SendsSanitizedTopology()
     {
         var handler = new CapturingHandler(HttpStatusCode.NoContent);
@@ -152,6 +231,85 @@ public sealed class ConnectionSyncServiceTests
             Assert.That(body, Does.Not.Contain("secret"));
             Assert.That(body, Does.Not.Contain("tlsCAFile"));
             Assert.That(body, Does.Not.Contain("/etc/ca.pem"));
+        });
+    }
+
+    [Test]
+    public async Task SyncAsync_MongoConnectionUriSecret_SendsSanitizedTopology()
+    {
+        var secretPath = Path.Combine(Path.GetTempPath(), $"backupster-mongo-uri-{Guid.NewGuid():N}");
+        await File.WriteAllTextAsync(
+            secretPath,
+            "mongodb://user:secret@cluster.example.net:27019/?tls=true&tlsCAFile=/etc/ca.pem\n");
+
+        try
+        {
+            var handler = new CapturingHandler(HttpStatusCode.NoContent);
+            var service = Build(handler,
+            [
+                new ConnectionConfig
+                {
+                    Name = "atlas",
+                    DatabaseType = DatabaseType.MongoDb,
+                    ConnectionUriSecret = new SecretRef { Provider = "file", Path = secretPath },
+                },
+            ]);
+
+            var ok = await service.SyncAsync();
+
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Has.Count.EqualTo(1));
+
+            var payload = handler.Calls[0].DeserializeBody<ConnectionSyncRequestDto>();
+            Assert.That(payload, Is.Not.Null);
+            Assert.That(payload!.Connections, Has.Count.EqualTo(1));
+            Assert.Multiple(() =>
+            {
+                Assert.That(payload.Connections[0].Name, Is.EqualTo("atlas"));
+                Assert.That(payload.Connections[0].Host, Is.EqualTo("cluster.example.net"));
+                Assert.That(payload.Connections[0].Port, Is.EqualTo(27019));
+            });
+
+            var body = System.Text.Encoding.UTF8.GetString(handler.Calls[0].Body);
+            Assert.Multiple(() =>
+            {
+                Assert.That(body, Does.Not.Contain("secret"));
+                Assert.That(body, Does.Not.Contain("tlsCAFile"));
+                Assert.That(body, Does.Not.Contain("/etc/ca.pem"));
+            });
+        }
+        finally
+        {
+            try { File.Delete(secretPath); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task SyncAsync_MongoConnectionUriSecretMissing_SkipsConnectionWithoutFallbackToHostPort()
+    {
+        var handler = new CapturingHandler();
+        var service = Build(handler,
+        [
+            new ConnectionConfig
+            {
+                Name = "atlas",
+                DatabaseType = DatabaseType.MongoDb,
+                Host = "fallback.example.net",
+                Port = 27017,
+                ConnectionUriSecret = new SecretRef
+                {
+                    Provider = "file",
+                    Path = Path.Combine(Path.GetTempPath(), $"missing-backupster-mongo-uri-{Guid.NewGuid():N}"),
+                },
+            },
+        ]);
+
+        var ok = await service.SyncAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Is.Empty);
         });
     }
 
@@ -448,6 +606,7 @@ public sealed class ConnectionSyncServiceTests
         HttpMessageHandler handler,
         IReadOnlyList<ConnectionConfig> connections,
         string token = "secret-token",
+        SecretRef? tokenSecret = null,
         string dashboardUrl = "http://dashboard.local:8080",
         ILogger<ConnectionSyncService>? logger = null)
     {
@@ -456,10 +615,12 @@ public sealed class ConnectionSyncServiceTests
         var settings = Options.Create(new AgentSettings
         {
             Token = token,
+            TokenSecret = tokenSecret,
             DashboardUrl = dashboardUrl,
         });
         return new ConnectionSyncService(http, resolver, settings,
             new NullAuthGuard(),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             logger ?? NullLogger<ConnectionSyncService>.Instance);
     }
 

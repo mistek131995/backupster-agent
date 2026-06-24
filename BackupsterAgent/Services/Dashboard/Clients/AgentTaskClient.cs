@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Options;
 using Polly;
 
@@ -17,8 +18,9 @@ public sealed class AgentTaskClient : DashboardClientBase, IAgentTaskClient
         HttpClient http,
         IOptions<AgentSettings> settings,
         IDashboardAuthGuard authGuard,
+        ISecretResolver secrets,
         ILogger<AgentTaskClient> logger)
-        : base(settings.Value, authGuard)
+        : base(settings.Value, authGuard, secrets)
     {
         _http = http;
         _logger = logger;
@@ -27,12 +29,13 @@ public sealed class AgentTaskClient : DashboardClientBase, IAgentTaskClient
 
     public async Task<AgentTaskForAgentDto?> FetchTaskAsync(CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(AgentTaskClient))) return null;
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(AgentTaskClient), ct);
+        if (token is null) return null;
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/task";
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("X-Agent-Token", Settings.Token);
+        request.Headers.Add("X-Agent-Token", token);
 
         using var response = await _http.SendAsync(request, ct);
 
@@ -57,14 +60,15 @@ public sealed class AgentTaskClient : DashboardClientBase, IAgentTaskClient
 
     public async Task PatchTaskAsync(Guid taskId, PatchAgentTaskDto patch, CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(AgentTaskClient))) return;
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(AgentTaskClient), ct);
+        if (token is null) return;
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/task/{taskId}";
 
         await _patchPipeline.ExecuteAsync(async innerCt =>
         {
             using var request = new HttpRequestMessage(HttpMethod.Patch, url);
-            request.Headers.Add("X-Agent-Token", Settings.Token);
+            request.Headers.Add("X-Agent-Token", token);
             request.Content = JsonContent.Create(patch, options: JsonOptions);
 
             using var response = await _http.SendAsync(request, innerCt);
@@ -78,7 +82,8 @@ public sealed class AgentTaskClient : DashboardClientBase, IAgentTaskClient
 
     public async Task ReportProgressAsync(Guid taskId, AgentTaskProgressDto progress, CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(AgentTaskClient))) return;
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(AgentTaskClient), ct);
+        if (token is null) return;
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/task/{taskId}/progress";
 
@@ -86,7 +91,7 @@ public sealed class AgentTaskClient : DashboardClientBase, IAgentTaskClient
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.Add("X-Agent-Token", Settings.Token);
+        request.Headers.Add("X-Agent-Token", token);
         request.Content = JsonContent.Create(progress, options: JsonOptions);
 
         using var response = await _http.SendAsync(request, timeoutCts.Token);

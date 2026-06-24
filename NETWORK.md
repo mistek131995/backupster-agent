@@ -2,7 +2,7 @@
 
 Этот документ — полный перечень HTTP-запросов, которые агент (`BackupsterAgent`) делает к дашборду. Для каждого запроса указаны метод, URL, заголовки, точная схема тела и пример.
 
-Цель документа — дать администратору возможность убедиться: **с хоста, где стоит агент, на дашборд уходит только сетевая топология (имена, хосты, порты, имена БД), но никогда — учётные данные подключений к БД, ключи шифрования, секреты хранилищ (S3, SFTP, Azure Blob, WebDAV) и пути локальных хранилищ (LocalFs)**.
+Цель документа — дать администратору возможность убедиться: **с хоста, где стоит агент, на дашборд уходит только сетевая топология (имена, хосты, порты, имена БД), но никогда — учётные данные подключений к БД, ключи шифрования, токен агента, секреты хранилищ (S3, SFTP, Azure Blob, WebDAV), ссылки на файлы секретов и пути локальных хранилищ (LocalFs)**.
 
 Документ обязан обновляться вместе с кодом в том же PR, что и изменения сетевого поведения агента.
 
@@ -15,10 +15,10 @@
 Каждый запрос к дашборду содержит заголовок:
 
 ```
-X-Agent-Token: <AgentSettings.Token>
+X-Agent-Token: <AgentSettings.Token или AgentSettings.TokenSecret>
 ```
 
-Токен задаётся через env var `AgentSettings__Token` (см. README агента). В теле запроса и в query-строке токен не передаётся никогда. В логах агента печатается только префикс `token[..8]`.
+Токен задаётся через `AgentSettings__Token` или через `AgentSettings__TokenSecret__Provider=file` + `AgentSettings__TokenSecret__Path=...` (см. README агента и `docs/configuration.md`). В теле запроса, query-строке и логах агента токен не передаётся никогда.
 
 ### Версия агента
 
@@ -74,6 +74,8 @@ chunks/{sha256}                                                     ← общи
 
 Все запросы — обычный HTTP/HTTPS на `AgentSettings.DashboardUrl`. Content-Type тела — `application/json; charset=utf-8`. Ответы без тела — `204 No Content`.
 
+Провайдер секретов `file` не добавляет исходящих сетевых запросов: агент читает файл локально перед использованием соответствующего поля.
+
 ### Таймауты HTTP-клиентов
 
 Верхние лимиты на один HTTP-вызов (задаются в `Program.cs` через `AddHttpClient(c => c.Timeout = ...)`), чтобы агент не зависал на проблемах сети:
@@ -89,11 +91,13 @@ Polly-ретраи (1/2/4 с) срабатывают поверх этих ли�
 - `Connections[].Username`, `Connections[].Password`
 - `Connections[].ConnectionUri` (для MongoDB и MSSQL может содержать credentials, TLS-параметры и локальные пути сертификатов)
 - `EncryptionSettings.Key`
+- `AgentSettings.Token`
 - `Storages[].S3.AccessKey`, `Storages[].S3.SecretKey`
 - `Storages[].Sftp.Password`, `Storages[].Sftp.PrivateKeyPath`, `Storages[].Sftp.PrivateKeyPassphrase`
 - `Storages[].AzureBlob.ConnectionString`, `Storages[].AzureBlob.AccountKey`
 - `Storages[].WebDav.Password`
 - `Storages[].LocalFs.RemotePath` (сам путь и факт его наличия)
+- `*Secret`-ссылки на файлы секретов и содержимое этих файлов
 - Содержимое дампов, чанков, файлов (весь payload бэкапа шифруется AES-256-GCM и идёт напрямую в ваше хранилище — S3/SFTP/Azure Blob/WebDAV или локальную папку — минуя дашборд)
 
 Если вы нашли в выхлопе агента или в трафике что-то из этого списка — это баг. Пишите в репозиторий.
@@ -362,7 +366,7 @@ Heartbeat-отчёт о текущей стадии бэкапа. Шлётся �
 | `host`           | string | Хост из `Connections[].Host`. Для MongoDB/MSSQL с `ConnectionUri` — безопасный host, извлечённый из URI/connection string без credentials/query/options |
 | `port`           | int    | Порт из `Connections[].Port`. Для MongoDB/MSSQL с `ConnectionUri` — безопасный port, извлечённый из URI/connection string; для `mongodb+srv://` может быть display-only значением без передачи URI |
 
-> **Ни `Username`, ни `Password`, ни `ConnectionUri` не попадают в это тело.** Формируется в `ConnectionSyncService.BuildPayload()` — при изменениях проверяйте, что оно по-прежнему берёт только безопасную топологию. Для MongoDB URI query-параметры (`authSource`, `tlsCAFile`, TLS-настройки и т.п.) наружу не отправляются. Для MSSQL с `ConnectionUri` наружу уходит только host/port из `Data Source`; named instance, LocalDB, named pipes и административное подключение `admin:` не мапятся в host/port и пропускаются в sync с warning. Локальные синонимы `.` и `(local)` отображаются как `localhost`.
+> **Ни `Username`, ни `Password`, ни `ConnectionUri`, ни `*Secret`-ссылки не попадают в это тело.** Формируется в `ConnectionSyncService.BuildPayloadAsync()` — при изменениях проверяйте, что оно по-прежнему берёт только безопасную топологию. Для MongoDB/MSSQL с `ConnectionUriSecret` файл секрета читается локально только для извлечения безопасных `host`/`port`; значение URI и путь файла наружу не отправляются. Для MongoDB URI query-параметры (`authSource`, `tlsCAFile`, TLS-настройки и т.п.) наружу не отправляются. Для MSSQL с `ConnectionUri` наружу уходит только host/port из `Data Source`; named instance, LocalDB, named pipes и административное подключение `admin:` не мапятся в host/port и пропускаются в sync с warning. Локальные синонимы `.` и `(local)` отображаются как `localhost`.
 
 ---
 
@@ -463,7 +467,7 @@ Heartbeat-отчёт о текущей стадии бэкапа. Шлётся �
 
 Бэкенд делает upsert по `(AgentId, Name)`. Stale-записи не чистятся (как с базами и file-set'ами).
 
-> **Ни credentials, ни endpoint'ы, ни bucket'ы не попадают в это тело.** Формируется в `StorageSyncService.BuildPayload()` — при изменениях проверяйте, что оно по-прежнему берёт только эти два поля.
+> **Ни credentials, ни `*Secret`-ссылки, ни endpoint'ы, ни bucket'ы не попадают в это тело.** Формируется в `StorageSyncService.BuildPayload()` — при изменениях проверяйте, что оно по-прежнему берёт только эти два поля.
 
 ---
 
@@ -807,7 +811,7 @@ Heartbeat задачи. Шлётся не чаще раза в 5 секунд + 
 | `PATCH /backup-record/{id}`     | `Services/Backup/BackupJob.BuildFinalizeDto` → `BackupRecordClient.FinalizeAsync` |
 | `GET /backup-records/last-successful` | — (query-параметры собираются в `BackupRecordClient.GetLastSuccessfulAsync`)         |
 | `GET /schedule`                 | —                                                            |
-| `POST /connections`             | `Services/Dashboard/Sync/ConnectionSyncService.BuildPayload`      |
+| `POST /connections`             | `Services/Dashboard/Sync/ConnectionSyncService.BuildPayloadAsync`      |
 | `POST /databases`               | `Services/Dashboard/Sync/DatabaseSyncService.BuildPayload`        |
 | `POST /filesets`                | `Services/Dashboard/Sync/FileSetSyncService.BuildPayload`         |
 | `POST /storages`                | `Services/Dashboard/Sync/StorageSyncService.BuildPayload`         |

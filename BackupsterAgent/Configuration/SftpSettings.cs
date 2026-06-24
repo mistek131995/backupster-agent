@@ -5,9 +5,11 @@ public sealed class SftpSettings
     public string Host { get; set; } = string.Empty;
     public int Port { get; set; } = 22;
     public string Username { get; set; } = string.Empty;
+    public SecretRef? UsernameSecret { get; set; }
 
     /// <summary>Password authentication. Leave empty when using a private key.</summary>
     public string Password { get; set; } = string.Empty;
+    public SecretRef? PasswordSecret { get; set; }
 
     /// <summary>
     /// Path to the PEM/OpenSSH private key file on the agent host.
@@ -17,6 +19,7 @@ public sealed class SftpSettings
 
     /// <summary>Passphrase for the private key file, if encrypted.</summary>
     public string PrivateKeyPassphrase { get; set; } = string.Empty;
+    public SecretRef? PrivateKeyPassphraseSecret { get; set; }
 
     /// <summary>Remote base directory. Files are placed under {RemotePath}/{database}/{yyyy-MM-dd}/.</summary>
     public string RemotePath { get; set; } = "/backups";

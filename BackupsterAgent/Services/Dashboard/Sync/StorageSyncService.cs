@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Options;
 using Polly;
 
@@ -20,8 +21,9 @@ public sealed class StorageSyncService : DashboardClientBase, IStorageSyncServic
         StorageResolver storages,
         IOptions<AgentSettings> settings,
         IDashboardAuthGuard authGuard,
+        ISecretResolver secrets,
         ILogger<StorageSyncService> logger)
-        : base(settings.Value, authGuard)
+        : base(settings.Value, authGuard, secrets)
     {
         _http = http;
         _storages = storages;
@@ -31,7 +33,8 @@ public sealed class StorageSyncService : DashboardClientBase, IStorageSyncServic
 
     public async Task<bool> SyncAsync(CancellationToken ct = default)
     {
-        if (!IsConfigured(_logger, nameof(StorageSyncService))) return false;
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(StorageSyncService), ct);
+        if (token is null) return false;
 
         await _gate.WaitAsync(ct);
         try
@@ -56,7 +59,7 @@ public sealed class StorageSyncService : DashboardClientBase, IStorageSyncServic
                     var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/storages";
 
                     using var request = new HttpRequestMessage(HttpMethod.Post, url);
-                    request.Headers.Add("X-Agent-Token", Settings.Token);
+                    request.Headers.Add("X-Agent-Token", token);
                     request.Content = JsonContent.Create(payload, options: JsonOptions);
 
                     var response = await _http.SendAsync(request, innerCt);

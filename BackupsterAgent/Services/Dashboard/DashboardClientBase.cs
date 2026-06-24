@@ -2,6 +2,8 @@ using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BackupsterAgent.Configuration;
+using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Secrets;
 using Polly;
 using Polly.Retry;
 
@@ -24,11 +26,16 @@ public abstract class DashboardClientBase
 
     protected readonly AgentSettings Settings;
     protected readonly IDashboardAuthGuard AuthGuard;
+    protected readonly ISecretResolver Secrets;
 
-    protected DashboardClientBase(AgentSettings settings, IDashboardAuthGuard authGuard)
+    protected DashboardClientBase(
+        AgentSettings settings,
+        IDashboardAuthGuard authGuard,
+        ISecretResolver secrets)
     {
         Settings = NormalizeUrl(settings);
         AuthGuard = authGuard;
+        Secrets = secrets;
     }
 
     private static AgentSettings NormalizeUrl(AgentSettings settings)
@@ -43,17 +50,47 @@ public abstract class DashboardClientBase
 
         return url == settings.DashboardUrl
             ? settings
-            : new AgentSettings { Token = settings.Token, DashboardUrl = url };
+            : new AgentSettings
+            {
+                Token = settings.Token,
+                TokenSecret = settings.TokenSecret,
+                DashboardUrl = url,
+            };
     }
 
-    protected bool IsConfigured(ILogger logger, string clientName)
+    protected async Task<string?> ResolveTokenOrSkipAsync(
+        ILogger logger,
+        string clientName,
+        CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(Settings.Token) && !string.IsNullOrWhiteSpace(Settings.DashboardUrl))
-            return true;
+        if (string.IsNullOrWhiteSpace(Settings.DashboardUrl))
+        {
+            logger.LogWarning(
+                "{Client}: AgentSettings.DashboardUrl is not configured.", clientName);
+            return null;
+        }
+
+        string token;
+        try
+        {
+            token = await Secrets.ResolveStringAsync(
+                Settings.TokenSecret,
+                Settings.Token,
+                "AgentSettings.Token",
+                ct);
+        }
+        catch (SecretResolutionException ex)
+        {
+            logger.LogError(ex, "{Client}: failed to resolve AgentSettings.Token.", clientName);
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(token))
+            return token;
 
         logger.LogWarning(
-            "{Client}: AgentSettings.Token or DashboardUrl is not configured.", clientName);
-        return false;
+            "{Client}: AgentSettings.Token is not configured.", clientName);
+        return null;
     }
 
     protected void ThrowIfUnauthorized(HttpResponseMessage response, string channel, ILogger logger)

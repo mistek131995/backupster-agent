@@ -11,6 +11,7 @@ using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using BackupsterAgent.Services.Restore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -118,6 +119,7 @@ public sealed class MongoLogicalBackupPipelineIntegrationTests
     {
         var encryption = new EncryptionService(
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) }),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             NullLogger<EncryptionService>.Instance);
         var restoreSettings = new RestoreSettings { TempPath = _tempRoot };
         var restoreOptions = Options.Create(restoreSettings);
@@ -194,6 +196,7 @@ public sealed class MongoLogicalBackupPipelineIntegrationTests
         return new DatabaseBackupPipeline(
             new MongoBackupProviderFactory(backupProvider),
             new ConnectionResolver([_connection]),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             encryption,
             new SingleUploadProviderFactory(uploader),
             new FileBackupService(
@@ -220,6 +223,7 @@ public sealed class MongoLogicalBackupPipelineIntegrationTests
 
         return new DatabaseRestoreService(
             new ConnectionResolver([_connection]),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             new MongoRestoreProviderFactory(restoreProvider),
             encryption,
             restoreOptions,
@@ -259,10 +263,10 @@ public sealed class MongoLogicalBackupPipelineIntegrationTests
 
     private sealed class SingleUploadProviderFactory(IUploadProvider provider) : IUploadProviderFactory
     {
-        public IUploadProvider GetProvider(string storageName)
+        public Task<IUploadProvider> GetProviderAsync(string storageName, CancellationToken ct)
         {
             if (storageName == StorageName)
-                return provider;
+                return Task.FromResult(provider);
 
             throw new NotSupportedException($"Unexpected storage provider request: '{storageName}'.");
         }

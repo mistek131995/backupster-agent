@@ -3,6 +3,7 @@
 Все настройки в `appsettings.json`. Любой параметр можно переопределить переменной окружения.
 
 - [Подключения, хранилища и базы данных](#подключения-хранилища-и-базы-данных)
+- [Секреты из файлов](#секреты-из-файлов)
 - [Наборы файлов (FileSets)](#наборы-файлов-filesets)
 - [Шифрование](#шифрование)
 - [Хранилища — настройки провайдеров](#хранилища--настройки-провайдеров)
@@ -126,6 +127,85 @@
 
 ---
 
+## Секреты из файлов
+
+Любое поле секрета можно оставить в старом виде строкой или заменить соседним `*Secret`-полем. Если задано `*Secret`, оно имеет приоритет над plain-значением. Старые конфиги без `*Secret` продолжают работать.
+
+Формат:
+
+```json
+"PasswordSecret": {
+  "Provider": "file",
+  "Path": "/run/secrets/db_password"
+}
+```
+
+`Provider` сейчас поддерживает только `file`; если поле пустое, агент тоже считает его `file`. `Path` — путь к файлу на хосте агента или внутри контейнера. Файл читается как UTF-8, завершающий перевод строки (`CR/LF`) срезается, пустой файл считается ошибкой конфигурации.
+
+Поддерживаемые поля:
+
+| Область | Plain-поле | Secret-поле |
+|---|---|---|
+| Dashboard | `AgentSettings.Token` | `AgentSettings.TokenSecret` |
+| Шифрование | `EncryptionSettings.Key` | `EncryptionSettings.KeySecret` |
+| Подключения | `Connections[].ConnectionUri` | `Connections[].ConnectionUriSecret` |
+| Подключения | `Connections[].Username` | `Connections[].UsernameSecret` |
+| Подключения | `Connections[].Password` | `Connections[].PasswordSecret` |
+| S3 | `Storages[].S3.AccessKey` | `Storages[].S3.AccessKeySecret` |
+| S3 | `Storages[].S3.SecretKey` | `Storages[].S3.SecretKeySecret` |
+| SFTP | `Storages[].Sftp.Username` | `Storages[].Sftp.UsernameSecret` |
+| SFTP | `Storages[].Sftp.Password` | `Storages[].Sftp.PasswordSecret` |
+| SFTP | `Storages[].Sftp.PrivateKeyPassphrase` | `Storages[].Sftp.PrivateKeyPassphraseSecret` |
+| Azure Blob | `Storages[].AzureBlob.ConnectionString` | `Storages[].AzureBlob.ConnectionStringSecret` |
+| Azure Blob | `Storages[].AzureBlob.AccountKey` | `Storages[].AzureBlob.AccountKeySecret` |
+| WebDAV | `Storages[].WebDav.Username` | `Storages[].WebDav.UsernameSecret` |
+| WebDAV | `Storages[].WebDav.Password` | `Storages[].WebDav.PasswordSecret` |
+
+Агент читает секреты при создании соответствующего сервиса или клиента. Горячая ротация plain-значений, `*Secret`-ссылок и содержимого файлов секретов не поддерживается: после изменения секрета перезапустите агент.
+
+Пример подключения и S3-хранилища:
+
+```json
+{
+  "Name": "main-pg",
+  "DatabaseType": "Postgres",
+  "Host": "localhost",
+  "Port": 5432,
+  "UsernameSecret": {
+    "Provider": "file",
+    "Path": "/run/secrets/pg_user"
+  },
+  "PasswordSecret": {
+    "Provider": "file",
+    "Path": "/run/secrets/pg_password"
+  }
+}
+```
+
+```json
+{
+  "Name": "prod-s3",
+  "Provider": "S3",
+  "S3": {
+    "EndpointUrl": "https://storage.yandexcloud.net",
+    "AccessKeySecret": {
+      "Provider": "file",
+      "Path": "/run/secrets/s3_access_key"
+    },
+    "SecretKeySecret": {
+      "Provider": "file",
+      "Path": "/run/secrets/s3_secret_key"
+    },
+    "BucketName": "prod-backups",
+    "Region": "us-east-1"
+  }
+}
+```
+
+Такой формат подходит для Docker secrets, Kubernetes Secrets, External Secrets, Vault Agent templates, systemd `LoadCredential=` и CI/CD, если они записывают секрет в файл с правами, доступными процессу агента. Значения секретов и сами `*Secret`-ссылки на дашборд не отправляются. Для topology sync MongoDB/MSSQL агент может прочитать `ConnectionUriSecret` локально только чтобы извлечь безопасные `host`/`port`.
+
+---
+
 ## Наборы файлов (FileSets)
 
 `FileSets[]` — отдельный список для бэкапа произвольных каталогов и файлов без привязки к базе данных. Подходит для загруженных пользователями файлов приложения, конфигов, сертификатов и т. п.
@@ -165,7 +245,20 @@
 }
 ```
 
+Ключ можно хранить в файле через `KeySecret`:
+
+```json
+"EncryptionSettings": {
+  "KeySecret": {
+    "Provider": "file",
+    "Path": "/run/secrets/backupster_encryption_key"
+  }
+}
+```
+
 При создании шаблона `appsettings.json` агент генерирует ключ автоматически. **Сохраните его в надёжном месте** — без ключа бэкапы восстановить невозможно, а его смена ломает дешифровку уже сделанных бэкапов.
+
+Если plain-поле `Key` пустое и `KeySecret` не задан, агент стартует, но не запускает бэкапы до настройки ключа. Если `KeySecret` задан, файл должен быть доступен уже при старте агента; недоступный файл, пустой файл, не-base64 или ключ не на 32 байта считаются ошибкой конфигурации и валят старт с понятным сообщением.
 
 Если конфиг создан вручную и ключ пустой, сгенерируйте его сами:
 
@@ -316,6 +409,14 @@ Token и DashboardUrl передаются через переменные ок�
 
 ```bash
 AgentSettings__Token=<токен агента из Dashboard>
+AgentSettings__DashboardUrl=http://your-server:8080
+```
+
+Токен также можно брать из файла:
+
+```bash
+AgentSettings__TokenSecret__Provider=file
+AgentSettings__TokenSecret__Path=/run/secrets/backupster_agent_token
 AgentSettings__DashboardUrl=http://your-server:8080
 ```
 

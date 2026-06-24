@@ -121,7 +121,7 @@ public sealed class ChunkGcWorker : BackgroundService
 
             try
             {
-                var uploader = _uploadFactory.GetProvider(name);
+                var uploader = await _uploadFactory.GetProviderAsync(name, ct);
                 await _sweep.SweepStorageAsync(uploader, name, graceWindow, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

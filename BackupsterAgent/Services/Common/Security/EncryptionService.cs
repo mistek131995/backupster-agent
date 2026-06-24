@@ -2,6 +2,8 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using BackupsterAgent.Configuration;
+using BackupsterAgent.Exceptions;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Services.Common.Security;
@@ -26,11 +28,22 @@ public sealed class EncryptionService
 
     public bool IsConfigured { get; }
 
-    public EncryptionService(IOptions<EncryptionSettings> settings, ILogger<EncryptionService> logger)
+    public EncryptionService(
+        IOptions<EncryptionSettings> settings,
+        ISecretResolver secrets,
+        ILogger<EncryptionService> logger)
+        : this(
+            secrets.ResolveString(
+                settings.Value.KeySecret,
+                settings.Value.Key,
+                "EncryptionSettings.Key"),
+            logger)
+    {
+    }
+
+    private EncryptionService(string keyBase64, ILogger<EncryptionService> logger)
     {
         _logger = logger;
-
-        var keyBase64 = settings.Value.Key;
         if (string.IsNullOrWhiteSpace(keyBase64))
         {
             _logger.LogWarning("EncryptionSettings:Key is not set. Agent will not run backups until the key is configured.");
@@ -39,13 +52,35 @@ public sealed class EncryptionService
             return;
         }
 
-        _key = Convert.FromBase64String(keyBase64);
-        if (_key.Length != 32)
-            throw new InvalidOperationException(
-                $"EncryptionSettings:Key must decode to exactly 32 bytes (AES-256); got {_key.Length}");
-
+        _key = ParseKey(keyBase64);
         IsConfigured = true;
     }
+
+    private static byte[] ParseKey(string keyBase64)
+    {
+        byte[] key;
+        try
+        {
+            key = Convert.FromBase64String(keyBase64);
+        }
+        catch (FormatException ex)
+        {
+            throw InvalidKeyException(ex);
+        }
+
+        if (key.Length != 32)
+            throw InvalidKeyException();
+
+        return key;
+    }
+
+    private static SecretResolutionException InvalidKeyException(Exception? innerException = null) =>
+        innerException is null
+            ? new SecretResolutionException(
+                "Ключ шифрования 'EncryptionSettings.Key' должен быть base64-строкой, которая декодируется ровно в 32 байта.")
+            : new SecretResolutionException(
+                "Ключ шифрования 'EncryptionSettings.Key' должен быть base64-строкой, которая декодируется ровно в 32 байта.",
+                innerException);
 
     public async Task<string> EncryptAsync(string inputPath, CancellationToken ct)
     {

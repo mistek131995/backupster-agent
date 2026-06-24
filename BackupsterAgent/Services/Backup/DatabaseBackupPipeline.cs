@@ -8,6 +8,7 @@ using BackupsterAgent.Services.Backup.Coordinator;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 
 namespace BackupsterAgent.Services.Backup;
 
@@ -15,6 +16,7 @@ public sealed class DatabaseBackupPipeline
 {
     private readonly IBackupProviderFactory _factory;
     private readonly ConnectionResolver _connections;
+    private readonly ISecretResolver _secrets;
     private readonly EncryptionService _encryption;
     private readonly IUploadProviderFactory _uploadFactory;
     private readonly FileBackupService _fileBackup;
@@ -24,6 +26,7 @@ public sealed class DatabaseBackupPipeline
     public DatabaseBackupPipeline(
         IBackupProviderFactory factory,
         ConnectionResolver connections,
+        ISecretResolver secrets,
         EncryptionService encryption,
         IUploadProviderFactory uploadFactory,
         FileBackupService fileBackup,
@@ -32,6 +35,7 @@ public sealed class DatabaseBackupPipeline
     {
         _factory = factory;
         _connections = connections;
+        _secrets = secrets;
         _encryption = encryption;
         _uploadFactory = uploadFactory;
         _fileBackup = fileBackup;
@@ -63,8 +67,9 @@ public sealed class DatabaseBackupPipeline
 
         try
         {
-            var connection = _connections.Resolve(config.ConnectionName);
-            uploader = _uploadFactory.GetProvider(storage.Name);
+            var connection = await _secrets.ResolveConnectionAsync(
+                _connections.Resolve(config.ConnectionName), ct);
+            uploader = await _uploadFactory.GetProviderAsync(storage.Name, ct);
             backupFolder = $"{config.DatabasePathSegment}/{startedAt:yyyy-MM-dd_HH-mm-ss}";
 
             BackupResult dumpResult;

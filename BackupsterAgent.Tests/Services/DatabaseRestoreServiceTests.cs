@@ -10,6 +10,7 @@ using BackupsterAgent.Services;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using BackupsterAgent.Services.Restore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -39,6 +40,7 @@ public sealed class DatabaseRestoreServiceTests
         _key = RandomNumberGenerator.GetBytes(32);
         _encryption = new EncryptionService(
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_key) }),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             NullLogger<EncryptionService>.Instance);
 
         _upload = new FakeUploadProvider();
@@ -392,6 +394,7 @@ public sealed class DatabaseRestoreServiceTests
         var resolver = new ConnectionResolver(connections);
         return new DatabaseRestoreService(
             resolver,
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             _factory,
             _encryption,
             Options.Create(restoreSettings ?? new RestoreSettings { TempPath = _tempRoot }),

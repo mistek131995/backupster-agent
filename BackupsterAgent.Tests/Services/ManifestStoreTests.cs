@@ -8,6 +8,7 @@ using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -36,6 +37,7 @@ public sealed class ManifestStoreTests
         _key = RandomNumberGenerator.GetBytes(32);
         _encryption = new EncryptionService(
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_key) }),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             NullLogger<EncryptionService>.Instance);
 
         _store = new ManifestStore(

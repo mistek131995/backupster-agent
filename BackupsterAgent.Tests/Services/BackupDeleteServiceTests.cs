@@ -285,15 +285,15 @@ public sealed class BackupDeleteServiceTests
 
     private sealed class StubUploadFactory(string storageName, IUploadProvider provider) : IUploadProviderFactory
     {
-        public IUploadProvider GetProvider(string name) =>
-            name == storageName
+        public Task<IUploadProvider> GetProviderAsync(string name, CancellationToken ct) =>
+            Task.FromResult(name == storageName
                 ? provider
-                : throw new InvalidOperationException($"Storage '{name}' not found.");
+                : throw new InvalidOperationException($"Storage '{name}' not found."));
     }
 
     private sealed class ThrowingUploadFactory : IUploadProviderFactory
     {
-        public IUploadProvider GetProvider(string name) =>
+        public Task<IUploadProvider> GetProviderAsync(string name, CancellationToken ct) =>
             throw new InvalidOperationException($"Storage '{name}' not found in config.");
     }
 

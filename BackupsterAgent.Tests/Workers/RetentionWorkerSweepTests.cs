@@ -239,10 +239,10 @@ public sealed class RetentionWorkerSweepTests
 
     private sealed class StubUploadFactory(string storageName, IUploadProvider provider) : IUploadProviderFactory
     {
-        public IUploadProvider GetProvider(string name) =>
-            name == storageName
+        public Task<IUploadProvider> GetProviderAsync(string name, CancellationToken ct) =>
+            Task.FromResult(name == storageName
                 ? provider
-                : throw new InvalidOperationException($"Storage '{name}' not found.");
+                : throw new InvalidOperationException($"Storage '{name}' not found."));
     }
 
     private sealed class NoOpActivityLock : IAgentActivityLock

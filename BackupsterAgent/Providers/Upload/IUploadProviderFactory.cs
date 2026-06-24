@@ -2,5 +2,5 @@ namespace BackupsterAgent.Providers.Upload;
 
 public interface IUploadProviderFactory
 {
-    IUploadProvider GetProvider(string storageName);
+    Task<IUploadProvider> GetProviderAsync(string storageName, CancellationToken ct);
 }

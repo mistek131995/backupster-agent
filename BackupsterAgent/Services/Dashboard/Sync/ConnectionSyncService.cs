@@ -3,6 +3,7 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Options;
 using Polly;
 
@@ -21,8 +22,9 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
         ConnectionResolver connections,
         IOptions<AgentSettings> settings,
         IDashboardAuthGuard authGuard,
+        ISecretResolver secrets,
         ILogger<ConnectionSyncService> logger)
-        : base(settings.Value, authGuard)
+        : base(settings.Value, authGuard, secrets)
     {
         _http = http;
         _connections = connections;
@@ -32,13 +34,13 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
 
     public async Task<bool> SyncAsync(CancellationToken ct = default)
     {
-        if (!IsConfigured(_logger, nameof(ConnectionSyncService))) return false;
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(ConnectionSyncService), ct);
+        if (token is null) return false;
 
         await _gate.WaitAsync(ct);
         try
         {
-            var payload = BuildPayload();
-            var tokenHint = Settings.Token.Length >= 8 ? Settings.Token[..8] : Settings.Token;
+            var payload = await BuildPayloadAsync(ct);
 
             if (payload.Connections.Count == 0)
             {
@@ -48,8 +50,8 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
             }
 
             _logger.LogInformation(
-                "ConnectionSyncService: syncing {Count} connection(s), token '{TokenHint}...'",
-                payload.Connections.Count, tokenHint);
+                "ConnectionSyncService: syncing {Count} connection(s)",
+                payload.Connections.Count);
 
             try
             {
@@ -58,7 +60,7 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
                     var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/connections";
 
                     using var request = new HttpRequestMessage(HttpMethod.Post, url);
-                    request.Headers.Add("X-Agent-Token", Settings.Token);
+                    request.Headers.Add("X-Agent-Token", token);
                     request.Content = JsonContent.Create(payload, options: JsonOptions);
 
                     var response = await _http.SendAsync(request, innerCt);
@@ -84,13 +86,16 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
         }
     }
 
-    private ConnectionSyncRequestDto BuildPayload()
+    private async Task<ConnectionSyncRequestDto> BuildPayloadAsync(CancellationToken ct)
     {
         var items = new List<ConnectionSyncItemDto>();
 
         foreach (var name in _connections.Names)
         {
-            var conn = _connections.Resolve(name);
+            var conn = await ResolveConnectionForTopologyAsync(_connections.Resolve(name), ct);
+            if (conn is null)
+                continue;
+
             var host = conn.Host;
             var port = conn.Port;
 
@@ -164,5 +169,44 @@ public sealed class ConnectionSyncService : DashboardClientBase, IConnectionSync
         }
 
         return new ConnectionSyncRequestDto { Connections = items };
+    }
+
+    private async Task<ConnectionConfig?> ResolveConnectionForTopologyAsync(ConnectionConfig conn, CancellationToken ct)
+    {
+        if (conn.ConnectionUriSecret is null ||
+            (conn.DatabaseType != DatabaseType.MongoDb && conn.DatabaseType != DatabaseType.Mssql))
+            return conn;
+
+        try
+        {
+            var connectionUri = await Secrets.ResolveOptionalStringAsync(
+                conn.ConnectionUriSecret,
+                conn.ConnectionUri,
+                $"Connections['{conn.Name}'].ConnectionUri",
+                ct);
+
+            return new ConnectionConfig
+            {
+                Name = conn.Name,
+                DatabaseType = conn.DatabaseType,
+                ConnectionUri = connectionUri,
+                ConnectionUriSecret = conn.ConnectionUriSecret,
+                Host = conn.Host,
+                Port = conn.Port,
+                Username = conn.Username,
+                UsernameSecret = conn.UsernameSecret,
+                Password = conn.Password,
+                PasswordSecret = conn.PasswordSecret,
+                BinPath = conn.BinPath,
+            };
+        }
+        catch (Exception ex)
+        when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "ConnectionSyncService: skipping connection '{Name}' because ConnectionUri secret could not be resolved.",
+                conn.Name);
+            return null;
+        }
     }
 }

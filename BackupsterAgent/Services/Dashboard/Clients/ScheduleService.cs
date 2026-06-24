@@ -5,6 +5,7 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Common.Secrets;
 using BackupsterAgent.Services.Common.State;
 using Microsoft.Extensions.Options;
 using NCrontab;
@@ -30,8 +31,9 @@ public sealed class ScheduleService : DashboardClientBase
         ScheduleStore store,
         IOptions<AgentSettings> settings,
         IDashboardAuthGuard authGuard,
+        ISecretResolver secrets,
         ILogger<ScheduleService> logger)
-        : base(settings.Value, authGuard)
+        : base(settings.Value, authGuard, secrets)
     {
         _http = http;
         _store = store;
@@ -88,7 +90,8 @@ public sealed class ScheduleService : DashboardClientBase
 
     private async Task RefreshScheduleAsync(CancellationToken ct)
     {
-        if (!IsConfigured(_logger, nameof(ScheduleService)))
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(ScheduleService), ct);
+        if (token is null)
         {
             _lastFetchAt = DateTime.UtcNow;
             return;
@@ -103,7 +106,7 @@ public sealed class ScheduleService : DashboardClientBase
                 var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/schedule";
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
-                request.Headers.Add("X-Agent-Token", Settings.Token);
+                request.Headers.Add("X-Agent-Token", token);
 
                 var response = await _http.SendAsync(request, innerCt);
                 ThrowIfUnauthorized(response, $"{nameof(ScheduleService)}.{nameof(RefreshScheduleAsync)}", _logger);

@@ -33,7 +33,7 @@ public sealed class FileSetBackupPipeline
         CancellationToken ct)
     {
         var startedAt = exec.StartedAt;
-        var uploader = _uploadFactory.GetProvider(storage.Name);
+        var uploader = await _uploadFactory.GetProviderAsync(storage.Name, ct);
         var backupFolder = $"{config.Name}/{startedAt:yyyy-MM-dd_HH-mm-ss}";
 
         _logger.LogInformation("FileSetBackupPipeline resolved. Folder: '{Folder}'", backupFolder);

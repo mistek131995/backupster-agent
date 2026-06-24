@@ -3,34 +3,43 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Resolvers;
+using BackupsterAgent.Services.Common.Secrets;
 
 namespace BackupsterAgent.Providers.Upload;
 
 public sealed class UploadProviderFactory : IUploadProviderFactory, IAsyncDisposable
 {
     private readonly StorageResolver _storages;
+    private readonly ISecretResolver _secrets;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ConcurrentDictionary<string, IUploadProvider> _cache = new(StringComparer.Ordinal);
     private bool _disposed;
 
-    public UploadProviderFactory(StorageResolver storages, ILoggerFactory loggerFactory)
+    public UploadProviderFactory(
+        StorageResolver storages,
+        ISecretResolver secrets,
+        ILoggerFactory loggerFactory)
     {
         _storages = storages;
+        _secrets = secrets;
         _loggerFactory = loggerFactory;
     }
 
-    public IUploadProvider GetProvider(string storageName)
+    public async Task<IUploadProvider> GetProviderAsync(string storageName, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storageName);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        return _cache.GetOrAdd(storageName, Create);
+        if (_cache.TryGetValue(storageName, out var cached))
+            return cached;
+
+        var storage = _storages.Resolve(storageName);
+        var resolved = await _secrets.ResolveStorageAsync(storage, ct);
+        return _cache.GetOrAdd(storageName, _ => Create(storageName, resolved));
     }
 
-    private IUploadProvider Create(string storageName)
+    private IUploadProvider Create(string storageName, StorageConfig storage)
     {
-        var storage = _storages.Resolve(storageName);
-
         return storage.Provider switch
         {
             UploadProvider.S3 => new S3UploadProvider(

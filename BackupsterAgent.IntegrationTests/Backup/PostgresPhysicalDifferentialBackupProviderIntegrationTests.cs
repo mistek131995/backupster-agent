@@ -20,6 +20,7 @@ using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Services.Dashboard.Clients;
 using BackupsterAgent.Workers;
@@ -759,6 +760,7 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
         var pipeline = new DatabaseBackupPipeline(
             new PostgresBackupProviderFactory(fullProvider, diffProvider),
             new ConnectionResolver([connection]),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             encryption,
             new SingleUploadProviderFactory(storageName, uploader),
             new FileBackupService(
@@ -785,6 +787,7 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
     private static EncryptionService CreateEncryptionService() =>
         new(
             Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(new byte[32]) }),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             NullLogger<EncryptionService>.Instance);
 
     private static async Task<string> UploadEncryptedManifestAsync(
@@ -837,10 +840,10 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
 
     private sealed class SingleUploadProviderFactory(string storageName, IUploadProvider provider) : IUploadProviderFactory
     {
-        public IUploadProvider GetProvider(string requestedStorageName)
+        public Task<IUploadProvider> GetProviderAsync(string requestedStorageName, CancellationToken ct)
         {
             if (requestedStorageName == storageName)
-                return provider;
+                return Task.FromResult(provider);
 
             throw new NotSupportedException($"Unexpected storage provider request: '{requestedStorageName}'.");
         }

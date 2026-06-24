@@ -2,6 +2,7 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Progress;
@@ -84,7 +85,13 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
         IUploadProvider uploader;
         try
         {
-            uploader = ResolveUploader(payload);
+            uploader = await ResolveUploaderAsync(payload, ct);
+        }
+        catch (SecretResolutionException ex)
+        {
+            _logger.LogError(ex,
+                "RestoreTaskHandler: failed to resolve storage secret for task {TaskId}", task.Id);
+            return FailRestore(ex.Message);
         }
         catch (Exception ex)
         {
@@ -125,7 +132,7 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
         return null;
     }
 
-    internal IUploadProvider ResolveUploader(RestoreTaskPayload payload)
+    internal async Task<IUploadProvider> ResolveUploaderAsync(RestoreTaskPayload payload, CancellationToken ct)
     {
         var storageName = payload.StorageName;
 
@@ -144,7 +151,7 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
             storageName = dbConfig.StorageName;
         }
 
-        return _uploadFactory.GetProvider(storageName);
+        return await _uploadFactory.GetProviderAsync(storageName, ct);
     }
 
     internal static PatchAgentTaskDto CombineResults(DatabaseRestoreResult db, FileRestoreResult files)

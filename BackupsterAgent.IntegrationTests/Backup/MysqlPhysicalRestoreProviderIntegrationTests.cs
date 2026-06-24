@@ -13,6 +13,7 @@ using BackupsterAgent.Services.Common.Processes;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using BackupsterAgent.Services.Restore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -336,6 +337,7 @@ public sealed class MysqlPhysicalRestoreProviderIntegrationTests
     private DatabaseRestoreService BuildRestoreService(EncryptionService encryption) =>
         new(
             new ConnectionResolver([_connection]),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             new MysqlRestoreProviderFactory(BuildRestoreProvider()),
             encryption,
             Options.Create(new RestoreSettings { TempPath = _restoreTempDir }),
@@ -357,6 +359,7 @@ public sealed class MysqlPhysicalRestoreProviderIntegrationTests
             {
                 Key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
             }),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
             NullLogger<EncryptionService>.Instance);
 
     private LocalFsUploadProvider CreateLocalFsUploadProvider() =>

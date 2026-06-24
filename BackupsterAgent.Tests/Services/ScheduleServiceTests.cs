@@ -2,6 +2,7 @@ using System.Text.Json;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Services.Common.Secrets;
 using BackupsterAgent.Services.Common.State;
 using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Services.Dashboard.Clients;
@@ -600,7 +601,13 @@ public sealed class ScheduleServiceTests
         var settings = Options.Create(new AgentSettings { Token = string.Empty, DashboardUrl = string.Empty });
         var authGuard = new FakeAuthGuard();
 
-        return new ScheduleService(http, store, settings, authGuard, NullLogger<ScheduleService>.Instance);
+        return new ScheduleService(
+            http,
+            store,
+            settings,
+            authGuard,
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
+            NullLogger<ScheduleService>.Instance);
     }
 
     private static DateTime NextOccurrence(string cron) =>

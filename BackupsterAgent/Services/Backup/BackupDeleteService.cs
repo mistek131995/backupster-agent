@@ -1,6 +1,7 @@
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common.Progress;
 
@@ -27,7 +28,14 @@ public sealed class BackupDeleteService(IUploadProviderFactory uploadFactory, IL
         IUploadProvider uploader;
         try
         {
-            uploader = uploadFactory.GetProvider(payload.StorageName);
+            uploader = await uploadFactory.GetProviderAsync(payload.StorageName, ct);
+        }
+        catch (SecretResolutionException ex)
+        {
+            logger.LogError(ex,
+                "BackupDeleteService: failed to resolve storage secret for '{Storage}' and {CorrelationId}",
+                payload.StorageName, correlationId);
+            return BackupDeleteResult.Failed(ex.Message);
         }
         catch (Exception ex)
         {

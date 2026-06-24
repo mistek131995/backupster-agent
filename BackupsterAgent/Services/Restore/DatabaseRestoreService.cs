@@ -10,6 +10,7 @@ using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
 using MySqlConnector;
@@ -25,6 +26,7 @@ public sealed class DatabaseRestoreService
     private static readonly int[] MssqlPermissionErrorCodes = { 229, 262, 300, 916, 15247, 21089 };
 
     private readonly ConnectionResolver _connections;
+    private readonly ISecretResolver _secrets;
     private readonly IRestoreProviderFactory _restoreFactory;
     private readonly EncryptionService _encryption;
     private readonly RestoreSettings _restoreSettings;
@@ -33,6 +35,7 @@ public sealed class DatabaseRestoreService
 
     public DatabaseRestoreService(
         ConnectionResolver connections,
+        ISecretResolver secrets,
         IRestoreProviderFactory restoreFactory,
         EncryptionService encryption,
         IOptions<RestoreSettings> restoreSettings,
@@ -40,6 +43,7 @@ public sealed class DatabaseRestoreService
         ILogger<DatabaseRestoreService> logger)
     {
         _connections = connections;
+        _secrets = secrets;
         _restoreFactory = restoreFactory;
         _encryption = encryption;
         _restoreSettings = restoreSettings.Value;
@@ -63,7 +67,7 @@ public sealed class DatabaseRestoreService
 
         try
         {
-            var connection = ResolveTargetConnection(payload);
+            var connection = await _secrets.ResolveConnectionAsync(ResolveTargetConnection(payload), ct);
             var backupMode = payload.BackupMode ?? InferDefaultMode(connection.DatabaseType);
 
             if (connection.DatabaseType is DatabaseType.Postgres or DatabaseType.Mysql
@@ -187,6 +191,11 @@ public sealed class DatabaseRestoreService
         catch (RestorePermissionException ex)
         {
             _logger.LogError(ex, "DatabaseRestoreService: permission check failed for task {TaskId}", taskId);
+            return DatabaseRestoreResult.Failed(ex.Message);
+        }
+        catch (SecretResolutionException ex)
+        {
+            _logger.LogError(ex, "DatabaseRestoreService: secret resolution failed for task {TaskId}", taskId);
             return DatabaseRestoreResult.Failed(ex.Message);
         }
         catch (PostgresException ex) when (ex.SqlState == "42501")

@@ -1,9 +1,11 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using BackupsterAgent.Configuration;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -28,14 +30,14 @@ public sealed class EncryptionServiceTests
     {
         _key = RandomNumberGenerator.GetBytes(32);
         var settings = Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_key) });
-        _service = new EncryptionService(settings, NullLogger<EncryptionService>.Instance);
+        _service = CreateService(settings);
     }
 
     [Test]
     public void Constructor_EmptyKey_LeavesServiceUnconfigured()
     {
         var settings = Options.Create(new EncryptionSettings { Key = "" });
-        var service = new EncryptionService(settings, NullLogger<EncryptionService>.Instance);
+        var service = CreateService(settings);
 
         Assert.That(service.IsConfigured, Is.False);
     }
@@ -46,8 +48,115 @@ public sealed class EncryptionServiceTests
         var shortKey = Convert.ToBase64String(new byte[16]);
         var settings = Options.Create(new EncryptionSettings { Key = shortKey });
 
-        Assert.Throws<InvalidOperationException>(() =>
-            new EncryptionService(settings, NullLogger<EncryptionService>.Instance));
+        var ex = Assert.Throws<SecretResolutionException>(() =>
+            CreateService(settings));
+
+        Assert.That(ex!.Message, Does.Contain("Ключ шифрования"));
+    }
+
+    [Test]
+    public void Constructor_InvalidBase64Key_ThrowsUserFacingConfigurationError()
+    {
+        var settings = Options.Create(new EncryptionSettings { Key = "not-base64" });
+
+        var ex = Assert.Throws<SecretResolutionException>(() =>
+            CreateService(settings));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain("Ключ шифрования"));
+            Assert.That(ex.InnerException, Is.TypeOf<FormatException>());
+        });
+    }
+
+    [Test]
+    public async Task Constructor_KeySecretWithValidFile_ConfiguresService()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"backupster-key-{Guid.NewGuid():N}");
+        await File.WriteAllTextAsync(path, Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) + "\n");
+
+        try
+        {
+            var settings = Options.Create(new EncryptionSettings
+            {
+                KeySecret = new SecretRef { Provider = "file", Path = path },
+            });
+
+            var service = CreateService(settings);
+
+            Assert.That(service.IsConfigured, Is.True);
+        }
+        finally
+        {
+            SafeDelete(path);
+        }
+    }
+
+    [Test]
+    public void Constructor_KeySecretMissingFile_ThrowsUserFacingConfigurationError()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"missing-backupster-key-{Guid.NewGuid():N}");
+        var settings = Options.Create(new EncryptionSettings
+        {
+            KeySecret = new SecretRef { Provider = "file", Path = path },
+        });
+
+        var ex = Assert.Throws<SecretResolutionException>(() =>
+            CreateService(settings));
+
+        Assert.That(ex!.Message, Does.Contain("Не удалось прочитать секрет из файла"));
+    }
+
+    [Test]
+    public async Task Constructor_KeySecretInvalidBase64_ThrowsUserFacingConfigurationError()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"backupster-key-{Guid.NewGuid():N}");
+        await File.WriteAllTextAsync(path, "not-base64\n");
+
+        try
+        {
+            var settings = Options.Create(new EncryptionSettings
+            {
+                KeySecret = new SecretRef { Provider = "file", Path = path },
+            });
+
+            var ex = Assert.Throws<SecretResolutionException>(() =>
+                CreateService(settings));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain("Ключ шифрования"));
+                Assert.That(ex.InnerException, Is.TypeOf<FormatException>());
+            });
+        }
+        finally
+        {
+            SafeDelete(path);
+        }
+    }
+
+    [Test]
+    public async Task Constructor_KeySecretWrongLength_ThrowsUserFacingConfigurationError()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"backupster-key-{Guid.NewGuid():N}");
+        await File.WriteAllTextAsync(path, Convert.ToBase64String(new byte[16]));
+
+        try
+        {
+            var settings = Options.Create(new EncryptionSettings
+            {
+                KeySecret = new SecretRef { Provider = "file", Path = path },
+            });
+
+            var ex = Assert.Throws<SecretResolutionException>(() =>
+                CreateService(settings));
+
+            Assert.That(ex!.Message, Does.Contain("Ключ шифрования"));
+        }
+        finally
+        {
+            SafeDelete(path);
+        }
     }
 
     [Test]
@@ -119,7 +228,7 @@ public sealed class EncryptionServiceTests
     public void Encrypt_WithoutConfiguration_Throws()
     {
         var settings = Options.Create(new EncryptionSettings { Key = "" });
-        var service = new EncryptionService(settings, NullLogger<EncryptionService>.Instance);
+        var service = CreateService(settings);
 
         Assert.Throws<InvalidOperationException>(() => service.Encrypt([1, 2, 3]));
     }
@@ -207,7 +316,7 @@ public sealed class EncryptionServiceTests
     public async Task EncryptAsync_WithoutConfiguration_Throws()
     {
         var settings = Options.Create(new EncryptionSettings { Key = "" });
-        var service = new EncryptionService(settings, NullLogger<EncryptionService>.Instance);
+        var service = CreateService(settings);
 
         var inputPath = TempFile();
         await File.WriteAllBytesAsync(inputPath, [1, 2, 3]);
@@ -262,7 +371,7 @@ public sealed class EncryptionServiceTests
     public void Decrypt_WithoutConfiguration_Throws()
     {
         var settings = Options.Create(new EncryptionSettings { Key = "" });
-        var service = new EncryptionService(settings, NullLogger<EncryptionService>.Instance);
+        var service = CreateService(settings);
 
         Assert.Throws<InvalidOperationException>(() => service.Decrypt([1, 2, 3]));
     }
@@ -671,7 +780,7 @@ public sealed class EncryptionServiceTests
     public async Task DecryptAsync_WithoutConfiguration_Throws()
     {
         var settings = Options.Create(new EncryptionSettings { Key = "" });
-        var service = new EncryptionService(settings, NullLogger<EncryptionService>.Instance);
+        var service = CreateService(settings);
 
         var inputPath = TempFile();
         var outputPath = TempFile();
@@ -730,6 +839,12 @@ public sealed class EncryptionServiceTests
         }
         finally { SafeDelete(inputPath); }
     }
+
+    private static EncryptionService CreateService(IOptions<EncryptionSettings> settings) =>
+        new(
+            settings,
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
+            NullLogger<EncryptionService>.Instance);
 
     internal static byte[] DecryptBytes(byte[] input, byte[] key, byte[]? aad = null)
     {

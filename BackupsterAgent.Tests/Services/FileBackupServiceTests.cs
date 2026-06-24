@@ -7,6 +7,7 @@ using BackupsterAgent.Services;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Security;
+using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -30,7 +31,10 @@ public sealed class FileBackupServiceTests
 
         _encryptionKey = RandomNumberGenerator.GetBytes(32);
         var encSettings = Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(_encryptionKey) });
-        _encryption = new EncryptionService(encSettings, NullLogger<EncryptionService>.Instance);
+        _encryption = new EncryptionService(
+            encSettings,
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
+            NullLogger<EncryptionService>.Instance);
 
         _chunker = new ContentDefinedChunker();
         _uploader = new FakeUploadProvider();
