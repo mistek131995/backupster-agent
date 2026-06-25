@@ -9,6 +9,7 @@ namespace BackupsterAgent.Services.Common.Secrets;
 public sealed class SecretResolver : ISecretResolver
 {
     private const string FileProvider = "file";
+    private const string EnvProvider = "env";
     private readonly ILogger<SecretResolver> _logger;
 
     public SecretResolver(ILogger<SecretResolver> logger)
@@ -26,12 +27,17 @@ public sealed class SecretResolver : ISecretResolver
         if (secret is null)
             return plainValue;
 
-        var provider = NormalizeProvider(secret);
+        var provider = NormalizeProvider(secret, settingPath);
         return provider switch
         {
             FileProvider => NormalizeSecretValue(
                 await ReadFileSecretAsync(RequirePath(secret, settingPath), settingPath, ct),
-                settingPath),
+                settingPath,
+                "Файл секрета"),
+            EnvProvider => NormalizeSecretValue(
+                ReadEnvironmentSecret(RequireName(secret, settingPath), settingPath),
+                settingPath,
+                "Переменная окружения секрета"),
             _ => throw UnsupportedProvider(provider, settingPath),
         };
     }
@@ -44,12 +50,17 @@ public sealed class SecretResolver : ISecretResolver
         if (secret is null)
             return plainValue;
 
-        var provider = NormalizeProvider(secret);
+        var provider = NormalizeProvider(secret, settingPath);
         return provider switch
         {
             FileProvider => NormalizeSecretValue(
                 ReadFileSecret(RequirePath(secret, settingPath), settingPath),
-                settingPath),
+                settingPath,
+                "Файл секрета"),
+            EnvProvider => NormalizeSecretValue(
+                ReadEnvironmentSecret(RequireName(secret, settingPath), settingPath),
+                settingPath,
+                "Переменная окружения секрета"),
             _ => throw UnsupportedProvider(provider, settingPath),
         };
     }
@@ -184,10 +195,11 @@ public sealed class SecretResolver : ISecretResolver
             RemotePath = settings.RemotePath,
         };
 
-    private static string NormalizeProvider(SecretRef secret)
+    private static string NormalizeProvider(SecretRef secret, string settingPath)
     {
         if (string.IsNullOrWhiteSpace(secret.Provider))
-            return FileProvider;
+            throw new SecretResolutionException(
+                $"Не задан провайдер секрета для '{settingPath}'. Укажите 'file' или 'env'.");
 
         return secret.Provider.Trim().ToLowerInvariant();
     }
@@ -199,6 +211,15 @@ public sealed class SecretResolver : ISecretResolver
                 $"Не задан путь к файлу секрета для '{settingPath}'.");
 
         return secret.Path;
+    }
+
+    private static string RequireName(SecretRef secret, string settingPath)
+    {
+        if (string.IsNullOrWhiteSpace(secret.Name))
+            throw new SecretResolutionException(
+                $"Не задано имя переменной окружения секрета для '{settingPath}'.");
+
+        return secret.Name;
     }
 
     private async Task<string> ReadFileSecretAsync(string path, string settingPath, CancellationToken ct)
@@ -235,12 +256,36 @@ public sealed class SecretResolver : ISecretResolver
         }
     }
 
-    private static string NormalizeSecretValue(string raw, string settingPath)
+    private string ReadEnvironmentSecret(string name, string settingPath)
+    {
+        try
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (value is null)
+                throw new SecretResolutionException(
+                    $"Переменная окружения секрета '{name}' для '{settingPath}' не задана.");
+
+            return value;
+        }
+        catch (SecretResolutionException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is SecurityException)
+        {
+            _logger.LogError(ex, "Failed to read environment secret for {SettingPath} from '{Name}'", settingPath, name);
+            throw new SecretResolutionException(
+                $"Не удалось прочитать секрет из переменной окружения для '{settingPath}'. Проверьте имя переменной и права доступа.",
+                ex);
+        }
+    }
+
+    private static string NormalizeSecretValue(string raw, string settingPath, string source)
     {
         var value = raw.TrimEnd('\r', '\n');
         if (value.Length == 0)
             throw new SecretResolutionException(
-                $"Файл секрета для '{settingPath}' пустой.");
+                $"{source} для '{settingPath}' пустой.");
 
         return value;
     }

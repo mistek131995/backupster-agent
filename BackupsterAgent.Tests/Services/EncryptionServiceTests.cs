@@ -93,6 +93,29 @@ public sealed class EncryptionServiceTests
     }
 
     [Test]
+    public void Constructor_KeySecretWithValidEnv_ConfiguresService()
+    {
+        var name = $"BACKUPSTER_TEST_KEY_{Guid.NewGuid():N}".ToUpperInvariant();
+        Environment.SetEnvironmentVariable(name, Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) + "\n");
+
+        try
+        {
+            var settings = Options.Create(new EncryptionSettings
+            {
+                KeySecret = new SecretRef { Provider = "env", Name = name },
+            });
+
+            var service = CreateService(settings);
+
+            Assert.That(service.IsConfigured, Is.True);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, null);
+        }
+    }
+
+    [Test]
     public void Constructor_KeySecretMissingFile_ThrowsUserFacingConfigurationError()
     {
         var path = Path.Combine(Path.GetTempPath(), $"missing-backupster-key-{Guid.NewGuid():N}");

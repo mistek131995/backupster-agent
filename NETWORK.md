@@ -2,7 +2,7 @@
 
 Этот документ — полный перечень HTTP-запросов, которые агент (`BackupsterAgent`) делает к дашборду. Для каждого запроса указаны метод, URL, заголовки, точная схема тела и пример.
 
-Цель документа — дать администратору возможность убедиться: **с хоста, где стоит агент, на дашборд уходит только сетевая топология (имена, хосты, порты, имена БД), но никогда — учётные данные подключений к БД, ключи шифрования, токен агента, секреты хранилищ (S3, SFTP, Azure Blob, WebDAV), ссылки на файлы секретов и пути локальных хранилищ (LocalFs)**.
+Цель документа — дать администратору возможность убедиться: **с хоста, где стоит агент, на дашборд уходит только сетевая топология (имена, хосты, порты, имена БД), но никогда — учётные данные подключений к БД, ключи шифрования, токен агента, секреты хранилищ (S3, SFTP, Azure Blob, WebDAV), ссылки на внешние источники секретов и пути локальных хранилищ (LocalFs)**.
 
 Документ обязан обновляться вместе с кодом в том же PR, что и изменения сетевого поведения агента.
 
@@ -18,7 +18,7 @@
 X-Agent-Token: <AgentSettings.Token или AgentSettings.TokenSecret>
 ```
 
-Токен задаётся через `AgentSettings__Token` или через `AgentSettings__TokenSecret__Provider=file` + `AgentSettings__TokenSecret__Path=...` (см. README агента и `docs/configuration.md`). В теле запроса, query-строке и логах агента токен не передаётся никогда.
+Токен задаётся через `AgentSettings__Token`, через `AgentSettings__TokenSecret__Provider=file` + `AgentSettings__TokenSecret__Path=...` или через `AgentSettings__TokenSecret__Provider=env` + `AgentSettings__TokenSecret__Name=...` (см. README агента и `docs/configuration.md`). В теле запроса, query-строке и логах агента токен не передаётся никогда.
 
 ### Версия агента
 
@@ -97,7 +97,7 @@ Polly-ретраи (1/2/4 с) срабатывают поверх этих ли�
 - `Storages[].AzureBlob.ConnectionString`, `Storages[].AzureBlob.AccountKey`
 - `Storages[].WebDav.Password`
 - `Storages[].LocalFs.RemotePath` (сам путь и факт его наличия)
-- `*Secret`-ссылки на файлы секретов и содержимое этих файлов
+- `*Secret`-ссылки на внешние источники секретов, имена env-переменных и содержимое этих источников
 - Содержимое дампов, чанков, файлов (весь payload бэкапа шифруется AES-256-GCM и идёт напрямую в ваше хранилище — S3/SFTP/Azure Blob/WebDAV или локальную папку — минуя дашборд)
 
 Если вы нашли в выхлопе агента или в трафике что-то из этого списка — это баг. Пишите в репозиторий.
@@ -366,7 +366,7 @@ Heartbeat-отчёт о текущей стадии бэкапа. Шлётся �
 | `host`           | string | Хост из `Connections[].Host`. Для MongoDB/MSSQL с `ConnectionUri` — безопасный host, извлечённый из URI/connection string без credentials/query/options |
 | `port`           | int    | Порт из `Connections[].Port`. Для MongoDB/MSSQL с `ConnectionUri` — безопасный port, извлечённый из URI/connection string; для `mongodb+srv://` может быть display-only значением без передачи URI |
 
-> **Ни `Username`, ни `Password`, ни `ConnectionUri`, ни `*Secret`-ссылки не попадают в это тело.** Формируется в `ConnectionSyncService.BuildPayloadAsync()` — при изменениях проверяйте, что оно по-прежнему берёт только безопасную топологию. Для MongoDB/MSSQL с `ConnectionUriSecret` файл секрета читается локально только для извлечения безопасных `host`/`port`; значение URI и путь файла наружу не отправляются. Для MongoDB URI query-параметры (`authSource`, `tlsCAFile`, TLS-настройки и т.п.) наружу не отправляются. Для MSSQL с `ConnectionUri` наружу уходит только host/port из `Data Source`; named instance, LocalDB, named pipes и административное подключение `admin:` не мапятся в host/port и пропускаются в sync с warning. Локальные синонимы `.` и `(local)` отображаются как `localhost`.
+> **Ни `Username`, ни `Password`, ни `ConnectionUri`, ни `*Secret`-ссылки не попадают в это тело.** Формируется в `ConnectionSyncService.BuildPayloadAsync()` — при изменениях проверяйте, что оно по-прежнему берёт только безопасную топологию. Для MongoDB/MSSQL с `ConnectionUriSecret` внешний источник секрета читается локально только для извлечения безопасных `host`/`port`; значение URI, путь файла и имя env-переменной наружу не отправляются. Для MongoDB URI query-параметры (`authSource`, `tlsCAFile`, TLS-настройки и т.п.) наружу не отправляются. Для MSSQL с `ConnectionUri` наружу уходит только host/port из `Data Source`; named instance, LocalDB, named pipes и административное подключение `admin:` не мапятся в host/port и пропускаются в sync с warning. Локальные синонимы `.` и `(local)` отображаются как `localhost`.
 
 ---
 

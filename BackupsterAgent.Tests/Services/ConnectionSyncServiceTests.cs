@@ -155,6 +155,44 @@ public sealed class ConnectionSyncServiceTests
         }
     }
 
+    [Test]
+    public async Task SyncAsync_EnvTokenSecret_DoesNotLogResolvedToken()
+    {
+        const string token = "secret-token-from-env";
+        var tokenName = NewEnvName();
+        Environment.SetEnvironmentVariable(tokenName, token);
+
+        try
+        {
+            var handler = new CapturingHandler(HttpStatusCode.NoContent);
+            var logger = new CapturingLogger<ConnectionSyncService>();
+            var service = Build(handler,
+            [
+                new ConnectionConfig { Name = "a", DatabaseType = DatabaseType.Postgres, Host = "h1", Port = 5432 },
+            ],
+            token: "",
+            tokenSecret: new SecretRef { Provider = "env", Name = tokenName },
+            logger: logger);
+
+            var ok = await service.SyncAsync();
+
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Has.Count.EqualTo(1));
+            Assert.That(handler.Calls[0].AgentToken, Is.EqualTo(token));
+
+            var logs = string.Join(Environment.NewLine, logger.Messages);
+            Assert.Multiple(() =>
+            {
+                Assert.That(logs, Does.Not.Contain(token));
+                Assert.That(logs, Does.Not.Contain(token[..8]));
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(tokenName, null);
+        }
+    }
+
     [TestCase(DatabaseType.Postgres, 5432)]
     [TestCase(DatabaseType.Mysql, 3306)]
     public async Task SyncAsync_StaticEndpointConnectionUriSecretMissing_SendsHostPortWithoutReadingSecret(
@@ -281,6 +319,57 @@ public sealed class ConnectionSyncServiceTests
         finally
         {
             try { File.Delete(secretPath); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task SyncAsync_MongoConnectionUriEnvSecret_SendsSanitizedTopology()
+    {
+        var envName = NewEnvName();
+        Environment.SetEnvironmentVariable(
+            envName,
+            "mongodb://user:secret@cluster.example.net:27019/?tls=true&tlsCAFile=/etc/ca.pem\n");
+
+        try
+        {
+            var handler = new CapturingHandler(HttpStatusCode.NoContent);
+            var service = Build(handler,
+            [
+                new ConnectionConfig
+                {
+                    Name = "atlas",
+                    DatabaseType = DatabaseType.MongoDb,
+                    ConnectionUriSecret = new SecretRef { Provider = "env", Name = envName },
+                },
+            ]);
+
+            var ok = await service.SyncAsync();
+
+            Assert.That(ok, Is.True);
+            Assert.That(handler.Calls, Has.Count.EqualTo(1));
+
+            var payload = handler.Calls[0].DeserializeBody<ConnectionSyncRequestDto>();
+            Assert.That(payload, Is.Not.Null);
+            Assert.That(payload!.Connections, Has.Count.EqualTo(1));
+            Assert.Multiple(() =>
+            {
+                Assert.That(payload.Connections[0].Name, Is.EqualTo("atlas"));
+                Assert.That(payload.Connections[0].Host, Is.EqualTo("cluster.example.net"));
+                Assert.That(payload.Connections[0].Port, Is.EqualTo(27019));
+            });
+
+            var body = System.Text.Encoding.UTF8.GetString(handler.Calls[0].Body);
+            Assert.Multiple(() =>
+            {
+                Assert.That(body, Does.Not.Contain("secret"));
+                Assert.That(body, Does.Not.Contain("tlsCAFile"));
+                Assert.That(body, Does.Not.Contain("/etc/ca.pem"));
+                Assert.That(body, Does.Not.Contain(envName));
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envName, null);
         }
     }
 
@@ -623,6 +712,9 @@ public sealed class ConnectionSyncServiceTests
             new SecretResolver(NullLogger<SecretResolver>.Instance),
             logger ?? NullLogger<ConnectionSyncService>.Instance);
     }
+
+    private static string NewEnvName() =>
+        $"BACKUPSTER_TEST_SECRET_{Guid.NewGuid():N}".ToUpperInvariant();
 
     private sealed class NullAuthGuard : IDashboardAuthGuard
     {

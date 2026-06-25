@@ -144,7 +144,7 @@ Backup и restore/delete на одном агенте не идут паралл
 
 Благодаря этому регистрация агента на дашборде — это одно поле «Название»: после создания получаете токен, задаёте его через env/config или `TokenSecret`, и все сущности появятся в UI автоматически при старте.
 
-**Credentials никогда не покидают хост агента.** `Username`, `Password` и MongoDB/MSSQL `ConnectionUri` из `Connections[]`, ключ шифрования, токен агента, ключи S3/SFTP/Azure Blob/WebDAV (у LocalFs credentials нет — только путь) — всё живёт только в env/config или файлах `*Secret` и используется локально при вызове `pg_dump` / `mysqldump` / `xtrabackup` / `mongodump`, подключении к MSSQL по TDS (`SqlClient` + DacFx) и загрузке в хранилище.
+**Credentials никогда не покидают хост агента.** `Username`, `Password` и MongoDB/MSSQL `ConnectionUri` из `Connections[]`, ключ шифрования, токен агента, ключи S3/SFTP/Azure Blob/WebDAV (у LocalFs credentials нет — только путь) — всё живёт только в env/config, файлах `*Secret` или env-provider `*Secret` и используется локально при вызове `pg_dump` / `mysqldump` / `xtrabackup` / `mongodump`, подключении к MSSQL по TDS (`SqlClient` + DacFx) и загрузке в хранилище.
 
 Каждый sync выполняется один раз на старте. Если дашборд недоступен — агент ретраит с экспоненциальным backoff (до 5 минут между попытками). После успеха sync-worker останавливается. Чтобы повторить синхронизацию (например, после добавления новой БД или переименования file-set'а в `appsettings.json`), перезапустите агент.
 
