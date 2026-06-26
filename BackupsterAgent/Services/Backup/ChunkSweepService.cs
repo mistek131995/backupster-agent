@@ -1,3 +1,4 @@
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Providers.Upload;
 using BackupsterAgent.Services.Common.Security;
 
@@ -27,9 +28,13 @@ public sealed class ChunkSweepService
         TimeSpan graceWindow,
         CancellationToken ct)
     {
-        if (!_encryption.IsConfigured)
+        try
         {
-            _logger.LogWarning("ChunkGc: encryption key is not configured, sweep skipped.");
+            await _encryption.EnsureReadyAsync(ct);
+        }
+        catch (SecretResolutionException ex)
+        {
+            _logger.LogWarning(ex, "ChunkGc: encryption key is not ready, sweep skipped.");
             return new ChunkSweepResult();
         }
 

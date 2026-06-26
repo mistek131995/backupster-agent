@@ -207,6 +207,29 @@ public sealed class BackupJobRunTests
     }
 
     [Test]
+    public async Task RunAsync_EncryptionPreflightFails_FinalizesWithoutRunningDump()
+    {
+        var serverId = Guid.NewGuid();
+        _recordClient.NextOpen = new OpenRecordResult(DashboardAvailability.Ok, serverId);
+        _recordClient.NextFinalize = new FinalizeRecordResult(DashboardAvailability.Ok);
+        var encryption = new EncryptionService(
+            Options.Create(new EncryptionSettings { Key = "" }),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
+            NullLogger<EncryptionService>.Instance);
+
+        var result = await BuildJob(encryption).RunAsync(Config(), Storage(), BackupMode.Logical, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(_provider.BackupCalls, Is.Zero);
+            Assert.That(_recordClient.FinalizeCalls, Is.EqualTo(1));
+            Assert.That(_recordClient.LastFinalize!.Status, Is.EqualTo(BackupStatus.Failed));
+            Assert.That(_recordClient.LastFinalize!.DumpObjectKey, Is.Null);
+        });
+    }
+
+    [Test]
     public async Task RunAsync_UploadFails_FinalizesWithFailedStatus_AndCleansLocalFiles()
     {
         var serverId = Guid.NewGuid();
@@ -291,13 +314,13 @@ public sealed class BackupJobRunTests
         S3 = new S3Settings(),
     };
 
-    private BackupJob BuildJob()
+    private BackupJob BuildJob(EncryptionService? encryptionOverride = null)
     {
         var encKey = RandomNumberGenerator.GetBytes(32);
-        var encryption = new EncryptionService(
-            Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(encKey) }),
-            new SecretResolver(NullLogger<SecretResolver>.Instance),
-            NullLogger<EncryptionService>.Instance);
+        var encryption = encryptionOverride ?? new EncryptionService(
+                Options.Create(new EncryptionSettings { Key = Convert.ToBase64String(encKey) }),
+                new SecretResolver(NullLogger<SecretResolver>.Instance),
+                NullLogger<EncryptionService>.Instance);
 
         var chunker = new ContentDefinedChunker();
         var fileBackup = new FileBackupService(chunker, encryption, NullLogger<FileBackupService>.Instance);
@@ -326,6 +349,7 @@ public sealed class BackupJobRunTests
             new FakeProgressReporterFactory(),
             _outboxStore,
             new ActivitySource("BackupsterAgent.Tests"),
+            encryption,
             NullLogger<BackupRunCoordinator>.Instance);
 
         return new BackupJob(coordinator, pipeline);

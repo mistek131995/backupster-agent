@@ -5,6 +5,7 @@ using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
 using BackupsterAgent.Services.Common.Outbox;
 using BackupsterAgent.Services.Common.Progress;
+using BackupsterAgent.Services.Common.Security;
 using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Services.Dashboard.Clients;
 
@@ -19,6 +20,7 @@ public sealed class BackupRunCoordinator
     private readonly IProgressReporterFactory _reporterFactory;
     private readonly IOutboxStore _outboxStore;
     private readonly ActivitySource _activitySource;
+    private readonly EncryptionService _encryption;
     private readonly ILogger<BackupRunCoordinator> _logger;
 
     public BackupRunCoordinator(
@@ -26,12 +28,14 @@ public sealed class BackupRunCoordinator
         IProgressReporterFactory reporterFactory,
         IOutboxStore outboxStore,
         ActivitySource activitySource,
+        EncryptionService encryption,
         ILogger<BackupRunCoordinator> logger)
     {
         _recordClient = recordClient;
         _reporterFactory = reporterFactory;
         _outboxStore = outboxStore;
         _activitySource = activitySource;
+        _encryption = encryption;
         _logger = logger;
     }
 
@@ -78,6 +82,7 @@ public sealed class BackupRunCoordinator
 
         try
         {
+            await _encryption.EnsureReadyAsync(ct);
             outcome = await descriptor.ExecuteAsync(
                 new BackupRunExecution(
                     recordId,
@@ -100,6 +105,11 @@ public sealed class BackupRunCoordinator
                 "{Name}: differential chain broken — marking DIFF record as failed; caller should auto-rebase via FULL. Reason: {Reason}",
                 descriptor.DisplayName, ex.Message);
             outcome = PipelineOutcome.ChainBrokenFailure(ex.Message);
+        }
+        catch (SecretResolutionException ex)
+        {
+            _logger.LogWarning(ex, "{Name}: secret resolution failed", descriptor.DisplayName);
+            outcome = PipelineOutcome.Failed(ex.Message);
         }
         catch (Exception ex)
         {

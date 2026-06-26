@@ -27,7 +27,38 @@ public sealed class UploadProviderFactoryTests
     }
 
     [Test]
-    public async Task GetProviderAsync_FileSecretChange_ReturnsCachedProviderUntilRestart()
+    public async Task GetProviderAsync_SameResolvedStorage_ReturnsCachedProvider()
+    {
+        var secretPath = Path.Combine(_tempRoot, "s3-secret");
+        await File.WriteAllTextAsync(secretPath, "secret-v1");
+
+        var storage = new StorageConfig
+        {
+            Name = "s3-main",
+            Provider = UploadProvider.S3,
+            S3 = new S3Settings
+            {
+                EndpointUrl = "https://s3.example.test",
+                AccessKey = "access",
+                SecretKeySecret = new SecretRef { Provider = "file", Path = secretPath },
+                BucketName = "backups",
+                Region = "us-east-1",
+            },
+        };
+
+        await using var factory = new UploadProviderFactory(
+            new StorageResolver([storage]),
+            new SecretResolver(NullLogger<SecretResolver>.Instance),
+            NullLoggerFactory.Instance);
+
+        var first = await factory.GetProviderAsync("s3-main", CancellationToken.None);
+        var second = await factory.GetProviderAsync("s3-main", CancellationToken.None);
+
+        Assert.That(second, Is.SameAs(first));
+    }
+
+    [Test]
+    public async Task GetProviderAsync_FileSecretChange_RecreatesProvider()
     {
         var secretPath = Path.Combine(_tempRoot, "s3-secret");
         await File.WriteAllTextAsync(secretPath, "secret-v1");
@@ -57,6 +88,6 @@ public sealed class UploadProviderFactoryTests
 
         var second = await factory.GetProviderAsync("s3-main", CancellationToken.None);
 
-        Assert.That(second, Is.SameAs(first));
+        Assert.That(second, Is.Not.SameAs(first));
     }
 }

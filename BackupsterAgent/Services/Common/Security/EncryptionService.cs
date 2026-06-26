@@ -23,37 +23,52 @@ public sealed class EncryptionService
     internal const int AadSizeV2 = 4;
     internal const int AadSizeV3 = AadSizeV2 + FlagSize;
 
-    private readonly byte[] _key;
+    private readonly EncryptionSettings _settings;
+    private readonly ISecretResolver _secrets;
+    private readonly SemaphoreSlim _keyGate = new(1, 1);
+    private byte[] _key = [];
+    private bool _keyLoaded;
+    private bool _isConfigured;
     private readonly ILogger<EncryptionService> _logger;
 
-    public bool IsConfigured { get; }
+    public bool IsConfigured => _isConfigured;
 
     public EncryptionService(
         IOptions<EncryptionSettings> settings,
         ISecretResolver secrets,
         ILogger<EncryptionService> logger)
-        : this(
-            secrets.ResolveString(
-                settings.Value.KeySecret,
-                settings.Value.Key,
-                "EncryptionSettings.Key"),
-            logger)
     {
+        _settings = settings.Value;
+        _secrets = secrets;
+        _logger = logger;
+
+        if (_secrets.RequiresAsyncResolution(_settings.KeySecret))
+        {
+            _isConfigured = true;
+            return;
+        }
+
+        LoadKey(
+            _secrets.ResolveString(
+                _settings.KeySecret,
+                _settings.Key,
+                "EncryptionSettings.Key"));
     }
 
-    private EncryptionService(string keyBase64, ILogger<EncryptionService> logger)
+    private void LoadKey(string keyBase64)
     {
-        _logger = logger;
         if (string.IsNullOrWhiteSpace(keyBase64))
         {
             _logger.LogWarning("EncryptionSettings:Key is not set. Agent will not run backups until the key is configured.");
+            _keyLoaded = true;
             _key = [];
-            IsConfigured = false;
+            _isConfigured = false;
             return;
         }
 
         _key = ParseKey(keyBase64);
-        IsConfigured = true;
+        _keyLoaded = true;
+        _isConfigured = true;
     }
 
     private static byte[] ParseKey(string keyBase64)
@@ -82,10 +97,62 @@ public sealed class EncryptionService
                 "Ключ шифрования 'EncryptionSettings.Key' должен быть base64-строкой, которая декодируется ровно в 32 байта.",
                 innerException);
 
+    public async Task EnsureReadyAsync(CancellationToken ct)
+    {
+        await EnsureKeyLoadedAsync(ct);
+        if (!_isConfigured)
+            throw MissingKeyException();
+    }
+
+    private static SecretResolutionException MissingKeyException() =>
+        new("\u041a\u043b\u044e\u0447 \u0448\u0438\u0444\u0440\u043e\u0432\u0430\u043d\u0438\u044f 'EncryptionSettings.Key' \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d \u043d\u0430 \u0430\u0433\u0435\u043d\u0442\u0435.");
+
+    private byte[] GetKey()
+    {
+        EnsureKeyLoadedAsync(CancellationToken.None).GetAwaiter().GetResult();
+        ThrowIfNotConfigured();
+        return _key;
+    }
+
+    private async Task<byte[]> GetKeyAsync(CancellationToken ct)
+    {
+        await EnsureKeyLoadedAsync(ct);
+        ThrowIfNotConfigured();
+        return _key;
+    }
+
+    private async Task EnsureKeyLoadedAsync(CancellationToken ct)
+    {
+        if (_keyLoaded)
+            return;
+
+        await _keyGate.WaitAsync(ct);
+        try
+        {
+            if (_keyLoaded)
+                return;
+
+            LoadKey(await _secrets.ResolveStringAsync(
+                _settings.KeySecret,
+                _settings.Key,
+                "EncryptionSettings.Key",
+                ct));
+        }
+        finally
+        {
+            _keyGate.Release();
+        }
+    }
+
+    private void ThrowIfNotConfigured()
+    {
+        if (!_isConfigured)
+            throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
+    }
+
     public async Task<string> EncryptAsync(string inputPath, CancellationToken ct)
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
+        _ = await GetKeyAsync(ct);
 
         var outputPath = inputPath + ".enc";
 
@@ -108,8 +175,7 @@ public sealed class EncryptionService
 
     public async Task EncryptStreamAsync(Stream input, Stream output, CancellationToken ct)
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
+        var key = await GetKeyAsync(ct);
 
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
@@ -129,7 +195,7 @@ public sealed class EncryptionService
 
         try
         {
-            using var gcm = new AesGcm(_key, TagSize);
+            using var gcm = new AesGcm(key, TagSize);
             uint frameIndex = 0;
 
             var currentLen = await ReadFullAsync(input, currentBuffer, FrameChunkSize, ct);
@@ -178,8 +244,7 @@ public sealed class EncryptionService
 
     public byte[] Encrypt(byte[] plaintext, byte[]? aad = null)
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
+        var key = GetKey();
 
         ArgumentNullException.ThrowIfNull(plaintext);
 
@@ -190,7 +255,7 @@ public sealed class EncryptionService
 
         RandomNumberGenerator.Fill(nonceSpan);
 
-        using var gcm = new AesGcm(_key, TagSize);
+        using var gcm = new AesGcm(key, TagSize);
         gcm.Encrypt(nonceSpan, plaintext, ciphertextSpan, tagSpan, aad);
 
         return output;
@@ -198,8 +263,7 @@ public sealed class EncryptionService
 
     public byte[] Decrypt(byte[] ciphertext, byte[]? aad = null)
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
+        var key = GetKey();
 
         ArgumentNullException.ThrowIfNull(ciphertext);
 
@@ -210,7 +274,7 @@ public sealed class EncryptionService
         var plaintextLen = ciphertext.Length - NonceSize - TagSize;
         var plaintext = new byte[plaintextLen];
 
-        using var gcm = new AesGcm(_key, TagSize);
+        using var gcm = new AesGcm(key, TagSize);
         gcm.Decrypt(
             ciphertext.AsSpan(0, NonceSize),
             ciphertext.AsSpan(NonceSize, plaintextLen),
@@ -223,8 +287,7 @@ public sealed class EncryptionService
 
     public async Task DecryptAsync(string inputPath, string outputPath, CancellationToken ct)
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
+        _ = await GetKeyAsync(ct);
 
         _logger.LogInformation("Decrypting '{InputPath}' → '{OutputPath}'", inputPath, outputPath);
 
@@ -243,8 +306,7 @@ public sealed class EncryptionService
 
     public async Task DecryptStreamAsync(Stream input, Stream output, CancellationToken ct)
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException("EncryptionService is not configured: EncryptionSettings:Key is missing.");
+        var key = await GetKeyAsync(ct);
 
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
@@ -257,18 +319,18 @@ public sealed class EncryptionService
         var magic = header.AsSpan(0, 4);
         if (magic.SequenceEqual(FileMagicV3))
         {
-            await DecryptStreamV3Async(input, output, header, ct);
+            await DecryptStreamV3Async(input, output, header, key, ct);
             return;
         }
         if (magic.SequenceEqual(FileMagicV2))
         {
-            await DecryptStreamV2Async(input, output, header, ct);
+            await DecryptStreamV2Async(input, output, header, key, ct);
             return;
         }
         throw new InvalidDataException("Bad magic: not a Backupster encrypted file (expected BK02 or BK03).");
     }
 
-    private async Task DecryptStreamV2Async(Stream input, Stream output, byte[] header, CancellationToken ct)
+    private async Task DecryptStreamV2Async(Stream input, Stream output, byte[] header, byte[] key, CancellationToken ct)
     {
         var frameChunkSize = (int)BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(4, 4));
         if (frameChunkSize <= 0 || frameChunkSize > MaxFrameChunkSize)
@@ -282,7 +344,7 @@ public sealed class EncryptionService
 
         try
         {
-            using var gcm = new AesGcm(_key, TagSize);
+            using var gcm = new AesGcm(key, TagSize);
             uint frameIndex = 0;
 
             while (true)
@@ -319,7 +381,7 @@ public sealed class EncryptionService
         }
     }
 
-    private async Task DecryptStreamV3Async(Stream input, Stream output, byte[] header, CancellationToken ct)
+    private async Task DecryptStreamV3Async(Stream input, Stream output, byte[] header, byte[] key, CancellationToken ct)
     {
         var frameChunkSize = (int)BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(4, 4));
         if (frameChunkSize <= 0 || frameChunkSize > MaxFrameChunkSize)
@@ -335,7 +397,7 @@ public sealed class EncryptionService
 
         try
         {
-            using var gcm = new AesGcm(_key, TagSize);
+            using var gcm = new AesGcm(key, TagSize);
             uint frameIndex = 0;
             var seenFinal = false;
 

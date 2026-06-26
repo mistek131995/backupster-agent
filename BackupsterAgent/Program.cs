@@ -6,6 +6,7 @@ using BackupsterAgent.Providers.Backup.MssqlPhysicalDifferentialBackup;
 using BackupsterAgent.Providers.Restore;
 using BackupsterAgent.Providers.Restore.Common;
 using BackupsterAgent.Providers.Restore.PostgresPhysicalRestore;
+using BackupsterAgent.Providers.Secrets;
 using BackupsterAgent.Extensions;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Backup.Coordinator;
@@ -127,6 +128,14 @@ builder.Services.AddSingleton<IOutboxStore>(sp =>
 builder.Services.AddSingleton<PostgresBinaryResolver>();
 builder.Services.AddSingleton<MysqlBinaryResolver>();
 builder.Services.AddSingleton<MongoBinaryResolver>();
+builder.Services.AddSingleton<FileSecretProvider>();
+builder.Services.AddSingleton<EnvironmentSecretProvider>();
+builder.Services.AddSingleton<IAwsSecretBackend, AwsSecretBackend>();
+builder.Services.AddSingleton<AwsSecretReader>();
+builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<FileSecretProvider>());
+builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<EnvironmentSecretProvider>());
+builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<AwsSecretReader>());
+builder.Services.AddSingleton<ISecretProviderFactory, SecretProviderFactory>();
 builder.Services.AddSingleton<ISecretResolver, SecretResolver>();
 builder.Services.AddSingleton<IExternalProcessRunner, ExternalProcessRunner>();
 builder.Services.AddSingleton(sp =>

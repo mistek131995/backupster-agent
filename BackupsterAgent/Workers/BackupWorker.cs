@@ -1,6 +1,7 @@
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Exceptions;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Resolvers;
@@ -91,7 +92,7 @@ public sealed class BackupWorker : BackgroundService
         return valid;
     }
 
-    private bool IsConfigured()
+    private async Task<bool> IsConfiguredAsync(CancellationToken ct)
     {
         if (_validDatabases.Count == 0)
         {
@@ -99,9 +100,13 @@ public sealed class BackupWorker : BackgroundService
             return false;
         }
 
-        if (!_encryption.IsConfigured)
+        try
         {
-            _logger.LogWarning("BackupWorker: encryption key is not configured. Fill in appsettings.json and restart.");
+            await _encryption.EnsureReadyAsync(ct);
+        }
+        catch (SecretResolutionException ex)
+        {
+            _logger.LogWarning(ex, "BackupWorker: encryption key is not ready. Scheduled run skipped.");
             return false;
         }
 
@@ -122,6 +127,7 @@ public sealed class BackupWorker : BackgroundService
             try
             {
                 var due = new List<(DatabaseConfig Config, BackupMode Mode, string StorageName, DateTime NextRun)>();
+                var runsToRecord = new List<(string Key, DateTime NextRun)>();
 
                 foreach (var config in _validDatabases)
                 {
@@ -150,7 +156,7 @@ public sealed class BackupWorker : BackgroundService
                         if (entry.NextRun <= DateTime.UtcNow && (last is null || entry.NextRun > last))
                         {
                             due.Add((config, entry.Mode, storageName, entry.NextRun));
-                            _runTracker.RecordRun(trackerKey, entry.NextRun);
+                            runsToRecord.Add((trackerKey, entry.NextRun));
                         }
                         else
                         {
@@ -161,8 +167,13 @@ public sealed class BackupWorker : BackgroundService
                     }
                 }
 
-                if (due.Count > 0 && IsConfigured())
+                if (due.Count > 0 && await IsConfiguredAsync(stoppingToken))
+                {
+                    foreach (var run in runsToRecord)
+                        _runTracker.RecordRun(run.Key, run.NextRun);
+
                     await RunDueDatabasesAsync(due, stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

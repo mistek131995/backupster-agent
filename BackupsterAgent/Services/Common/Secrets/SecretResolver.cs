@@ -1,20 +1,24 @@
-using System.Security;
-using System.Text;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Providers.Secrets;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackupsterAgent.Services.Common.Secrets;
 
 public sealed class SecretResolver : ISecretResolver
 {
-    private const string FileProvider = "file";
-    private const string EnvProvider = "env";
-    private readonly ILogger<SecretResolver> _logger;
+    private readonly ISecretProviderFactory _secretProviders;
 
-    public SecretResolver(ILogger<SecretResolver> logger)
+    public SecretResolver(ISecretProviderFactory secretProviders)
     {
-        _logger = logger;
+        _secretProviders = secretProviders;
+    }
+
+    internal SecretResolver(ILogger<SecretResolver> logger)
+        : this(CreateDefaultProviderFactory())
+    {
+        _ = logger;
     }
 
     public async Task<string> ResolveStringAsync(
@@ -27,19 +31,11 @@ public sealed class SecretResolver : ISecretResolver
         if (secret is null)
             return plainValue;
 
-        var provider = NormalizeProvider(secret, settingPath);
-        return provider switch
-        {
-            FileProvider => NormalizeSecretValue(
-                await ReadFileSecretAsync(RequirePath(secret, settingPath), settingPath, ct),
-                settingPath,
-                "Файл секрета"),
-            EnvProvider => NormalizeSecretValue(
-                ReadEnvironmentSecret(RequireName(secret, settingPath), settingPath),
-                settingPath,
-                "Переменная окружения секрета"),
-            _ => throw UnsupportedProvider(provider, settingPath),
-        };
+        var selection = _secretProviders.GetProvider(secret, settingPath);
+        return NormalizeSecretValue(
+            await selection.Provider.ReadAsync(selection.Secret, settingPath, ct),
+            settingPath,
+            selection.Provider.EmptyValueSourceName);
     }
 
     public string ResolveString(SecretRef? secret, string? plainValue, string settingPath) =>
@@ -50,20 +46,22 @@ public sealed class SecretResolver : ISecretResolver
         if (secret is null)
             return plainValue;
 
-        var provider = NormalizeProvider(secret, settingPath);
-        return provider switch
+        var selection = _secretProviders.GetProvider(secret, settingPath);
+        if (!selection.Provider.SupportsSynchronousReads)
         {
-            FileProvider => NormalizeSecretValue(
-                ReadFileSecret(RequirePath(secret, settingPath), settingPath),
-                settingPath,
-                "Файл секрета"),
-            EnvProvider => NormalizeSecretValue(
-                ReadEnvironmentSecret(RequireName(secret, settingPath), settingPath),
-                settingPath,
-                "Переменная окружения секрета"),
-            _ => throw UnsupportedProvider(provider, settingPath),
-        };
+            var providerName = selection.Secret.Provider;
+            throw new SecretResolutionException(
+                $"Провайдер секретов '{providerName}' для '{settingPath}' требует асинхронного чтения.");
+        }
+
+        return NormalizeSecretValue(
+            selection.Provider.Read(selection.Secret, settingPath),
+            settingPath,
+            selection.Provider.EmptyValueSourceName);
     }
+
+    public bool RequiresAsyncResolution(SecretRef? secret) =>
+        _secretProviders.RequiresAsyncResolution(secret);
 
     public async Task<ConnectionConfig> ResolveConnectionAsync(ConnectionConfig connection, CancellationToken ct) =>
         new()
@@ -195,91 +193,6 @@ public sealed class SecretResolver : ISecretResolver
             RemotePath = settings.RemotePath,
         };
 
-    private static string NormalizeProvider(SecretRef secret, string settingPath)
-    {
-        if (string.IsNullOrWhiteSpace(secret.Provider))
-            throw new SecretResolutionException(
-                $"Не задан провайдер секрета для '{settingPath}'. Укажите 'file' или 'env'.");
-
-        return secret.Provider.Trim().ToLowerInvariant();
-    }
-
-    private static string RequirePath(SecretRef secret, string settingPath)
-    {
-        if (string.IsNullOrWhiteSpace(secret.Path))
-            throw new SecretResolutionException(
-                $"Не задан путь к файлу секрета для '{settingPath}'.");
-
-        return secret.Path;
-    }
-
-    private static string RequireName(SecretRef secret, string settingPath)
-    {
-        if (string.IsNullOrWhiteSpace(secret.Name))
-            throw new SecretResolutionException(
-                $"Не задано имя переменной окружения секрета для '{settingPath}'.");
-
-        return secret.Name;
-    }
-
-    private async Task<string> ReadFileSecretAsync(string path, string settingPath, CancellationToken ct)
-    {
-        try
-        {
-            var fullPath = Path.GetFullPath(path);
-            return await File.ReadAllTextAsync(fullPath, Encoding.UTF8, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException or SecurityException)
-        {
-            _logger.LogError(ex, "Failed to read file secret for {SettingPath} from '{Path}'", settingPath, path);
-            throw new SecretResolutionException(
-                $"Не удалось прочитать секрет из файла для '{settingPath}'. Проверьте путь и права доступа.", ex);
-        }
-    }
-
-    private string ReadFileSecret(string path, string settingPath)
-    {
-        try
-        {
-            var fullPath = Path.GetFullPath(path);
-            return File.ReadAllText(fullPath, Encoding.UTF8);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException or SecurityException)
-        {
-            _logger.LogError(ex, "Failed to read file secret for {SettingPath} from '{Path}'", settingPath, path);
-            throw new SecretResolutionException(
-                $"Не удалось прочитать секрет из файла для '{settingPath}'. Проверьте путь и права доступа.", ex);
-        }
-    }
-
-    private string ReadEnvironmentSecret(string name, string settingPath)
-    {
-        try
-        {
-            var value = Environment.GetEnvironmentVariable(name);
-            if (value is null)
-                throw new SecretResolutionException(
-                    $"Переменная окружения секрета '{name}' для '{settingPath}' не задана.");
-
-            return value;
-        }
-        catch (SecretResolutionException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is SecurityException)
-        {
-            _logger.LogError(ex, "Failed to read environment secret for {SettingPath} from '{Name}'", settingPath, name);
-            throw new SecretResolutionException(
-                $"Не удалось прочитать секрет из переменной окружения для '{settingPath}'. Проверьте имя переменной и права доступа.",
-                ex);
-        }
-    }
-
     private static string NormalizeSecretValue(string raw, string settingPath, string source)
     {
         var value = raw.TrimEnd('\r', '\n');
@@ -290,6 +203,14 @@ public sealed class SecretResolver : ISecretResolver
         return value;
     }
 
-    private static SecretResolutionException UnsupportedProvider(string provider, string settingPath) =>
-        new($"Провайдер секретов '{provider}' для '{settingPath}' не поддерживается этой версией агента.");
+    private static ISecretProviderFactory CreateDefaultProviderFactory()
+    {
+        var providers = new List<ISecretProvider>
+        {
+            new FileSecretProvider(NullLogger<FileSecretProvider>.Instance),
+            new EnvironmentSecretProvider(NullLogger<EnvironmentSecretProvider>.Instance),
+        };
+
+        return new SecretProviderFactory(providers);
+    }
 }

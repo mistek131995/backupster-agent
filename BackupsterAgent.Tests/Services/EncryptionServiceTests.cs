@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Providers.Secrets;
 using BackupsterAgent.Services;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Security;
@@ -113,6 +114,111 @@ public sealed class EncryptionServiceTests
         {
             Environment.SetEnvironmentVariable(name, null);
         }
+    }
+
+    [Test]
+    public void Constructor_KeySecretWithAws_LoadsKeyOnFirstUse()
+    {
+        var provider = new FakeSecretProvider("aws-secrets-manager", Convert.ToBase64String(_key));
+        var settings = Options.Create(new EncryptionSettings
+        {
+            KeySecret = new SecretRef { Provider = "aws-secrets-manager", Name = "backupster/master-key" },
+        });
+        var service = new EncryptionService(
+            settings,
+            new SecretResolver(new SecretProviderFactory([provider])),
+            NullLogger<EncryptionService>.Instance);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(service.IsConfigured, Is.True);
+            Assert.That(provider.Calls, Is.EqualTo(0));
+        });
+
+        var encrypted = service.Encrypt([1, 2, 3]);
+        var decrypted = service.Decrypt(encrypted);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decrypted, Is.EqualTo(new byte[] { 1, 2, 3 }));
+            Assert.That(provider.Calls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task EnsureReadyAsync_KeySecretWithAws_LoadsAndValidatesKey()
+    {
+        var provider = new FakeSecretProvider("aws-secrets-manager", Convert.ToBase64String(_key));
+        var settings = Options.Create(new EncryptionSettings
+        {
+            KeySecret = new SecretRef { Provider = "aws-secrets-manager", Name = "backupster/master-key" },
+        });
+        var service = new EncryptionService(
+            settings,
+            new SecretResolver(new SecretProviderFactory([provider])),
+            NullLogger<EncryptionService>.Instance);
+
+        await service.EnsureReadyAsync(CancellationToken.None);
+        var encrypted = service.Encrypt([1, 2, 3]);
+        var decrypted = service.Decrypt(encrypted);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decrypted, Is.EqualTo(new byte[] { 1, 2, 3 }));
+            Assert.That(provider.Calls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void EnsureReadyAsync_KeySecretWithAwsInvalidBase64_ThrowsBeforeEncryption()
+    {
+        var provider = new FakeSecretProvider("aws-secrets-manager", "not-base64");
+        var settings = Options.Create(new EncryptionSettings
+        {
+            KeySecret = new SecretRef { Provider = "aws-secrets-manager", Name = "backupster/master-key" },
+        });
+        var service = new EncryptionService(
+            settings,
+            new SecretResolver(new SecretProviderFactory([provider])),
+            NullLogger<EncryptionService>.Instance);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => service.EnsureReadyAsync(CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.InnerException, Is.TypeOf<FormatException>());
+            Assert.That(provider.Calls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void Constructor_KeySecretWithCustomAsyncProvider_LoadsKeyOnFirstUse()
+    {
+        var provider = new FakeSecretProvider("external-vault", Convert.ToBase64String(_key));
+        var settings = Options.Create(new EncryptionSettings
+        {
+            KeySecret = new SecretRef { Provider = "external-vault", Name = "backupster/master-key" },
+        });
+        var service = new EncryptionService(
+            settings,
+            new SecretResolver(new SecretProviderFactory([provider])),
+            NullLogger<EncryptionService>.Instance);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(service.IsConfigured, Is.True);
+            Assert.That(provider.Calls, Is.EqualTo(0));
+        });
+
+        var encrypted = service.Encrypt([1, 2, 3]);
+        var decrypted = service.Decrypt(encrypted);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decrypted, Is.EqualTo(new byte[] { 1, 2, 3 }));
+            Assert.That(provider.Calls, Is.EqualTo(1));
+        });
     }
 
     [Test]
@@ -868,6 +974,34 @@ public sealed class EncryptionServiceTests
             settings,
             new SecretResolver(NullLogger<SecretResolver>.Instance),
             NullLogger<EncryptionService>.Instance);
+
+    private sealed class FakeSecretProvider : ISecretProvider
+    {
+        private readonly string _provider;
+        private readonly string _value;
+
+        public FakeSecretProvider(string provider, string value)
+        {
+            _provider = provider;
+            _value = value;
+        }
+
+        public int Calls { get; private set; }
+        public string EmptyValueSourceName => "Fake secret";
+        public bool SupportsSynchronousReads => false;
+
+        public bool CanRead(string provider) =>
+            provider.Equals(_provider, StringComparison.Ordinal);
+
+        public Task<string> ReadAsync(SecretRef secret, string settingPath, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromResult(_value);
+        }
+
+        public string Read(SecretRef secret, string settingPath) =>
+            throw new InvalidOperationException("Synchronous read should not be called.");
+    }
 
     internal static byte[] DecryptBytes(byte[] input, byte[] key, byte[]? aad = null)
     {

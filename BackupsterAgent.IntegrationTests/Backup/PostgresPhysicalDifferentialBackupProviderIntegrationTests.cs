@@ -779,6 +779,7 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             new NullProgressReporterFactory(),
             new NoopOutboxStore(),
             new System.Diagnostics.ActivitySource("BackupsterAgent.IntegrationTests"),
+            encryption,
             NullLogger<BackupRunCoordinator>.Instance);
 
         return new BackupJob(coordinator, pipeline);

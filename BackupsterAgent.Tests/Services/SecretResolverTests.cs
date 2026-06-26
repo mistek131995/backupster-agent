@@ -1,6 +1,7 @@
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
+using BackupsterAgent.Providers.Secrets;
 using BackupsterAgent.Services.Common.Secrets;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -83,6 +84,202 @@ public sealed class SecretResolverTests
         {
             Environment.SetEnvironmentVariable(name, null);
         }
+    }
+
+    [Test]
+    public async Task ResolveStringAsync_AwsSecretOverridesPlainAndTrimsTrailingNewline()
+    {
+        var aws = new FakeSecretProvider("aws-secrets-manager", supportsSynchronousReads: false, "from-aws\n");
+        var resolver = new SecretResolver(new SecretProviderFactory([aws]));
+
+        var value = await resolver.ResolveStringAsync(
+            new SecretRef { Provider = "aws-secrets-manager", Name = "prod/db/password" },
+            "plain-value",
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value, Is.EqualTo("from-aws"));
+            Assert.That(aws.AsyncCalls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task ResolveStringAsync_AwsReaderUsesFactoryNormalizedProvider()
+    {
+        var reader = new AwsSecretReader(
+            new FakeAwsSecretBackend(
+                (_, _, _) => Task.FromResult("from-secrets-manager"),
+                (_, _, _) => throw new InvalidOperationException("SSM should not be called")),
+            NullLogger<AwsSecretReader>.Instance);
+        var resolver = new SecretResolver(new SecretProviderFactory([reader]));
+
+        var value = await resolver.ResolveStringAsync(
+            new SecretRef { Provider = " AWS-SECRETS-MANAGER ", Name = "prod/db/password" },
+            "plain-value",
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.That(value, Is.EqualTo("from-secrets-manager"));
+    }
+
+    [Test]
+    public async Task ResolveStringAsync_CustomProviderFromFactoryOverridesPlainAndTrimsTrailingNewline()
+    {
+        var provider = new FakeSecretProvider("external-vault", supportsSynchronousReads: false, "from-external\n");
+        var resolver = new SecretResolver(new SecretProviderFactory([provider]));
+
+        var value = await resolver.ResolveStringAsync(
+            new SecretRef { Provider = "external-vault", Name = "prod/db/password" },
+            "plain-value",
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value, Is.EqualTo("from-external"));
+            Assert.That(provider.AsyncCalls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void RequiresAsyncResolution_UsesProviderCapability()
+    {
+        var asyncProvider = new FakeSecretProvider("external-vault", supportsSynchronousReads: false, "from-external");
+        var syncProvider = new FakeSecretProvider("local-vault", supportsSynchronousReads: true, "from-local");
+        var resolver = new SecretResolver(new SecretProviderFactory([asyncProvider, syncProvider]));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                resolver.RequiresAsyncResolution(new SecretRef { Provider = "external-vault", Name = "secret" }),
+                Is.True);
+            Assert.That(
+                resolver.RequiresAsyncResolution(new SecretRef { Provider = "local-vault", Name = "secret" }),
+                Is.False);
+            Assert.That(
+                resolver.RequiresAsyncResolution(new SecretRef { Provider = "unknown-vault", Name = "secret" }),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public async Task AwsSecretReader_SecretsManagerJsonKeyReadsCurrentValueEachTime()
+    {
+        var calls = 0;
+        SecretRef? observed = null;
+        var reader = new AwsSecretReader(
+            new FakeAwsSecretBackend(
+                (secret, _, _) =>
+                {
+                    calls++;
+                    observed = secret;
+                    return Task.FromResult($"{{\"password\":\"from-json-{calls}\"}}");
+                },
+                (_, _, _) => throw new InvalidOperationException("SSM should not be called")),
+            NullLogger<AwsSecretReader>.Instance);
+
+        var secret = new SecretRef
+        {
+            Provider = "aws-secrets-manager",
+            Name = "prod/db",
+            Region = "eu-central-1",
+            JsonKey = "password",
+            VersionStage = "AWSCURRENT",
+        };
+
+        var first = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+        var second = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo("from-json-1"));
+            Assert.That(second, Is.EqualTo("from-json-2"));
+            Assert.That(calls, Is.EqualTo(2));
+            Assert.That(observed, Is.SameAs(secret));
+        });
+    }
+
+    [Test]
+    public void AwsSecretReader_SecretsManagerMissingJsonKeyThrows()
+    {
+        var reader = new AwsSecretReader(
+            new FakeAwsSecretBackend(
+                (_, _, _) => Task.FromResult("{\"username\":\"backup\"}"),
+                (_, _, _) => throw new InvalidOperationException("SSM should not be called")),
+            NullLogger<AwsSecretReader>.Instance);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "aws-secrets-manager",
+                    Name = "prod/db",
+                    JsonKey = "password",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.That(ex!.Message, Is.Not.Empty);
+    }
+
+    [Test]
+    public async Task AwsSecretReader_SsmParameterReadsCurrentValueEachTime()
+    {
+        var calls = 0;
+        bool? observedWithDecryption = null;
+        var reader = new AwsSecretReader(
+            new FakeAwsSecretBackend(
+                (_, _, _) => throw new InvalidOperationException("Secrets Manager should not be called"),
+                (secret, _, _) =>
+                {
+                    calls++;
+                    observedWithDecryption = secret.WithDecryption;
+                    return Task.FromResult($"from-ssm-{calls}");
+                }),
+            NullLogger<AwsSecretReader>.Instance);
+
+        var secret = new SecretRef
+        {
+            Provider = "aws-ssm-parameter",
+            Name = "/backupster/prod/db/password",
+            Region = "eu-central-1",
+            WithDecryption = true,
+        };
+
+        var first = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+        var second = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo("from-ssm-1"));
+            Assert.That(second, Is.EqualTo("from-ssm-2"));
+            Assert.That(calls, Is.EqualTo(2));
+            Assert.That(observedWithDecryption, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task AwsSecretReader_SsmParameterJsonKeyReadsConfiguredValue()
+    {
+        var reader = new AwsSecretReader(
+            new FakeAwsSecretBackend(
+                (_, _, _) => throw new InvalidOperationException("Secrets Manager should not be called"),
+                (_, _, _) => Task.FromResult("{\"password\":\"from-ssm-json\"}")),
+            NullLogger<AwsSecretReader>.Instance);
+
+        var value = await reader.ReadAsync(
+            new SecretRef
+            {
+                Provider = "aws-ssm-parameter",
+                Name = "/backupster/prod/db/password",
+                JsonKey = "password",
+            },
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.That(value, Is.EqualTo("from-ssm-json"));
     }
 
     [Test]
@@ -365,4 +562,59 @@ public sealed class SecretResolverTests
 
     private static string NewEnvName() =>
         $"BACKUPSTER_TEST_SECRET_{Guid.NewGuid():N}".ToUpperInvariant();
+
+    private sealed class FakeAwsSecretBackend : IAwsSecretBackend
+    {
+        private readonly Func<SecretRef, string, CancellationToken, Task<string>> _secretsManagerValueReader;
+        private readonly Func<SecretRef, string, CancellationToken, Task<string>> _ssmParameterValueReader;
+
+        public FakeAwsSecretBackend(
+            Func<SecretRef, string, CancellationToken, Task<string>> secretsManagerValueReader,
+            Func<SecretRef, string, CancellationToken, Task<string>> ssmParameterValueReader)
+        {
+            _secretsManagerValueReader = secretsManagerValueReader;
+            _ssmParameterValueReader = ssmParameterValueReader;
+        }
+
+        public Task<string> ReadSecretsManagerValueAsync(
+            SecretRef secret,
+            string settingPath,
+            CancellationToken ct) =>
+            _secretsManagerValueReader(secret, settingPath, ct);
+
+        public Task<string> ReadSsmParameterValueAsync(
+            SecretRef secret,
+            string settingPath,
+            CancellationToken ct) =>
+            _ssmParameterValueReader(secret, settingPath, ct);
+    }
+
+    private sealed class FakeSecretProvider : ISecretProvider
+    {
+        private readonly string _provider;
+        private readonly string _value;
+
+        public FakeSecretProvider(string provider, bool supportsSynchronousReads, string value)
+        {
+            _provider = provider;
+            SupportsSynchronousReads = supportsSynchronousReads;
+            _value = value;
+        }
+
+        public int AsyncCalls { get; private set; }
+        public string EmptyValueSourceName => "Fake secret";
+        public bool SupportsSynchronousReads { get; }
+
+        public bool CanRead(string provider) =>
+            provider.Equals(_provider, StringComparison.Ordinal);
+
+        public Task<string> ReadAsync(SecretRef secret, string settingPath, CancellationToken ct)
+        {
+            AsyncCalls++;
+            return Task.FromResult(_value);
+        }
+
+        public string Read(SecretRef secret, string settingPath) =>
+            _value;
+    }
 }
