@@ -87,6 +87,67 @@ public sealed class SecretResolverTests
     }
 
     [Test]
+    public async Task ResolveStringAsync_EnvSecretNameTrimsOuterWhitespace()
+    {
+        var name = NewEnvName();
+        Environment.SetEnvironmentVariable(name, "from-env");
+
+        try
+        {
+            var value = await _resolver.ResolveStringAsync(
+                new SecretRef { Provider = "env", Name = $" {name} " },
+                "plain-value",
+                "Connections['pg'].Password",
+                CancellationToken.None);
+
+            Assert.That(value, Is.EqualTo("from-env"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, null);
+        }
+    }
+
+    [Test]
+    public void ResolveStringAsync_EnvUnsupportedSecretRefFieldsThrow()
+    {
+        var name = NewEnvName();
+        Environment.SetEnvironmentVariable(name, "{\"password\":\"from-json\"}");
+
+        try
+        {
+            var ex = Assert.ThrowsAsync<SecretResolutionException>(
+                () => _resolver.ResolveStringAsync(
+                    new SecretRef
+                    {
+                        Provider = "env",
+                        Name = name,
+                        Path = "unused",
+                        Region = "eu-central-1",
+                        ServiceUrl = "https://example.invalid",
+                        JsonKey = "password",
+                        VersionStage = "AWSCURRENT",
+                        VersionId = "1",
+                        WithDecryption = true,
+                    },
+                    "plain-value",
+                    "Connections['pg'].Password",
+                    CancellationToken.None));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain(nameof(SecretRef.JsonKey)));
+                Assert.That(ex.Message, Does.Contain(nameof(SecretRef.Region)));
+                Assert.That(ex.Message, Does.Contain(nameof(SecretRef.VersionStage)));
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, null);
+        }
+    }
+
+    [Test]
     public async Task ResolveStringAsync_AwsSecretOverridesPlainAndTrimsTrailingNewline()
     {
         var aws = new FakeSecretProvider("aws-secrets-manager", supportsSynchronousReads: false, "from-aws\n");
@@ -283,6 +344,232 @@ public sealed class SecretResolverTests
     }
 
     [Test]
+    public async Task ResolveStringAsync_AzureReaderUsesFactoryNormalizedProvider()
+    {
+        var reader = new AzureSecretReader(
+            new FakeAzureSecretBackend((_, _, _, _, _) => Task.FromResult("from-key-vault\n")),
+            NullLogger<AzureSecretReader>.Instance);
+        var resolver = new SecretResolver(new SecretProviderFactory([reader]));
+
+        var value = await resolver.ResolveStringAsync(
+            new SecretRef
+            {
+                Provider = " AZURE-KEY-VAULT ",
+                ServiceUrl = "https://prod-vault.vault.azure.net",
+                Name = "db-password",
+            },
+            "plain-value",
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.That(value, Is.EqualTo("from-key-vault"));
+    }
+
+    [Test]
+    public void RequiresAsyncResolution_AzureReaderRequiresAsync()
+    {
+        var reader = new AzureSecretReader(
+            new FakeAzureSecretBackend((_, _, _, _, _) => Task.FromResult("unused")),
+            NullLogger<AzureSecretReader>.Instance);
+        var resolver = new SecretResolver(new SecretProviderFactory([reader]));
+
+        Assert.That(
+            resolver.RequiresAsyncResolution(new SecretRef { Provider = "azure-key-vault", Name = "secret" }),
+            Is.True);
+    }
+
+    [Test]
+    public void ResolveString_AzureReaderRejectsSynchronousRead()
+    {
+        var reader = new AzureSecretReader(
+            new FakeAzureSecretBackend((_, _, _, _, _) => Task.FromResult("unused")),
+            NullLogger<AzureSecretReader>.Instance);
+        var resolver = new SecretResolver(new SecretProviderFactory([reader]));
+
+        var ex = Assert.Throws<SecretResolutionException>(
+            () => resolver.ResolveString(
+                new SecretRef
+                {
+                    Provider = "azure-key-vault",
+                    ServiceUrl = "https://prod-vault.vault.azure.net",
+                    Name = "db-password",
+                },
+                "plain-value",
+                "Connections['pg'].Password"));
+
+        Assert.That(ex!.Message, Is.Not.Empty);
+    }
+
+    [Test]
+    public async Task AzureSecretReader_ReadsCurrentValueEachTime()
+    {
+        var calls = 0;
+        Uri? observedVaultUri = null;
+        string? observedName = null;
+        string? observedVersion = null;
+        var reader = new AzureSecretReader(
+            new FakeAzureSecretBackend((vaultUri, name, version, _, _) =>
+            {
+                calls++;
+                observedVaultUri = vaultUri;
+                observedName = name;
+                observedVersion = version;
+                return Task.FromResult($"from-key-vault-{calls}");
+            }),
+            NullLogger<AzureSecretReader>.Instance);
+
+        var secret = new SecretRef
+        {
+            Provider = "azure-key-vault",
+            ServiceUrl = "https://prod-vault.vault.azure.net",
+            Name = " db-password ",
+            VersionId = "abc123",
+        };
+
+        var first = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+        var second = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo("from-key-vault-1"));
+            Assert.That(second, Is.EqualTo("from-key-vault-2"));
+            Assert.That(calls, Is.EqualTo(2));
+            Assert.That(observedVaultUri, Is.EqualTo(new Uri("https://prod-vault.vault.azure.net")));
+            Assert.That(observedName, Is.EqualTo("db-password"));
+            Assert.That(observedVersion, Is.EqualTo("abc123"));
+        });
+    }
+
+    [Test]
+    public async Task AzureSecretReader_JsonKeyReadsConfiguredValue()
+    {
+        var reader = new AzureSecretReader(
+            new FakeAzureSecretBackend((_, _, _, _, _) => Task.FromResult("{\"password\":\"from-json\"}")),
+            NullLogger<AzureSecretReader>.Instance);
+
+        var value = await reader.ReadAsync(
+            new SecretRef
+            {
+                Provider = "azure-key-vault",
+                ServiceUrl = "https://prod-vault.vault.azure.net",
+                Name = "db-credentials",
+                JsonKey = "password",
+            },
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.That(value, Is.EqualTo("from-json"));
+    }
+
+    [Test]
+    public void AzureSecretReader_MissingJsonKeyThrows()
+    {
+        var reader = new AzureSecretReader(
+            new FakeAzureSecretBackend((_, _, _, _, _) => Task.FromResult("{\"username\":\"backup\"}")),
+            NullLogger<AzureSecretReader>.Instance);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "azure-key-vault",
+                    ServiceUrl = "https://prod-vault.vault.azure.net",
+                    Name = "db-credentials",
+                    JsonKey = "password",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.That(ex!.Message, Is.Not.Empty);
+    }
+
+    [Test]
+    public void AzureSecretReader_MissingServiceUrlThrows()
+    {
+        var reader = new AzureSecretReader(
+            new FakeAzureSecretBackend((_, _, _, _, _) =>
+                throw new InvalidOperationException("Backend should not be called")),
+            NullLogger<AzureSecretReader>.Instance);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef { Provider = "azure-key-vault", Name = "db-password" },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.That(ex!.Message, Is.Not.Empty);
+    }
+
+    [Test]
+    public void AzureSecretReader_InvalidServiceUrlThrows()
+    {
+        var reader = new AzureSecretReader(
+            new FakeAzureSecretBackend((_, _, _, _, _) =>
+                throw new InvalidOperationException("Backend should not be called")),
+            NullLogger<AzureSecretReader>.Instance);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "azure-key-vault",
+                    ServiceUrl = "prod-vault.vault.azure.net",
+                    Name = "db-password",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.That(ex!.Message, Is.Not.Empty);
+    }
+
+    [Test]
+    public void AzureSecretReader_MissingNameThrows()
+    {
+        var reader = new AzureSecretReader(
+            new FakeAzureSecretBackend((_, _, _, _, _) =>
+                throw new InvalidOperationException("Backend should not be called")),
+            NullLogger<AzureSecretReader>.Instance);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "azure-key-vault",
+                    ServiceUrl = "https://prod-vault.vault.azure.net",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.That(ex!.Message, Is.Not.Empty);
+    }
+
+    [Test]
+    public void AzureSecretReader_BackendFailureWrapsIntoSecretResolutionException()
+    {
+        var reader = new AzureSecretReader(
+            new FakeAzureSecretBackend((_, _, _, _, _) =>
+                throw new Azure.RequestFailedException(403, "Forbidden")),
+            NullLogger<AzureSecretReader>.Instance);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "azure-key-vault",
+                    ServiceUrl = "https://prod-vault.vault.azure.net",
+                    Name = "db-password",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Is.Not.Empty);
+            Assert.That(ex.InnerException, Is.InstanceOf<Azure.RequestFailedException>());
+        });
+    }
+
+    [Test]
     public async Task ResolveStringAsync_NoSecretUsesPlainValue()
     {
         var value = await _resolver.ResolveStringAsync(
@@ -381,7 +668,7 @@ public sealed class SecretResolverTests
                     "Connections['pg'].Password",
                     CancellationToken.None));
 
-            Assert.That(ex!.Message, Is.Not.Empty);
+            Assert.That(ex!.Message, Does.Contain("имеет пустое значение"));
         }
         finally
         {
@@ -587,6 +874,25 @@ public sealed class SecretResolverTests
             string settingPath,
             CancellationToken ct) =>
             _ssmParameterValueReader(secret, settingPath, ct);
+    }
+
+    private sealed class FakeAzureSecretBackend : IAzureSecretBackend
+    {
+        private readonly Func<Uri, string, string?, string, CancellationToken, Task<string>> _secretValueReader;
+
+        public FakeAzureSecretBackend(
+            Func<Uri, string, string?, string, CancellationToken, Task<string>> secretValueReader)
+        {
+            _secretValueReader = secretValueReader;
+        }
+
+        public Task<string> ReadSecretValueAsync(
+            Uri vaultUri,
+            string secretName,
+            string? version,
+            string settingPath,
+            CancellationToken ct) =>
+            _secretValueReader(vaultUri, secretName, version, settingPath, ct);
     }
 
     private sealed class FakeSecretProvider : ISecretProvider

@@ -172,11 +172,25 @@
 }
 ```
 
-`Provider` обязателен и поддерживает `file`, `env`, `aws-secrets-manager` или `aws-ssm-parameter`. Для `file` поле `Path` — путь к файлу на хосте агента или внутри контейнера. Файл читается как UTF-8, завершающий перевод строки (`CR/LF`) срезается, пустой файл считается ошибкой конфигурации. Для `env` поле `Name` — имя переменной окружения, доступной процессу агента; завершающий перевод строки также срезается, отсутствующая или пустая переменная считается ошибкой конфигурации.
+Формат для Azure Key Vault:
+
+```json
+"PasswordSecret": {
+  "Provider": "azure-key-vault",
+  "ServiceUrl": "https://prod-vault.vault.azure.net",
+  "Name": "main-pg-password",
+  "JsonKey": "password",
+  "VersionId": "abc123def4567890"
+}
+```
+
+`Provider` обязателен и поддерживает `file`, `env`, `aws-secrets-manager`, `aws-ssm-parameter` или `azure-key-vault`. Для `file` поле `Path` — путь к файлу на хосте агента или внутри контейнера. Файл читается как UTF-8, завершающий перевод строки (`CR/LF`) срезается, пустой файл считается ошибкой конфигурации. Для `env` поле `Name` — имя переменной окружения, доступной процессу агента; завершающий перевод строки также срезается, отсутствующая или пустая переменная считается ошибкой конфигурации.
 
 Для `aws-secrets-manager` поле `Name` — имя или ARN секрета. Если секрет хранится JSON-объектом, `JsonKey` выбирает top-level строковое поле; без `JsonKey` используется весь `SecretString`. `VersionStage` и `VersionId` опциональны; если оба не заданы, AWS возвращает текущую версию (`AWSCURRENT`). Для `aws-ssm-parameter` поле `Name` — имя или ARN параметра; label/version указываются стандартным AWS-синтаксисом в `Name` (`name:label` или `name:version`). `WithDecryption` по умолчанию `true`.
 
 Для AWS-провайдеров `Region` можно задать в `*Secret`; если он не задан, используется стандартная конфигурация AWS SDK для процесса агента. `ServiceUrl` опционален и нужен только для нестандартных endpoint'ов. AWS credentials в `appsettings.json` не задаются: агент использует стандартную цепочку AWS SDK (переменные окружения, web identity, `AWS_PROFILE`/shared config, container credentials, EC2 instance metadata). Минимальные IAM-права: `secretsmanager:GetSecretValue` для Secrets Manager, `ssm:GetParameter` для Parameter Store и `kms:Decrypt`, если секрет/параметр зашифрован customer-managed KMS key.
+
+Для `azure-key-vault` поле `ServiceUrl` обязательно — это адрес хранилища (`https://<имя>.vault.azure.net`; для национальных облаков Azure — их домен). `Name` — имя секрета в хранилище. `VersionId` опционален — конкретная версия секрета; без него читается текущая версия. Если секрет хранится JSON-объектом, `JsonKey` выбирает top-level строковое поле, как у AWS. Azure credentials в `appsettings.json` не задаются: агент использует стандартную цепочку `DefaultAzureCredential` из Azure.Identity (переменные окружения `AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`, workload identity, managed identity виртуальной машины или контейнера, Azure CLI). Минимальные права — RBAC-роль `Key Vault Secrets User` (или permission `Get` для секретов в access policy) на хранилище или конкретный секрет.
 
 Поддерживаемые поля:
 
@@ -197,7 +211,7 @@
 | WebDAV | `Storages[].WebDav.Username` | `Storages[].WebDav.UsernameSecret` |
 | WebDAV | `Storages[].WebDav.Password` | `Storages[].WebDav.PasswordSecret` |
 
-Агент заново читает внешний источник при каждом использовании соответствующего `*Secret`-поля. Для подключений к БД это следующий backup/restore/topology-sync; для токена дашборда — следующий HTTP-вызов; для хранилищ — следующий backup/restore/delete/GC, при изменении разрешённых credentials клиент хранилища пересоздаётся. Содержимое файлов секретов и AWS Secrets Manager/SSM можно ротировать без перезапуска агента. `env`-provider также читает переменную окружения процесса при каждом обращении, но изменения переменных окружения службы/контейнера обычно попадают в процесс только после перезапуска. Изменение plain-значений в `appsettings.json` или самой `*Secret`-ссылки требует перезапуска агента.
+Агент заново читает внешний источник при каждом использовании соответствующего `*Secret`-поля. Для подключений к БД это следующий backup/restore/topology-sync; для токена дашборда — следующий HTTP-вызов; для хранилищ — следующий backup/restore/delete/GC, при изменении разрешённых credentials клиент хранилища пересоздаётся. Содержимое файлов секретов, AWS Secrets Manager/SSM и Azure Key Vault можно ротировать без перезапуска агента (для Azure — если `VersionId` не зафиксирован в `*Secret`). `env`-provider также читает переменную окружения процесса при каждом обращении, но изменения переменных окружения службы/контейнера обычно попадают в процесс только после перезапуска. Изменение plain-значений в `appsettings.json` или самой `*Secret`-ссылки требует перезапуска агента.
 
 `EncryptionSettings.KeySecret` — исключение: мастер-ключ шифрования читается один раз и не поддерживает горячую ротацию. Ключ должен оставаться тем же для всех backup/restore, иначе старые бэкапы нельзя будет расшифровать.
 
@@ -240,7 +254,7 @@
 }
 ```
 
-Файловый provider подходит для Docker secrets, Kubernetes Secrets, External Secrets, Vault Agent templates, systemd `LoadCredential=` и CI/CD, если они записывают секрет в файл с правами, доступными процессу агента. Env-provider подходит для self-hosted, CI/CD и контейнеров, где секрет доставляется процессу как переменная окружения. AWS-провайдеры подходят для EC2/ECS/EKS и других окружений, где агент может получить IAM-роль или стандартные AWS credentials. Значения секретов, имена env-переменных, имена/ARN AWS-секретов и сами `*Secret`-ссылки на дашборд не отправляются. Для topology sync MongoDB/MSSQL агент может прочитать `ConnectionUriSecret` локально только чтобы извлечь безопасные `host`/`port`.
+Файловый provider подходит для Docker secrets, Kubernetes Secrets, External Secrets, Vault Agent templates, systemd `LoadCredential=` и CI/CD, если они записывают секрет в файл с правами, доступными процессу агента. Env-provider подходит для self-hosted, CI/CD и контейнеров, где секрет доставляется процессу как переменная окружения. AWS-провайдеры подходят для EC2/ECS/EKS и других окружений, где агент может получить IAM-роль или стандартные AWS credentials. Azure-провайдер подходит для Azure VM/AKS/Container Apps с managed identity или workload identity, а также для любых окружений с service principal через переменные окружения. Значения секретов, имена env-переменных, имена/ARN AWS-секретов, адреса и имена Azure-секретов и сами `*Secret`-ссылки на дашборд не отправляются. Для topology sync MongoDB/MSSQL агент может прочитать `ConnectionUriSecret` локально только чтобы извлечь безопасные `host`/`port`.
 
 ---
 

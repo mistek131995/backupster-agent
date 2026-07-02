@@ -18,7 +18,7 @@
 X-Agent-Token: <AgentSettings.Token или AgentSettings.TokenSecret>
 ```
 
-Токен задаётся через `AgentSettings__Token`, через `AgentSettings__TokenSecret__Provider=file` + `AgentSettings__TokenSecret__Path=...`, через `AgentSettings__TokenSecret__Provider=env` + `AgentSettings__TokenSecret__Name=...` или через AWS secret provider (`aws-secrets-manager` / `aws-ssm-parameter`; см. README агента и `docs/configuration.md`). В теле запроса, query-строке и логах агента токен не передаётся никогда.
+Токен задаётся через `AgentSettings__Token`, через `AgentSettings__TokenSecret__Provider=file` + `AgentSettings__TokenSecret__Path=...`, через `AgentSettings__TokenSecret__Provider=env` + `AgentSettings__TokenSecret__Name=...`, через AWS secret provider (`aws-secrets-manager` / `aws-ssm-parameter`) или через Azure Key Vault (`azure-key-vault`; см. README агента и `docs/configuration.md`). В теле запроса, query-строке и логах агента токен не передаётся никогда.
 
 ### Версия агента
 
@@ -74,7 +74,7 @@ chunks/{sha256}                                                     ← общи
 
 Все запросы — обычный HTTP/HTTPS на `AgentSettings.DashboardUrl`. Content-Type тела — `application/json; charset=utf-8`. Ответы без тела — `204 No Content`.
 
-Провайдер секретов `file` не добавляет исходящих сетевых запросов: агент читает файл локально перед использованием соответствующего поля. Провайдер `env` также не добавляет сетевых запросов. Провайдеры `aws-secrets-manager` и `aws-ssm-parameter` добавляют исходящие HTTPS-запросы к AWS Secrets Manager (`GetSecretValue`) или AWS Systems Manager Parameter Store (`GetParameter` с `WithDecryption=true` по умолчанию). AWS-значения не кешируются как plaintext до остановки процесса: агент повторяет `GetSecretValue`/`GetParameter` при каждом разрешении соответствующего `*Secret`-поля, а SDK-клиенты кешируются только по region/service endpoint. Если секрет или SecureString зашифрован customer-managed KMS key, AWS-сервис выполняет расшифровку через AWS KMS от имени вызывающего principal; агент получает только plaintext-ответ от Secrets Manager/SSM. Стандартная цепочка AWS SDK может дополнительно обращаться к AWS credential provider endpoints, например ECS/EKS web identity/container credentials или EC2 Instance Metadata Service, если такие credentials используются в окружении агента.
+Провайдер секретов `file` не добавляет исходящих сетевых запросов: агент читает файл локально перед использованием соответствующего поля. Провайдер `env` также не добавляет сетевых запросов. Провайдеры `aws-secrets-manager` и `aws-ssm-parameter` добавляют исходящие HTTPS-запросы к AWS Secrets Manager (`GetSecretValue`) или AWS Systems Manager Parameter Store (`GetParameter` с `WithDecryption=true` по умолчанию). AWS-значения не кешируются как plaintext до остановки процесса: агент повторяет `GetSecretValue`/`GetParameter` при каждом разрешении соответствующего `*Secret`-поля, а SDK-клиенты кешируются только по region/service endpoint. Если секрет или SecureString зашифрован customer-managed KMS key, AWS-сервис выполняет расшифровку через AWS KMS от имени вызывающего principal; агент получает только plaintext-ответ от Secrets Manager/SSM. Стандартная цепочка AWS SDK может дополнительно обращаться к AWS credential provider endpoints, например ECS/EKS web identity/container credentials или EC2 Instance Metadata Service, если такие credentials используются в окружении агента. Провайдер `azure-key-vault` добавляет исходящие HTTPS-запросы к заданному в `*Secret.ServiceUrl` хранилищу Azure Key Vault (`GetSecret`, обычно `https://<имя>.vault.azure.net`). Azure-значения так же не кешируются как plaintext: агент повторяет `GetSecret` при каждом разрешении соответствующего `*Secret`-поля, а SDK-клиенты кешируются только по адресу хранилища. Аутентификация — стандартная цепочка `DefaultAzureCredential` (Azure.Identity), которая дополнительно обращается к точкам выдачи токенов Microsoft Entra ID (`login.microsoftonline.com` либо authority host из `AZURE_AUTHORITY_HOST`), а при managed identity / workload identity — к локальной службе метаданных (IMDS `169.254.169.254` или endpoint из окружения контейнера/кластера).
 
 ### Таймауты HTTP-клиентов
 
@@ -97,7 +97,7 @@ Polly-ретраи (1/2/4 с) срабатывают поверх этих ли�
 - `Storages[].AzureBlob.ConnectionString`, `Storages[].AzureBlob.AccountKey`
 - `Storages[].WebDav.Password`
 - `Storages[].LocalFs.RemotePath` (сам путь и факт его наличия)
-- `*Secret`-ссылки на внешние источники секретов, имена env-переменных, имена/ARN AWS-секретов и параметров, и содержимое этих источников
+- `*Secret`-ссылки на внешние источники секретов, имена env-переменных, имена/ARN AWS-секретов и параметров, адреса хранилищ и имена секретов Azure Key Vault, и содержимое этих источников
 - Содержимое дампов, чанков, файлов (весь payload бэкапа шифруется AES-256-GCM и идёт напрямую в ваше хранилище — S3/SFTP/Azure Blob/WebDAV или локальную папку — минуя дашборд)
 
 Если вы нашли в выхлопе агента или в трафике что-то из этого списка — это баг. Пишите в репозиторий.

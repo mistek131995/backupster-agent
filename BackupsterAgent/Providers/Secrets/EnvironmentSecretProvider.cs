@@ -1,4 +1,3 @@
-using System.Security;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
 
@@ -7,12 +6,6 @@ namespace BackupsterAgent.Providers.Secrets;
 public sealed class EnvironmentSecretProvider : ISecretProvider
 {
     private const string Provider = "env";
-    private readonly ILogger<EnvironmentSecretProvider> _logger;
-
-    public EnvironmentSecretProvider(ILogger<EnvironmentSecretProvider> logger)
-    {
-        _logger = logger;
-    }
 
     public string EmptyValueSourceName => "Переменная окружения секрета";
     public bool SupportsSynchronousReads => true;
@@ -25,27 +18,15 @@ public sealed class EnvironmentSecretProvider : ISecretProvider
 
     public string Read(SecretRef secret, string settingPath)
     {
+        RejectUnsupportedFields(secret, settingPath);
         var name = RequireName(secret, settingPath);
-        try
-        {
-            var value = Environment.GetEnvironmentVariable(name);
-            if (value is null)
-                throw new SecretResolutionException(
-                    $"Переменная окружения секрета '{name}' для '{settingPath}' не задана.");
 
-            return value;
-        }
-        catch (SecretResolutionException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is SecurityException)
-        {
-            _logger.LogError(ex, "Failed to read environment secret for {SettingPath} from '{Name}'", settingPath, name);
+        var value = Environment.GetEnvironmentVariable(name);
+        if (value is null)
             throw new SecretResolutionException(
-                $"Не удалось прочитать секрет из переменной окружения для '{settingPath}'. Проверьте имя переменной и права доступа.",
-                ex);
-        }
+                $"Переменная окружения секрета '{name}' для '{settingPath}' не задана.");
+
+        return value;
     }
 
     private static string RequireName(SecretRef secret, string settingPath)
@@ -54,6 +35,32 @@ public sealed class EnvironmentSecretProvider : ISecretProvider
             throw new SecretResolutionException(
                 $"Не задано имя переменной окружения секрета для '{settingPath}'.");
 
-        return secret.Name;
+        return secret.Name.Trim();
+    }
+
+    private static void RejectUnsupportedFields(SecretRef secret, string settingPath)
+    {
+        var unsupportedFields = new List<string>();
+        AddIfConfigured(unsupportedFields, nameof(SecretRef.Path), secret.Path);
+        AddIfConfigured(unsupportedFields, nameof(SecretRef.Region), secret.Region);
+        AddIfConfigured(unsupportedFields, nameof(SecretRef.ServiceUrl), secret.ServiceUrl);
+        AddIfConfigured(unsupportedFields, nameof(SecretRef.JsonKey), secret.JsonKey);
+        AddIfConfigured(unsupportedFields, nameof(SecretRef.VersionStage), secret.VersionStage);
+        AddIfConfigured(unsupportedFields, nameof(SecretRef.VersionId), secret.VersionId);
+
+        if (secret.WithDecryption is not null)
+            unsupportedFields.Add(nameof(SecretRef.WithDecryption));
+
+        if (unsupportedFields.Count == 0)
+            return;
+
+        throw new SecretResolutionException(
+            $"Провайдер секретов 'env' для '{settingPath}' не поддерживает поля {string.Join(", ", unsupportedFields)}. Для переменной окружения задайте только Provider и Name.");
+    }
+
+    private static void AddIfConfigured(List<string> fields, string fieldName, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            fields.Add(fieldName);
     }
 }

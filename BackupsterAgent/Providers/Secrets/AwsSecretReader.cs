@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Amazon.Runtime;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Exceptions;
@@ -48,7 +47,7 @@ public sealed class AwsSecretReader : ISecretProvider
         try
         {
             var value = await _backend.ReadSecretsManagerValueAsync(secret, settingPath, ct);
-            return ExtractJsonKeyIfConfigured(value, secret.JsonKey, settingPath);
+            return SecretJsonValueExtractor.ExtractJsonKeyIfConfigured(value, secret.JsonKey, settingPath);
         }
         catch (OperationCanceledException)
         {
@@ -71,7 +70,7 @@ public sealed class AwsSecretReader : ISecretProvider
         try
         {
             var value = await _backend.ReadSsmParameterValueAsync(secret, settingPath, ct);
-            return ExtractJsonKeyIfConfigured(value, secret.JsonKey, settingPath);
+            return SecretJsonValueExtractor.ExtractJsonKeyIfConfigured(value, secret.JsonKey, settingPath);
         }
         catch (OperationCanceledException)
         {
@@ -82,39 +81,6 @@ public sealed class AwsSecretReader : ISecretProvider
             _logger.LogError(ex, "Failed to read AWS SSM parameter for {SettingPath}.", settingPath);
             throw new SecretResolutionException(
                 $"Не удалось прочитать параметр AWS SSM Parameter Store для '{settingPath}'. Проверьте имя параметра, регион, IAM-права и доступ к KMS.",
-                ex);
-        }
-    }
-
-    private static string ExtractJsonKeyIfConfigured(string value, string? jsonKey, string settingPath)
-    {
-        if (string.IsNullOrWhiteSpace(jsonKey))
-            return value;
-
-        try
-        {
-            using var document = JsonDocument.Parse(value);
-            if (document.RootElement.ValueKind != JsonValueKind.Object ||
-                !document.RootElement.TryGetProperty(jsonKey, out var element))
-            {
-                throw new SecretResolutionException(
-                    $"В AWS-секрете для '{settingPath}' не найден JSON-ключ '{jsonKey}'.");
-            }
-
-            if (element.ValueKind != JsonValueKind.String)
-                throw new SecretResolutionException(
-                    $"JSON-ключ '{jsonKey}' в AWS-секрете для '{settingPath}' должен быть строкой.");
-
-            return element.GetString() ?? string.Empty;
-        }
-        catch (SecretResolutionException)
-        {
-            throw;
-        }
-        catch (JsonException ex)
-        {
-            throw new SecretResolutionException(
-                $"AWS-секрет для '{settingPath}' не удалось разобрать как JSON.",
                 ex);
         }
     }

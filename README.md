@@ -15,7 +15,7 @@
 ## Документация
 
 - **[docs/installation.md](docs/installation.md)** — требования, Linux-пакеты, ручная установка из zip, Windows, dev-запуск, поведение при пустом конфиге.
-- **[docs/configuration.md](docs/configuration.md)** — `Connections`, `Storages`, `Databases`, `FileSets`, шифрование, секреты из файлов, провайдеры хранилищ, путь к конфигу, структура файлов в хранилище.
+- **[docs/configuration.md](docs/configuration.md)** — `Connections`, `Storages`, `Databases`, `FileSets`, шифрование, секреты из внешних источников (файл, env, AWS Secrets Manager/SSM, Azure Key Vault), провайдеры хранилищ, путь к конфигу, структура файлов в хранилище.
 - **[docs/gc-and-retention.md](docs/gc-and-retention.md)** — сборщик мусора для чанков и очистка устаревших бэкапов с настройками.
 - **[docs/restore.md](docs/restore.md)** — восстановление: `RestoreSettings`, требуемые права, поведение при ошибках.
 - **[NETWORK.md](NETWORK.md)** — полный перечень HTTP-запросов к дашборду и инвариант «creds не покидают хост».
@@ -144,7 +144,7 @@ Backup и restore/delete на одном агенте не идут паралл
 
 Благодаря этому регистрация агента на дашборде — это одно поле «Название»: после создания получаете токен, задаёте его через env/config или `TokenSecret`, и все сущности появятся в UI автоматически при старте.
 
-**Credentials никогда не покидают хост агента.** `Username`, `Password` и MongoDB/MSSQL `ConnectionUri` из `Connections[]`, ключ шифрования, токен агента, ключи S3/SFTP/Azure Blob/WebDAV (у LocalFs credentials нет — только путь) — всё живёт только в env/config, файлах `*Secret` или env-provider `*Secret` и используется локально при вызове `pg_dump` / `mysqldump` / `xtrabackup` / `mongodump`, подключении к MSSQL по TDS (`SqlClient` + DacFx) и загрузке в хранилище.
+**Credentials никогда не покидают хост агента.** `Username`, `Password` и MongoDB/MSSQL `ConnectionUri` из `Connections[]`, ключ шифрования, токен агента, ключи S3/SFTP/Azure Blob/WebDAV (у LocalFs credentials нет — только путь) — всё живёт только в env/config или внешних источниках `*Secret` (файл, переменная окружения, AWS Secrets Manager/SSM, Azure Key Vault) и используется локально при вызове `pg_dump` / `mysqldump` / `xtrabackup` / `mongodump`, подключении к MSSQL по TDS (`SqlClient` + DacFx) и загрузке в хранилище.
 
 Каждый sync выполняется один раз на старте. Если дашборд недоступен — агент ретраит с экспоненциальным backoff (до 5 минут между попытками). После успеха sync-worker останавливается. Чтобы повторить синхронизацию (например, после добавления новой БД или переименования file-set'а в `appsettings.json`), перезапустите агент.
 

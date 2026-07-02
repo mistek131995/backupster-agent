@@ -13,8 +13,12 @@ namespace BackupsterAgent.Providers.Secrets;
 
 internal sealed class AwsSecretBackend : IAwsSecretBackend, IDisposable
 {
-    private readonly ConcurrentDictionary<string, IAmazonSecretsManager> _secretsClients = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, IAmazonSimpleSystemsManagement> _ssmClients = new(StringComparer.Ordinal);
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
+
+    private readonly ConcurrentDictionary<string, Lazy<IAmazonSecretsManager>> _secretsClients = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Lazy<IAmazonSimpleSystemsManagement>> _ssmClients = new(StringComparer.Ordinal);
 
     public async Task<string> ReadSecretsManagerValueAsync(
         SecretRef secret,
@@ -22,7 +26,11 @@ internal sealed class AwsSecretBackend : IAwsSecretBackend, IDisposable
         CancellationToken ct)
     {
         var secretId = RequireName(secret, settingPath);
-        var client = _secretsClients.GetOrAdd(BuildClientCacheKey(secret), _ => CreateSecretsManagerClient(secret));
+        var client = _secretsClients.GetOrAdd(
+            BuildClientCacheKey(secret),
+            _ => new Lazy<IAmazonSecretsManager>(
+                () => CreateSecretsManagerClient(secret),
+                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
         var response = await client.GetSecretValueAsync(new GetSecretValueRequest
         {
@@ -42,7 +50,11 @@ internal sealed class AwsSecretBackend : IAwsSecretBackend, IDisposable
         CancellationToken ct)
     {
         var name = RequireName(secret, settingPath);
-        var client = _ssmClients.GetOrAdd(BuildClientCacheKey(secret), _ => CreateSsmClient(secret));
+        var client = _ssmClients.GetOrAdd(
+            BuildClientCacheKey(secret),
+            _ => new Lazy<IAmazonSimpleSystemsManagement>(
+                () => CreateSsmClient(secret),
+                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
         var response = await client.GetParameterAsync(new GetParameterRequest
         {
@@ -65,7 +77,17 @@ internal sealed class AwsSecretBackend : IAwsSecretBackend, IDisposable
 
         using var memory = new MemoryStream();
         await stream.CopyToAsync(memory, ct);
-        return Encoding.UTF8.GetString(memory.ToArray());
+
+        try
+        {
+            return StrictUtf8.GetString(memory.ToArray());
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new SecretResolutionException(
+                $"AWS Secrets Manager SecretBinary для '{settingPath}' не является UTF-8 текстом. Сохраните секрет как SecretString или используйте текстовое UTF-8 значение.",
+                ex);
+        }
     }
 
     private static IAmazonSecretsManager CreateSecretsManagerClient(SecretRef secret)
@@ -87,11 +109,16 @@ internal sealed class AwsSecretBackend : IAwsSecretBackend, IDisposable
         var serviceUrl = NullIfWhiteSpace(secret.ServiceUrl);
         var region = NullIfWhiteSpace(secret.Region);
 
-        if (serviceUrl is not null)
-            config.ServiceURL = serviceUrl;
-
         if (region is not null)
             config.RegionEndpoint = RegionEndpoint.GetBySystemName(region);
+
+        if (serviceUrl is not null)
+        {
+            config.ServiceURL = serviceUrl;
+
+            if (region is not null)
+                config.AuthenticationRegion = region;
+        }
     }
 
     private static string RequireName(SecretRef secret, string settingPath)
@@ -105,8 +132,7 @@ internal sealed class AwsSecretBackend : IAwsSecretBackend, IDisposable
 
     private static string BuildClientCacheKey(SecretRef secret) =>
         string.Join('\u001F',
-            secret.Provider.Trim().ToLowerInvariant(),
-            secret.Region?.Trim() ?? string.Empty,
+            secret.Region?.Trim().ToLowerInvariant() ?? string.Empty,
             secret.ServiceUrl?.Trim() ?? string.Empty);
 
     private static string? NullIfWhiteSpace(string? value) =>
@@ -115,9 +141,15 @@ internal sealed class AwsSecretBackend : IAwsSecretBackend, IDisposable
     public void Dispose()
     {
         foreach (var client in _secretsClients.Values)
-            client.Dispose();
+        {
+            if (client.IsValueCreated)
+                client.Value.Dispose();
+        }
 
         foreach (var client in _ssmClients.Values)
-            client.Dispose();
+        {
+            if (client.IsValueCreated)
+                client.Value.Dispose();
+        }
     }
 }

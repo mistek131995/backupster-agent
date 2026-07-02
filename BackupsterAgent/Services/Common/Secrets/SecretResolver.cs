@@ -198,7 +198,7 @@ public sealed class SecretResolver : ISecretResolver
         var value = raw.TrimEnd('\r', '\n');
         if (value.Length == 0)
             throw new SecretResolutionException(
-                $"{source} для '{settingPath}' пустой.");
+                $"{source} для '{settingPath}' имеет пустое значение.");
 
         return value;
     }
@@ -208,7 +208,7 @@ public sealed class SecretResolver : ISecretResolver
         var providers = new List<ISecretProvider>
         {
             new FileSecretProvider(NullLogger<FileSecretProvider>.Instance),
-            new EnvironmentSecretProvider(NullLogger<EnvironmentSecretProvider>.Instance),
+            new EnvironmentSecretProvider(),
         };
 
         return new SecretProviderFactory(providers);
