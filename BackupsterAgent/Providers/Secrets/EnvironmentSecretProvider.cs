@@ -42,6 +42,10 @@ public sealed class EnvironmentSecretProvider : ISecretProvider
     {
         var unsupportedFields = new List<string>();
         AddIfConfigured(unsupportedFields, nameof(SecretRef.Path), secret.Path);
+        AddIfConfigured(unsupportedFields, nameof(SecretRef.MountPath), secret.MountPath);
+        AddIfConfigured(unsupportedFields, nameof(SecretRef.Namespace), secret.Namespace);
+        AddIfConfigured(unsupportedFields, nameof(SecretRef.ProjectId), secret.ProjectId);
+        AddIfConfigured(unsupportedFields, nameof(SecretRef.Location), secret.Location);
         AddIfConfigured(unsupportedFields, nameof(SecretRef.Region), secret.Region);
         AddIfConfigured(unsupportedFields, nameof(SecretRef.ServiceUrl), secret.ServiceUrl);
         AddIfConfigured(unsupportedFields, nameof(SecretRef.JsonKey), secret.JsonKey);

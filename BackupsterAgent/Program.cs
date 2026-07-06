@@ -75,6 +75,9 @@ builder.Services.Configure<RetentionSettings>(
 builder.Services.Configure<OutboxSettings>(
     builder.Configuration.GetSection("OutboxSettings"));
 
+builder.Services.Configure<List<VaultSecretProviderConfig>>(
+    builder.Configuration.GetSection("VaultSecretProviders"));
+
 builder.Services.AddSingleton<PostgresLogicalBackupProvider>();
 builder.Services.AddSingleton<PostgresPhysicalBackupProvider>();
 builder.Services.AddSingleton<PostgresPhysicalDifferentialBackupProvider>();
@@ -134,10 +137,16 @@ builder.Services.AddSingleton<IAwsSecretBackend, AwsSecretBackend>();
 builder.Services.AddSingleton<AwsSecretReader>();
 builder.Services.AddSingleton<IAzureSecretBackend, AzureSecretBackend>();
 builder.Services.AddSingleton<AzureSecretReader>();
+builder.Services.AddSingleton<IGoogleSecretManagerSecretBackend, GoogleSecretManagerSecretBackend>();
+builder.Services.AddSingleton<GoogleSecretManagerSecretReader>();
+builder.Services.AddSingleton<IHashicorpVaultSecretBackend, HashicorpVaultSecretBackend>();
+builder.Services.AddSingleton<HashicorpVaultSecretReader>();
 builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<FileSecretProvider>());
 builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<EnvironmentSecretProvider>());
 builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<AwsSecretReader>());
 builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<AzureSecretReader>());
+builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<GoogleSecretManagerSecretReader>());
+builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<HashicorpVaultSecretReader>());
 builder.Services.AddSingleton<ISecretProviderFactory, SecretProviderFactory>();
 builder.Services.AddSingleton<ISecretResolver, SecretResolver>();
 builder.Services.AddSingleton<IExternalProcessRunner, ExternalProcessRunner>();
@@ -178,6 +187,10 @@ builder.Services.AddHttpClient<IAgentTaskClient, AgentTaskClient>(
     c => ConfigureDashboardClient(c, 60));
 builder.Services.AddHttpClient<IRetentionClient, RetentionClient>(
     c => ConfigureDashboardClient(c, 20));
+builder.Services.AddHttpClient(HashicorpVaultSecretBackend.HttpClientName, c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(20);
+});
 builder.Services.AddSingleton<IProgressReporterFactory, ProgressReporterFactory>();
 builder.Services.AddSingleton<DatabaseRestoreService>();
 builder.Services.AddSingleton<FileRestoreService>();

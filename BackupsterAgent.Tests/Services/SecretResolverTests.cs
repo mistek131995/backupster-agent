@@ -1,3 +1,4 @@
+using System.Net;
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Exceptions;
@@ -570,6 +571,554 @@ public sealed class SecretResolverTests
     }
 
     [Test]
+    public async Task ResolveStringAsync_GoogleSecretManagerReaderUsesFactoryNormalizedProvider()
+    {
+        string? observedName = null;
+        string? observedLocation = null;
+        var reader = new GoogleSecretManagerSecretReader(
+            new FakeGoogleSecretManagerSecretBackend((name, location, _, _) =>
+            {
+                observedName = name;
+                observedLocation = location;
+                return Task.FromResult("{\"password\":\"from-google\\n\"}");
+            }),
+            NullLogger<GoogleSecretManagerSecretReader>.Instance);
+        var resolver = new SecretResolver(new SecretProviderFactory([reader]));
+
+        var value = await resolver.ResolveStringAsync(
+            new SecretRef
+            {
+                Provider = " GOOGLE-SECRET-MANAGER ",
+                ProjectId = "prod-project",
+                Location = "europe-west1",
+                Name = " db-password ",
+                VersionId = "5",
+                JsonKey = "password",
+            },
+            "plain-value",
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value, Is.EqualTo("from-google"));
+            Assert.That(
+                observedName,
+                Is.EqualTo("projects/prod-project/locations/europe-west1/secrets/db-password/versions/5"));
+            Assert.That(observedLocation, Is.EqualTo("europe-west1"));
+        });
+    }
+
+    [Test]
+    public void RequiresAsyncResolution_GoogleSecretManagerReaderRequiresAsync()
+    {
+        var reader = new GoogleSecretManagerSecretReader(
+            new FakeGoogleSecretManagerSecretBackend((_, _, _, _) => Task.FromResult("unused")),
+            NullLogger<GoogleSecretManagerSecretReader>.Instance);
+        var resolver = new SecretResolver(new SecretProviderFactory([reader]));
+
+        Assert.That(
+            resolver.RequiresAsyncResolution(new SecretRef { Provider = "google-secret-manager", Name = "secret" }),
+            Is.True);
+    }
+
+    [Test]
+    public void ResolveString_GoogleSecretManagerReaderRejectsSynchronousRead()
+    {
+        var reader = new GoogleSecretManagerSecretReader(
+            new FakeGoogleSecretManagerSecretBackend((_, _, _, _) => Task.FromResult("unused")),
+            NullLogger<GoogleSecretManagerSecretReader>.Instance);
+        var resolver = new SecretResolver(new SecretProviderFactory([reader]));
+
+        var ex = Assert.Throws<SecretResolutionException>(
+            () => resolver.ResolveString(
+                new SecretRef
+                {
+                    Provider = "google-secret-manager",
+                    ProjectId = "prod-project",
+                    Name = "db-password",
+                },
+                "plain-value",
+                "Connections['pg'].Password"));
+
+        Assert.That(ex!.Message, Is.Not.Empty);
+    }
+
+    [Test]
+    public async Task GoogleSecretManagerReader_ReadsCurrentValueEachTime()
+    {
+        var calls = 0;
+        var observedNames = new List<string>();
+        var reader = new GoogleSecretManagerSecretReader(
+            new FakeGoogleSecretManagerSecretBackend((name, _, _, _) =>
+            {
+                calls++;
+                observedNames.Add(name);
+                return Task.FromResult($"from-google-{calls}");
+            }),
+            NullLogger<GoogleSecretManagerSecretReader>.Instance);
+
+        var secret = new SecretRef
+        {
+            Provider = "google-secret-manager",
+            ProjectId = "prod-project",
+            Name = "db-password",
+        };
+
+        var first = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+        var second = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo("from-google-1"));
+            Assert.That(second, Is.EqualTo("from-google-2"));
+            Assert.That(calls, Is.EqualTo(2));
+            Assert.That(
+                observedNames,
+                Is.EqualTo(new[]
+                {
+                    "projects/prod-project/secrets/db-password/versions/latest",
+                    "projects/prod-project/secrets/db-password/versions/latest",
+                }));
+        });
+    }
+
+    [Test]
+    public async Task GoogleSecretManagerReader_FullVersionNameUsesConfiguredName()
+    {
+        string? observedName = null;
+        string? observedLocation = null;
+        var reader = new GoogleSecretManagerSecretReader(
+            new FakeGoogleSecretManagerSecretBackend((name, location, _, _) =>
+            {
+                observedName = name;
+                observedLocation = location;
+                return Task.FromResult("from-google");
+            }),
+            NullLogger<GoogleSecretManagerSecretReader>.Instance);
+
+        var value = await reader.ReadAsync(
+            new SecretRef
+            {
+                Provider = "google-secret-manager",
+                Name = "projects/prod-project/locations/europe-west1/secrets/db-password/versions/7",
+            },
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value, Is.EqualTo("from-google"));
+            Assert.That(
+                observedName,
+                Is.EqualTo("projects/prod-project/locations/europe-west1/secrets/db-password/versions/7"));
+            Assert.That(observedLocation, Is.EqualTo("europe-west1"));
+        });
+    }
+
+    [Test]
+    public void GoogleSecretManagerReader_MissingProjectIdThrows()
+    {
+        var reader = new GoogleSecretManagerSecretReader(
+            new FakeGoogleSecretManagerSecretBackend((_, _, _, _) =>
+                throw new InvalidOperationException("Backend should not be called")),
+            NullLogger<GoogleSecretManagerSecretReader>.Instance);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "google-secret-manager",
+                    Name = "db-password",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.That(ex!.Message, Is.Not.Empty);
+    }
+
+    [Test]
+    public void GoogleSecretManagerReader_MissingNameThrows()
+    {
+        var reader = new GoogleSecretManagerSecretReader(
+            new FakeGoogleSecretManagerSecretBackend((_, _, _, _) =>
+                throw new InvalidOperationException("Backend should not be called")),
+            NullLogger<GoogleSecretManagerSecretReader>.Instance);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "google-secret-manager",
+                    ProjectId = "prod-project",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.That(ex!.Message, Is.Not.Empty);
+    }
+
+    [Test]
+    public void GoogleSecretManagerReader_BackendFailureWrapsIntoSecretResolutionException()
+    {
+        var reader = new GoogleSecretManagerSecretReader(
+            new FakeGoogleSecretManagerSecretBackend((_, _, _, _) =>
+                throw new InvalidOperationException("Backend failed")),
+            NullLogger<GoogleSecretManagerSecretReader>.Instance);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "google-secret-manager",
+                    ProjectId = "prod-project",
+                    Name = "db-password",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Is.Not.Empty);
+            Assert.That(ex.InnerException, Is.InstanceOf<InvalidOperationException>());
+        });
+    }
+
+    [Test]
+    public async Task ResolveStringAsync_HashicorpVaultReaderUsesFactoryNormalizedProvider()
+    {
+        var backend = new FakeHashicorpVaultSecretBackend
+        {
+            KvValue = "{\"password\":\"from-vault\\n\"}",
+        };
+        var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod-hcp",
+                    Address = "https://vault.example.net",
+                    Namespace = "admin",
+                    Auth = new VaultAuthConfig
+                    {
+                        Method = "Token",
+                        Token = "vault-token",
+                    },
+                },
+            ],
+            backend);
+        var resolver = new SecretResolver(new SecretProviderFactory([reader]));
+
+        var value = await resolver.ResolveStringAsync(
+            new SecretRef
+            {
+                Provider = " HASHICORP-VAULT ",
+                Name = "prod-hcp",
+                MountPath = "kv",
+                Path = "backupster/prod/main-pg",
+                Namespace = "team-a",
+                JsonKey = "password",
+                VersionId = "2",
+            },
+            "plain-value",
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value, Is.EqualTo("from-vault"));
+            Assert.That(backend.ReadCalls, Is.EqualTo(1));
+            Assert.That(backend.LastReadAddress, Is.EqualTo(new Uri("https://vault.example.net")));
+            Assert.That(backend.LastReadNamespace, Is.EqualTo("team-a"));
+            Assert.That(backend.LastReadToken, Is.EqualTo("vault-token"));
+            Assert.That(backend.LastReadMountPath, Is.EqualTo("kv"));
+            Assert.That(backend.LastReadSecretPath, Is.EqualTo("backupster/prod/main-pg"));
+            Assert.That(backend.LastReadVersion, Is.EqualTo("2"));
+        });
+    }
+
+    [Test]
+    public void RequiresAsyncResolution_HashicorpVaultReaderRequiresAsync()
+    {
+        var reader = new HashicorpVaultSecretReader(
+            [new VaultSecretProviderConfig { Name = "prod", Address = "https://vault.example.net" }],
+            new FakeHashicorpVaultSecretBackend());
+        var resolver = new SecretResolver(new SecretProviderFactory([reader]));
+
+        Assert.That(
+            resolver.RequiresAsyncResolution(new SecretRef { Provider = "hashicorp-vault", Name = "prod" }),
+            Is.True);
+    }
+
+    [Test]
+    public void ResolveString_HashicorpVaultReaderRejectsSynchronousRead()
+    {
+        var reader = new HashicorpVaultSecretReader(
+            [new VaultSecretProviderConfig { Name = "prod", Address = "https://vault.example.net" }],
+            new FakeHashicorpVaultSecretBackend());
+        var resolver = new SecretResolver(new SecretProviderFactory([reader]));
+
+        var ex = Assert.Throws<SecretResolutionException>(
+            () => resolver.ResolveString(
+                new SecretRef { Provider = "hashicorp-vault", Name = "prod", Path = "backupster/db" },
+                "plain-value",
+                "Connections['pg'].Password"));
+
+        Assert.That(ex!.Message, Is.Not.Empty);
+    }
+
+    [Test]
+    public async Task HashicorpVaultSecretReader_AppRoleAuthenticatesOnceAndCachesToken()
+    {
+        var backend = new FakeHashicorpVaultSecretBackend
+        {
+            KvValue = "{\"value\":\"from-vault\"}",
+            LoginResult = new VaultAppRoleLoginResult("login-token", 3600, true),
+        };
+        var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod",
+                    Address = "https://vault.example.net",
+                    Namespace = "admin",
+                    Auth = new VaultAuthConfig
+                    {
+                        Method = "AppRole",
+                        MountPath = "auth/custom-approle",
+                        RoleId = "role-id",
+                        SecretId = "secret-id",
+                    },
+                },
+            ],
+            backend);
+        var secret = new SecretRef
+        {
+            Provider = "hashicorp-vault",
+            Name = "prod",
+            MountPath = "secret",
+            Path = "backupster/db",
+        };
+
+        var first = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+        var second = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo("from-vault"));
+            Assert.That(second, Is.EqualTo("from-vault"));
+            Assert.That(backend.LoginCalls, Is.EqualTo(1));
+            Assert.That(backend.ReadCalls, Is.EqualTo(2));
+            Assert.That(backend.LastLoginNamespace, Is.EqualTo("admin"));
+            Assert.That(backend.LastLoginAuthMountPath, Is.EqualTo("auth/custom-approle"));
+            Assert.That(backend.LastLoginRoleId, Is.EqualTo("role-id"));
+            Assert.That(backend.LastLoginSecretId, Is.EqualTo("secret-id"));
+            Assert.That(backend.ReadTokens, Is.EqualTo(new[] { "login-token", "login-token" }));
+        });
+    }
+
+    [Test]
+    public async Task HashicorpVaultSecretReader_AppRoleZeroLeaseDurationCachesToken()
+    {
+        var backend = new FakeHashicorpVaultSecretBackend
+        {
+            KvValue = "{\"value\":\"from-vault\"}",
+            LoginResult = new VaultAppRoleLoginResult("non-expiring-token", 0, false),
+        };
+        var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod",
+                    Address = "https://vault.example.net",
+                    Auth = new VaultAuthConfig
+                    {
+                        Method = "AppRole",
+                        RoleId = "role-id",
+                        SecretId = "secret-id",
+                    },
+                },
+            ],
+            backend);
+        var secret = new SecretRef
+        {
+            Provider = "hashicorp-vault",
+            Name = "prod",
+            MountPath = "secret",
+            Path = "backupster/db",
+        };
+
+        var first = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+        var second = await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo("from-vault"));
+            Assert.That(second, Is.EqualTo("from-vault"));
+            Assert.That(backend.LoginCalls, Is.EqualTo(1));
+            Assert.That(backend.ReadCalls, Is.EqualTo(2));
+            Assert.That(backend.ReadTokens, Is.EqualTo(new[] { "non-expiring-token", "non-expiring-token" }));
+        });
+    }
+
+    [Test]
+    public async Task HashicorpVaultSecretReader_AppRoleForbiddenReadInvalidatesTokenAndRetriesOnce()
+    {
+        var backend = new FakeHashicorpVaultSecretBackend
+        {
+            LoginResults =
+            {
+                new VaultAppRoleLoginResult("stale-token", 3600, true),
+                new VaultAppRoleLoginResult("fresh-token", 3600, true),
+            },
+            ReadResultFactory = (call, _) =>
+            {
+                if (call == 1)
+                    throw new SecretResolutionException(
+                        "Vault forbidden",
+                        new HttpRequestException("Forbidden", null, HttpStatusCode.Forbidden));
+
+                return "{\"value\":\"from-vault\"}";
+            },
+        };
+        var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod",
+                    Address = "https://vault.example.net",
+                    Auth = new VaultAuthConfig
+                    {
+                        Method = "AppRole",
+                        RoleId = "role-id",
+                        SecretId = "secret-id",
+                    },
+                },
+            ],
+            backend);
+
+        var value = await reader.ReadAsync(
+            new SecretRef
+            {
+                Provider = "hashicorp-vault",
+                Name = "prod",
+                MountPath = "secret",
+                Path = "backupster/db",
+            },
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value, Is.EqualTo("from-vault"));
+            Assert.That(backend.LoginCalls, Is.EqualTo(2));
+            Assert.That(backend.ReadCalls, Is.EqualTo(2));
+            Assert.That(backend.ReadTokens, Is.EqualTo(new[] { "stale-token", "fresh-token" }));
+        });
+    }
+
+    [Test]
+    public async Task HashicorpVaultSecretReader_TokenAuthCanUseEnvBootstrapSecret()
+    {
+        var tokenName = NewEnvName();
+        Environment.SetEnvironmentVariable(tokenName, "env-vault-token");
+
+        try
+        {
+            var backend = new FakeHashicorpVaultSecretBackend
+            {
+                KvValue = "{\"value\":\"from-vault\"}",
+            };
+            var reader = new HashicorpVaultSecretReader(
+                [
+                    new VaultSecretProviderConfig
+                    {
+                        Name = "prod",
+                        Address = "https://vault.example.net",
+                        Auth = new VaultAuthConfig
+                        {
+                            Method = "Token",
+                            TokenSecret = new SecretRef { Provider = "env", Name = tokenName },
+                        },
+                    },
+                ],
+                backend);
+
+            var value = await reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "hashicorp-vault",
+                    Name = "prod",
+                    Path = "backupster/db",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(value, Is.EqualTo("from-vault"));
+                Assert.That(backend.LastReadToken, Is.EqualTo("env-vault-token"));
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(tokenName, null);
+        }
+    }
+
+    [Test]
+    public void HashicorpVaultSecretReader_MultipleFieldsWithoutJsonKeyThrows()
+    {
+        var backend = new FakeHashicorpVaultSecretBackend
+        {
+            KvValue = "{\"username\":\"backup\",\"password\":\"secret\"}",
+        };
+        var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod",
+                    Address = "https://vault.example.net",
+                    Auth = new VaultAuthConfig { Token = "vault-token" },
+                },
+            ],
+            backend);
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "hashicorp-vault",
+                    Name = "prod",
+                    Path = "backupster/db",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.That(ex!.Message, Does.Contain("JsonKey"));
+    }
+
+    [Test]
+    public void HashicorpVaultSecretReader_MissingProfileThrows()
+    {
+        var reader = new HashicorpVaultSecretReader(
+            [new VaultSecretProviderConfig { Name = "prod", Address = "https://vault.example.net" }],
+            new FakeHashicorpVaultSecretBackend());
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(
+                new SecretRef
+                {
+                    Provider = "hashicorp-vault",
+                    Name = "missing",
+                    Path = "backupster/db",
+                },
+                "Connections['pg'].Password",
+                CancellationToken.None));
+
+        Assert.That(ex!.Message, Does.Contain("missing"));
+    }
+
+    [Test]
     public async Task ResolveStringAsync_NoSecretUsesPlainValue()
     {
         var value = await _resolver.ResolveStringAsync(
@@ -893,6 +1442,89 @@ public sealed class SecretResolverTests
             string settingPath,
             CancellationToken ct) =>
             _secretValueReader(vaultUri, secretName, version, settingPath, ct);
+    }
+
+    private sealed class FakeGoogleSecretManagerSecretBackend : IGoogleSecretManagerSecretBackend
+    {
+        private readonly Func<string, string?, string, CancellationToken, Task<string>> _secretVersionReader;
+
+        public FakeGoogleSecretManagerSecretBackend(
+            Func<string, string?, string, CancellationToken, Task<string>> secretVersionReader)
+        {
+            _secretVersionReader = secretVersionReader;
+        }
+
+        public Task<string> ReadSecretVersionAsync(
+            string secretVersionName,
+            string? location,
+            string settingPath,
+            CancellationToken ct) =>
+            _secretVersionReader(secretVersionName, location, settingPath, ct);
+    }
+
+    private sealed class FakeHashicorpVaultSecretBackend : IHashicorpVaultSecretBackend
+    {
+        public string KvValue { get; init; } = "{\"value\":\"from-vault\"}";
+        public VaultAppRoleLoginResult LoginResult { get; init; } = new("login-token", 3600, true);
+        public List<VaultAppRoleLoginResult> LoginResults { get; } = [];
+        public Func<int, string, string>? ReadResultFactory { get; init; }
+        public int ReadCalls { get; private set; }
+        public int LoginCalls { get; private set; }
+        public Uri? LastReadAddress { get; private set; }
+        public string? LastReadNamespace { get; private set; }
+        public string? LastReadToken { get; private set; }
+        public string? LastReadMountPath { get; private set; }
+        public string? LastReadSecretPath { get; private set; }
+        public string? LastReadVersion { get; private set; }
+        public string? LastLoginNamespace { get; private set; }
+        public string? LastLoginAuthMountPath { get; private set; }
+        public string? LastLoginRoleId { get; private set; }
+        public string? LastLoginSecretId { get; private set; }
+        public List<string> ReadTokens { get; } = [];
+
+        public Task<string> ReadKvV2Async(
+            Uri address,
+            string? vaultNamespace,
+            string token,
+            string mountPath,
+            string secretPath,
+            string? version,
+            string settingPath,
+            CancellationToken ct)
+        {
+            ReadCalls++;
+            LastReadAddress = address;
+            LastReadNamespace = vaultNamespace;
+            LastReadToken = token;
+            LastReadMountPath = mountPath;
+            LastReadSecretPath = secretPath;
+            LastReadVersion = version;
+            ReadTokens.Add(token);
+            if (ReadResultFactory is not null)
+                return Task.FromResult(ReadResultFactory(ReadCalls, token));
+
+            return Task.FromResult(KvValue);
+        }
+
+        public Task<VaultAppRoleLoginResult> LoginAppRoleAsync(
+            Uri address,
+            string? vaultNamespace,
+            string authMountPath,
+            string roleId,
+            string secretId,
+            string settingPath,
+            CancellationToken ct)
+        {
+            LoginCalls++;
+            LastLoginNamespace = vaultNamespace;
+            LastLoginAuthMountPath = authMountPath;
+            LastLoginRoleId = roleId;
+            LastLoginSecretId = secretId;
+            var result = LoginResults.Count >= LoginCalls
+                ? LoginResults[LoginCalls - 1]
+                : LoginResult;
+            return Task.FromResult(result);
+        }
     }
 
     private sealed class FakeSecretProvider : ISecretProvider
