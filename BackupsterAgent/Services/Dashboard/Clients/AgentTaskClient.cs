@@ -27,22 +27,32 @@ public sealed class AgentTaskClient : DashboardClientBase, IAgentTaskClient
         _patchPipeline = BuildRetryPipeline(nameof(AgentTaskClient), logger);
     }
 
-    public async Task<AgentTaskForAgentDto?> FetchTaskAsync(CancellationToken ct)
+    public async Task<AgentTaskForAgentDto?> FetchTaskAsync(
+        CancellationToken ct,
+        DashboardTokenSnapshot? tokenSnapshot = null)
     {
-        var token = await ResolveTokenOrSkipAsync(_logger, nameof(AgentTaskClient), ct);
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(AgentTaskClient), ct, tokenSnapshot);
         if (token is null) return null;
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/task";
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("X-Agent-Token", token);
-
-        using var response = await _http.SendAsync(request, ct);
+        using var response = await SendWithTokenRefreshAsync(
+            _http,
+            effectiveToken =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Add("X-Agent-Token", effectiveToken);
+                return request;
+            },
+            token,
+            tokenSnapshot,
+            $"{nameof(AgentTaskClient)}.{nameof(FetchTaskAsync)}",
+            _logger,
+            ct);
 
         if (response.StatusCode == HttpStatusCode.NoContent)
             return null;
 
-        ThrowIfUnauthorized(response, $"{nameof(AgentTaskClient)}.{nameof(FetchTaskAsync)}", _logger);
         response.EnsureSuccessStatusCode();
 
         var task = await response.Content.ReadFromJsonAsync<AgentTaskForAgentDto>(JsonOptions, ct);
@@ -58,21 +68,33 @@ public sealed class AgentTaskClient : DashboardClientBase, IAgentTaskClient
         return task;
     }
 
-    public async Task PatchTaskAsync(Guid taskId, PatchAgentTaskDto patch, CancellationToken ct)
+    public async Task PatchTaskAsync(
+        Guid taskId,
+        PatchAgentTaskDto patch,
+        CancellationToken ct,
+        DashboardTokenSnapshot? tokenSnapshot = null)
     {
-        var token = await ResolveTokenOrSkipAsync(_logger, nameof(AgentTaskClient), ct);
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(AgentTaskClient), ct, tokenSnapshot);
         if (token is null) return;
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/task/{taskId}";
 
         await _patchPipeline.ExecuteAsync(async innerCt =>
         {
-            using var request = new HttpRequestMessage(HttpMethod.Patch, url);
-            request.Headers.Add("X-Agent-Token", token);
-            request.Content = JsonContent.Create(patch, options: JsonOptions);
-
-            using var response = await _http.SendAsync(request, innerCt);
-            ThrowIfUnauthorized(response, $"{nameof(AgentTaskClient)}.{nameof(PatchTaskAsync)}", _logger);
+            using var response = await SendWithTokenRefreshAsync(
+                _http,
+                effectiveToken =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Patch, url);
+                    request.Headers.Add("X-Agent-Token", effectiveToken);
+                    request.Content = JsonContent.Create(patch, options: JsonOptions);
+                    return request;
+                },
+                token,
+                tokenSnapshot,
+                $"{nameof(AgentTaskClient)}.{nameof(PatchTaskAsync)}",
+                _logger,
+                innerCt);
             response.EnsureSuccessStatusCode();
         }, ct);
 
@@ -80,9 +102,13 @@ public sealed class AgentTaskClient : DashboardClientBase, IAgentTaskClient
             "AgentTaskClient: patched task {TaskId} with status '{Status}'", taskId, patch.Status);
     }
 
-    public async Task ReportProgressAsync(Guid taskId, AgentTaskProgressDto progress, CancellationToken ct)
+    public async Task ReportProgressAsync(
+        Guid taskId,
+        AgentTaskProgressDto progress,
+        CancellationToken ct,
+        DashboardTokenSnapshot? tokenSnapshot = null)
     {
-        var token = await ResolveTokenOrSkipAsync(_logger, nameof(AgentTaskClient), ct);
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(AgentTaskClient), ct, tokenSnapshot);
         if (token is null) return;
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/task/{taskId}/progress";
@@ -90,12 +116,20 @@ public sealed class AgentTaskClient : DashboardClientBase, IAgentTaskClient
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.Add("X-Agent-Token", token);
-        request.Content = JsonContent.Create(progress, options: JsonOptions);
-
-        using var response = await _http.SendAsync(request, timeoutCts.Token);
-        ThrowIfUnauthorized(response, $"{nameof(AgentTaskClient)}.{nameof(ReportProgressAsync)}", _logger);
+        using var response = await SendWithTokenRefreshAsync(
+            _http,
+            effectiveToken =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, url);
+                request.Headers.Add("X-Agent-Token", effectiveToken);
+                request.Content = JsonContent.Create(progress, options: JsonOptions);
+                return request;
+            },
+            token,
+            tokenSnapshot,
+            $"{nameof(AgentTaskClient)}.{nameof(ReportProgressAsync)}",
+            _logger,
+            timeoutCts.Token);
         response.EnsureSuccessStatusCode();
     }
 }

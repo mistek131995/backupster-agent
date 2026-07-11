@@ -7,6 +7,7 @@ using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.Security;
 using BackupsterAgent.Services.Common.State;
+using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Services.Dashboard.Clients;
 using Microsoft.Extensions.Options;
 
@@ -22,6 +23,7 @@ public sealed class BackupWorker : BackgroundService
     private readonly IAgentActivityLock _activityLock;
     private readonly IBackupRunTracker _runTracker;
     private readonly IBackupRecordClient _recordClient;
+    private readonly IDashboardTokenSnapshotProvider _tokenSnapshotProvider;
     private readonly List<DatabaseConfig> _databases;
     private readonly List<DatabaseConfig> _validDatabases;
     private readonly ILogger<BackupWorker> _logger;
@@ -35,6 +37,7 @@ public sealed class BackupWorker : BackgroundService
         IAgentActivityLock activityLock,
         IBackupRunTracker runTracker,
         IBackupRecordClient recordClient,
+        IDashboardTokenSnapshotProvider tokenSnapshotProvider,
         IOptions<List<DatabaseConfig>> databases,
         ILogger<BackupWorker> logger)
     {
@@ -46,6 +49,7 @@ public sealed class BackupWorker : BackgroundService
         _activityLock = activityLock;
         _runTracker = runTracker;
         _recordClient = recordClient;
+        _tokenSnapshotProvider = tokenSnapshotProvider;
         _databases = databases.Value;
         _logger = logger;
         _validDatabases = FilterValidDatabases(_databases, _connections, _storages, _logger);
@@ -239,11 +243,16 @@ public sealed class BackupWorker : BackgroundService
 
             try
             {
+                var tokenSnapshot = await _tokenSnapshotProvider.CaptureAsync(stoppingToken);
                 Guid? baseBackupRecordId = null;
                 if (mode == BackupMode.PhysicalDifferential)
                 {
                     var lookup = await _recordClient.GetLastSuccessfulAsync(
-                        config.Database, storageName, BackupMode.Physical, stoppingToken);
+                        config.Database,
+                        storageName,
+                        BackupMode.Physical,
+                        stoppingToken,
+                        tokenSnapshot);
 
                     switch (lookup.Outcome)
                     {
@@ -272,7 +281,8 @@ public sealed class BackupWorker : BackgroundService
                 BackupResult result;
                 using (await _activityLock.AcquireAsync($"backup:{config.Database}:{mode}:{storageName}", stoppingToken))
                 {
-                    result = await _job.RunAsync(config, storage, mode, stoppingToken, baseBackupRecordId);
+                    result = await _job.RunAsync(
+                        config, storage, mode, stoppingToken, baseBackupRecordId, tokenSnapshot);
 
                     if (result.ChainBroken)
                     {
@@ -281,7 +291,12 @@ public sealed class BackupWorker : BackgroundService
                             i + 1, due.Count, config.Database, storageName, result.BackupRecordId?.ToString() ?? "-");
 
                         var autoFullResult = await _job.RunAsync(
-                            config, storage, BackupMode.Physical, stoppingToken, baseBackupRecordId: null);
+                            config,
+                            storage,
+                            BackupMode.Physical,
+                            stoppingToken,
+                            baseBackupRecordId: null,
+                            tokenSnapshot: tokenSnapshot);
 
                         if (autoFullResult.Success)
                         {

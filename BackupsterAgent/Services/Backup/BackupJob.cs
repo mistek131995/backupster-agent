@@ -2,6 +2,7 @@ using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Backup.Coordinator;
+using BackupsterAgent.Services.Dashboard;
 
 namespace BackupsterAgent.Services.Backup;
 
@@ -21,7 +22,10 @@ public class BackupJob : IBackupJobRunner
         StorageConfig storage,
         BackupMode mode,
         CancellationToken ct,
-        Guid? baseBackupRecordId = null) =>
+        Guid? baseBackupRecordId = null,
+        DashboardTokenSnapshot? tokenSnapshot = null) =>
         _coordinator.RunAsync(
-            new DatabaseBackupDescriptor(config, storage, mode, _pipeline, baseBackupRecordId), ct);
+            new DatabaseBackupDescriptor(config, storage, mode, _pipeline, baseBackupRecordId),
+            ct,
+            tokenSnapshot);
 }

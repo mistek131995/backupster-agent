@@ -215,7 +215,8 @@
       "SecretIdSecret": {
         "Provider": "file",
         "Path": "/run/secrets/vault_secret_id"
-      }
+      },
+      "SecretIdMode": "Raw"
     }
   }
 ],
@@ -248,7 +249,28 @@
 
 Для `google-secret-manager` поле `Name` — имя секрета в Google Cloud Secret Manager. `ProjectId` обязателен, если `Name` не задан как полный resource name. `Location` опционален для regional secrets; без него используется global resource name `projects/{project}/secrets/{secret}/versions/{version}`. При `Location` или regional resource name агент использует regional endpoint `secretmanager.{location}.rep.googleapis.com`. `VersionId` опционален; без него читается `latest`. Если `Name` уже содержит полный resource name вида `projects/{project}/secrets/{secret}` или `projects/{project}/locations/{location}/secrets/{secret}`, агент добавляет `/versions/{VersionId|latest}`. Если `Name` уже содержит `/versions/{version}`, `ProjectId`, `Location` и `VersionId` не нужны. Если секрет хранится JSON-объектом, `JsonKey` выбирает top-level строковое поле, как у AWS/Azure. Google credentials в `appsettings.json` не задаются: агент использует Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, attached service account / workload identity, gcloud ADC и другие источники стандартной цепочки Google SDK). Минимальные права — роль `Secret Manager Secret Accessor` (`roles/secretmanager.secretAccessor`) или permission `secretmanager.versions.access` на секрет.
 
-Для `hashicorp-vault` поле `Name` — имя профиля из `VaultSecretProviders[]`. `VaultSecretProviders[].Address` — URL self-hosted Vault или HCP Vault Dedicated. `Namespace` опционален; для HCP Vault Dedicated обычно используется `admin`. `Auth.Method` поддерживает `Token` и `AppRole`. Для `Token` задайте `Auth.Token` или `Auth.TokenSecret`; для `AppRole` задайте `Auth.RoleId`/`Auth.SecretId` или соседние `RoleIdSecret`/`SecretIdSecret`. Bootstrap-секреты внутри `VaultSecretProviders[].Auth.*Secret` читаются только через `file` или `env`, чтобы аутентификация в Vault не зависела от самого Vault provider. `MountPath` в `*Secret` — mount KV v2 engine (`secret` по умолчанию), `Path` — путь секрета внутри mount, `VersionId` — номер версии KV v2. Если `JsonKey` задан, агент берёт top-level строковое поле из `data.data`; без `JsonKey` Vault-секрет должен содержать ровно одно строковое поле.
+Для `hashicorp-vault` поле `Name` — имя профиля из `VaultSecretProviders[]`. `VaultSecretProviders[].Address` — URL self-hosted Vault или HCP Vault Dedicated. `Namespace` опционален; для HCP Vault Dedicated обычно используется `admin`. `Auth.Method` поддерживает `Token` и `AppRole`. Для `Token` задайте `Auth.Token` или `Auth.TokenSecret`. Для `AppRole` обязателен `Auth.RoleId` или `Auth.RoleIdSecret`; `Auth.SecretId`/`Auth.SecretIdSecret` можно не задавать только для AppRole с `bind_secret_id=false`. Bootstrap-секреты внутри `VaultSecretProviders[].Auth.*Secret` читаются только через `file` или `env`, чтобы аутентификация в Vault не зависела от самого Vault provider. `MountPath` в `*Secret` — mount KV v2 engine (`secret` по умолчанию), `Path` — путь секрета внутри mount, `VersionId` — номер версии KV v2. Если `JsonKey` задан, агент берёт top-level строковое поле из `data.data`; без `JsonKey` Vault-секрет должен содержать ровно одно строковое поле.
+
+`VaultSecretProviders[].Auth.SecretIdMode` поддерживает два режима:
+
+- `Raw` (по умолчанию) — `SecretId`/`SecretIdSecret` содержит обычный AppRole SecretID.
+- `ResponseWrappingToken` — `SecretId`/`SecretIdSecret` содержит одноразовый response-wrapping token. В этом режиме обязательно задайте `SecretIdWrappingExpectedCreationPath`, например `auth/approle/role/backupster-agent/secret-id`. Агент сначала вызывает `sys/wrapping/lookup`, проверяет точное совпадение `creation_path`, затем вызывает `sys/wrapping/unwrap` и использует извлечённый SecretID для AppRole login. При несовпадении пути wrapping token не расходуется.
+
+Пример response-wrapped SecretID:
+
+```json
+"Auth": {
+  "Method": "AppRole",
+  "MountPath": "auth/approle",
+  "RoleId": "00000000-0000-0000-0000-000000000000",
+  "SecretIdSecret": {
+    "Provider": "file",
+    "Path": "/run/secrets/vault_wrapping_token"
+  },
+  "SecretIdMode": "ResponseWrappingToken",
+  "SecretIdWrappingExpectedCreationPath": "auth/approle/role/backupster-agent/secret-id"
+}
+```
 
 Поддерживаемые поля:
 
@@ -269,7 +291,9 @@
 | WebDAV | `Storages[].WebDav.Username` | `Storages[].WebDav.UsernameSecret` |
 | WebDAV | `Storages[].WebDav.Password` | `Storages[].WebDav.PasswordSecret` |
 
-Агент заново читает внешний источник при каждом использовании соответствующего `*Secret`-поля. Для подключений к БД это следующий backup/restore/topology-sync; для токена дашборда — следующий HTTP-вызов; для хранилищ — следующий backup/restore/delete/GC, при изменении разрешённых credentials клиент хранилища пересоздаётся. Содержимое файлов секретов, AWS Secrets Manager/SSM, Azure Key Vault, Google Cloud Secret Manager и HashiCorp Vault можно ротировать без перезапуска агента (для Azure, Google и Vault — если `VersionId` не зафиксирован в `*Secret`). `env`-provider также читает переменную окружения процесса при каждом обращении, но изменения переменных окружения службы/контейнера обычно попадают в процесс только после перезапуска. Изменение plain-значений в `appsettings.json` или самой `*Secret`-ссылки требует перезапуска агента. Для `AppRole` агент кеширует только выданный Vault client token в памяти до истечения lease; если Vault вернул `lease_duration=0`, токен кешируется на 1 час. Plaintext-значения Vault-секретов не кешируются.
+Агент заново читает внешний источник при каждом использовании соответствующего `*Secret`-поля. Для подключений к БД это следующий backup/restore/topology-sync; для хранилищ — следующий backup/restore/delete/GC, при изменении разрешённых credentials клиент хранилища пересоздаётся. Токен дашборда имеет operation-scoped снимок: для одного backup/file-set backup он читается один раз перед первым dashboard-вызовом и затем тот же снимок используется для поиска родителя differential backup, Open, progress/heartbeat, Finalize и auto-rebase; для task-канала снимок сохраняется во время пустых long-poll ответов, а после получения задачи используется для всех вызовов backup/restore/delete, progress и финального PATCH. Если запрос со снимком получил HTTP 401, агент один раз повторно читает `TokenSecret`: изменившееся значение атомарно заменяет токен в текущем снимке, после чего запрос повторяется один раз и операция продолжается с новым токеном. Неизменившийся токен, ошибка повторного чтения или второй HTTP 401 приводят к штатной остановке агента через `DashboardAuthGuard`. Без HTTP 401 дополнительных чтений внешнего источника внутри операции нет. После завершения задачи следующий polling lifecycle получает новый снимок. Если первоначально получить токен не удалось, агент повторяет разрешение на следующем polling tick. Остальные независимые dashboard-вызовы разрешают токен перед своим HTTP-вызовом. Снимок хранится только в памяти, не пишется на диск и не логируется.
+
+Содержимое файлов секретов, AWS Secrets Manager/SSM, Azure Key Vault, Google Cloud Secret Manager и HashiCorp Vault можно ротировать без перезапуска агента (для Azure, Google и Vault — если `VersionId` не зафиксирован в `*Secret`). `env`-provider также читает переменную окружения процесса при каждом обращении, но изменения переменных окружения службы/контейнера обычно попадают в процесс только после перезапуска. Изменение plain-значений в `appsettings.json` или самой `*Secret`-ссылки требует перезапуска агента. Для `AppRole` агент кеширует выданный Vault client token и обновляет renewable token через `auth/token/renew-self` до окончания lease. Если token не renewable, renewal отклонён или достигнут максимальный TTL, агент повторяет AppRole login. Для одноразового raw SecretID или response-wrapping token внешний механизм доставки должен к этому моменту заменить значение в `SecretIdSecret`; использованный wrapping token повторно развернуть нельзя. Если Vault вернул `lease_duration=0`, token кешируется на 1 час. Plaintext-значения Vault-секретов не кешируются вне operation-scoped снимков полей, которым они требуются.
 
 `EncryptionSettings.KeySecret` — исключение: мастер-ключ шифрования читается один раз и не поддерживает горячую ротацию. Ключ должен оставаться тем же для всех backup/restore, иначе старые бэкапы нельзя будет расшифровать.
 

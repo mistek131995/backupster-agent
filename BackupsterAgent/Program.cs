@@ -149,6 +149,7 @@ builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<Googl
 builder.Services.AddSingleton<ISecretProvider>(sp => sp.GetRequiredService<HashicorpVaultSecretReader>());
 builder.Services.AddSingleton<ISecretProviderFactory, SecretProviderFactory>();
 builder.Services.AddSingleton<ISecretResolver, SecretResolver>();
+builder.Services.AddSingleton<IDashboardTokenSnapshotProvider, DashboardTokenSnapshotProvider>();
 builder.Services.AddSingleton<IExternalProcessRunner, ExternalProcessRunner>();
 builder.Services.AddSingleton(sp =>
     new ConnectionResolver(sp.GetRequiredService<IOptions<List<ConnectionConfig>>>().Value));

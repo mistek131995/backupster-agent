@@ -3,6 +3,7 @@ using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Progress;
+using BackupsterAgent.Services.Dashboard;
 
 namespace BackupsterAgent.Workers.Handlers;
 
@@ -24,7 +25,10 @@ public sealed class DeleteTaskHandler : IAgentTaskHandler
 
     public bool CanHandle(AgentTaskForAgentDto task) => task.Type == AgentTaskType.Delete;
 
-    public async Task<PatchAgentTaskDto> HandleAsync(AgentTaskForAgentDto task, CancellationToken ct)
+    public async Task<PatchAgentTaskDto> HandleAsync(
+        AgentTaskForAgentDto task,
+        DashboardTokenSnapshot tokenSnapshot,
+        CancellationToken ct)
     {
         if (task.Delete is null)
         {
@@ -43,7 +47,7 @@ public sealed class DeleteTaskHandler : IAgentTaskHandler
             "DeleteTaskHandler: executing delete task {TaskId} (storage '{Storage}')",
             task.Id, payload.StorageName);
 
-        await using var reporter = _reporterFactory.CreateForDelete(task.Id);
+        await using var reporter = _reporterFactory.CreateForDelete(task.Id, tokenSnapshot);
 
         var result = await _backupDelete.RunAsync(task.Id, payload, reporter, ct);
 

@@ -8,6 +8,7 @@ using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Progress;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Restore;
+using BackupsterAgent.Services.Dashboard;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Workers.Handlers;
@@ -42,7 +43,10 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
 
     public bool CanHandle(AgentTaskForAgentDto task) => task.Type == AgentTaskType.Restore;
 
-    public async Task<PatchAgentTaskDto> HandleAsync(AgentTaskForAgentDto task, CancellationToken ct)
+    public async Task<PatchAgentTaskDto> HandleAsync(
+        AgentTaskForAgentDto task,
+        DashboardTokenSnapshot tokenSnapshot,
+        CancellationToken ct)
     {
         if (task.Restore is null)
         {
@@ -80,7 +84,7 @@ public sealed class RestoreTaskHandler : IAgentTaskHandler
             return FailRestore(validationError);
         }
 
-        await using var reporter = _reporterFactory.CreateForRestore(task.Id);
+        await using var reporter = _reporterFactory.CreateForRestore(task.Id, tokenSnapshot);
 
         IUploadProvider uploader;
         try

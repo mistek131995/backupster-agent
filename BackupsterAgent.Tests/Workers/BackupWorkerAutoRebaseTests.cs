@@ -55,6 +55,7 @@ public sealed class BackupWorkerAutoRebaseTests
             new NoopActivityLock(),
             runTracker: null!,
             new StubRecordClient(),
+            new FakeDashboardTokenSnapshotProvider(),
             databases,
             NullLogger<BackupWorker>.Instance);
     }
@@ -149,16 +150,17 @@ public sealed class BackupWorkerAutoRebaseTests
     private sealed class RecordingJobRunner : IBackupJobRunner
     {
         public Queue<BackupResult> Queue { get; } = new();
-        public List<(BackupMode Mode, Guid? BaseBackupRecordId)> Calls { get; } = new();
+        public List<(BackupMode Mode, Guid? BaseBackupRecordId, DashboardTokenSnapshot? TokenSnapshot)> Calls { get; } = new();
 
         public Task<BackupResult> RunAsync(
             DatabaseConfig config,
             StorageConfig storage,
             BackupMode mode,
             CancellationToken ct,
-            Guid? baseBackupRecordId = null)
+            Guid? baseBackupRecordId = null,
+            DashboardTokenSnapshot? tokenSnapshot = null)
         {
-            Calls.Add((mode, baseBackupRecordId));
+            Calls.Add((mode, baseBackupRecordId, tokenSnapshot));
             if (!Queue.TryDequeue(out var next))
                 throw new InvalidOperationException(
                     "RecordingJobRunner: no canned BackupResult queued for this call");
@@ -179,17 +181,32 @@ public sealed class BackupWorkerAutoRebaseTests
 
     private sealed class StubRecordClient : IBackupRecordClient
     {
-        public Task<OpenRecordResult> OpenAsync(OpenBackupRecordDto dto, CancellationToken ct) =>
+        public Task<OpenRecordResult> OpenAsync(
+            OpenBackupRecordDto dto,
+            CancellationToken ct,
+            DashboardTokenSnapshot? tokenSnapshot = null) =>
             throw new NotSupportedException("StubRecordClient: OpenAsync is not used by RunDueDatabasesAsync");
 
-        public Task ReportProgressAsync(Guid backupRecordId, BackupProgressDto progress, CancellationToken ct) =>
+        public Task ReportProgressAsync(
+            Guid backupRecordId,
+            BackupProgressDto progress,
+            CancellationToken ct,
+            DashboardTokenSnapshot? tokenSnapshot = null) =>
             Task.CompletedTask;
 
-        public Task<FinalizeRecordResult> FinalizeAsync(Guid backupRecordId, FinalizeBackupRecordDto dto, CancellationToken ct) =>
+        public Task<FinalizeRecordResult> FinalizeAsync(
+            Guid backupRecordId,
+            FinalizeBackupRecordDto dto,
+            CancellationToken ct,
+            DashboardTokenSnapshot? tokenSnapshot = null) =>
             throw new NotSupportedException("StubRecordClient: FinalizeAsync is not used by RunDueDatabasesAsync");
 
         public Task<LastSuccessfulLookupResult> GetLastSuccessfulAsync(
-            string database, string storage, BackupMode mode, CancellationToken ct) =>
+            string database,
+            string storage,
+            BackupMode mode,
+            CancellationToken ct,
+            DashboardTokenSnapshot? tokenSnapshot = null) =>
             Task.FromResult(new LastSuccessfulLookupResult(
                 LastSuccessfulLookupOutcome.Found,
                 new LastSuccessfulBackupResponseDto

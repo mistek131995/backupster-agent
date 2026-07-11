@@ -28,9 +28,12 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         _retryPipeline = BuildRetryPipeline(nameof(BackupRecordClient), logger);
     }
 
-    public async Task<OpenRecordResult> OpenAsync(OpenBackupRecordDto dto, CancellationToken ct)
+    public async Task<OpenRecordResult> OpenAsync(
+        OpenBackupRecordDto dto,
+        CancellationToken ct,
+        DashboardTokenSnapshot? tokenSnapshot = null)
     {
-        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct);
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct, tokenSnapshot);
         if (token is null)
             return new OpenRecordResult(DashboardAvailability.PermanentSkip);
 
@@ -40,13 +43,20 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         {
             var response = await _retryPipeline.ExecuteAsync(async innerCt =>
             {
-                using var request = new HttpRequestMessage(HttpMethod.Post, url);
-                request.Headers.Add("X-Agent-Token", token);
-                request.Content = JsonContent.Create(dto, options: JsonOptions);
-
-                var resp = await _http.SendAsync(request, innerCt);
-                ThrowIfUnauthorized(resp, $"{nameof(BackupRecordClient)}.{nameof(OpenAsync)}", _logger);
-                return resp;
+                return await SendWithTokenRefreshAsync(
+                    _http,
+                    effectiveToken =>
+                    {
+                        var request = new HttpRequestMessage(HttpMethod.Post, url);
+                        request.Headers.Add("X-Agent-Token", effectiveToken);
+                        request.Content = JsonContent.Create(dto, options: JsonOptions);
+                        return request;
+                    },
+                    token,
+                    tokenSnapshot,
+                    $"{nameof(BackupRecordClient)}.{nameof(OpenAsync)}",
+                    _logger,
+                    innerCt);
             }, ct);
 
             using (response)
@@ -90,9 +100,13 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         }
     }
 
-    public async Task ReportProgressAsync(Guid backupRecordId, BackupProgressDto progress, CancellationToken ct)
+    public async Task ReportProgressAsync(
+        Guid backupRecordId,
+        BackupProgressDto progress,
+        CancellationToken ct,
+        DashboardTokenSnapshot? tokenSnapshot = null)
     {
-        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct);
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct, tokenSnapshot);
         if (token is null) return;
 
         var url = $"{Settings.DashboardUrl.TrimEnd('/')}/api/v1/agent/backup-record/{backupRecordId}/progress";
@@ -100,19 +114,30 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.Add("X-Agent-Token", token);
-        request.Content = JsonContent.Create(progress, options: JsonOptions);
-
-        using var response = await _http.SendAsync(request, timeoutCts.Token);
-        ThrowIfUnauthorized(response, $"{nameof(BackupRecordClient)}.{nameof(ReportProgressAsync)}", _logger);
+        using var response = await SendWithTokenRefreshAsync(
+            _http,
+            effectiveToken =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, url);
+                request.Headers.Add("X-Agent-Token", effectiveToken);
+                request.Content = JsonContent.Create(progress, options: JsonOptions);
+                return request;
+            },
+            token,
+            tokenSnapshot,
+            $"{nameof(BackupRecordClient)}.{nameof(ReportProgressAsync)}",
+            _logger,
+            timeoutCts.Token);
         response.EnsureSuccessStatusCode();
     }
 
     public async Task<FinalizeRecordResult> FinalizeAsync(
-        Guid backupRecordId, FinalizeBackupRecordDto dto, CancellationToken ct)
+        Guid backupRecordId,
+        FinalizeBackupRecordDto dto,
+        CancellationToken ct,
+        DashboardTokenSnapshot? tokenSnapshot = null)
     {
-        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct);
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct, tokenSnapshot);
         if (token is null)
             return new FinalizeRecordResult(DashboardAvailability.PermanentSkip);
 
@@ -124,12 +149,20 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
 
             await _retryPipeline.ExecuteAsync(async innerCt =>
             {
-                using var request = new HttpRequestMessage(HttpMethod.Patch, url);
-                request.Headers.Add("X-Agent-Token", token);
-                request.Content = JsonContent.Create(dto, options: JsonOptions);
-
-                using var response = await _http.SendAsync(request, innerCt);
-                ThrowIfUnauthorized(response, $"{nameof(BackupRecordClient)}.{nameof(FinalizeAsync)}", _logger);
+                using var response = await SendWithTokenRefreshAsync(
+                    _http,
+                    effectiveToken =>
+                    {
+                        var request = new HttpRequestMessage(HttpMethod.Patch, url);
+                        request.Headers.Add("X-Agent-Token", effectiveToken);
+                        request.Content = JsonContent.Create(dto, options: JsonOptions);
+                        return request;
+                    },
+                    token,
+                    tokenSnapshot,
+                    $"{nameof(BackupRecordClient)}.{nameof(FinalizeAsync)}",
+                    _logger,
+                    innerCt);
 
                 availability = DashboardAvailabilityPolicy.ClassifyResponse(response);
                 if (availability == DashboardAvailability.OfflineRetryable)
@@ -167,9 +200,10 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
         string database,
         string storage,
         BackupMode mode,
-        CancellationToken ct)
+        CancellationToken ct,
+        DashboardTokenSnapshot? tokenSnapshot = null)
     {
-        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct);
+        var token = await ResolveTokenOrSkipAsync(_logger, nameof(BackupRecordClient), ct, tokenSnapshot);
         if (token is null)
             return new LastSuccessfulLookupResult(LastSuccessfulLookupOutcome.DashboardUnavailable);
 
@@ -188,11 +222,19 @@ public sealed class BackupRecordClient : DashboardClientBase, IBackupRecordClien
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Add("X-Agent-Token", token);
-
-            using var response = await _http.SendAsync(request, ct);
-            ThrowIfUnauthorized(response, $"{nameof(BackupRecordClient)}.{nameof(GetLastSuccessfulAsync)}", _logger);
+            using var response = await SendWithTokenRefreshAsync(
+                _http,
+                effectiveToken =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    request.Headers.Add("X-Agent-Token", effectiveToken);
+                    return request;
+                },
+                token,
+                tokenSnapshot,
+                $"{nameof(BackupRecordClient)}.{nameof(GetLastSuccessfulAsync)}",
+                _logger,
+                ct);
 
             if (response.StatusCode == HttpStatusCode.NotFound)
                 return new LastSuccessfulLookupResult(LastSuccessfulLookupOutcome.NotFound);

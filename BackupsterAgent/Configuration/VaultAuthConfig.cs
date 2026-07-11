@@ -10,4 +10,6 @@ public sealed class VaultAuthConfig
     public SecretRef? RoleIdSecret { get; init; }
     public string SecretId { get; init; } = string.Empty;
     public SecretRef? SecretIdSecret { get; init; }
+    public string SecretIdMode { get; init; } = "Raw";
+    public string SecretIdWrappingExpectedCreationPath { get; init; } = string.Empty;
 }

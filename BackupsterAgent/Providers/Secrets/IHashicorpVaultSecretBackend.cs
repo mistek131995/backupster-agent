@@ -17,7 +17,22 @@ public interface IHashicorpVaultSecretBackend
         string? vaultNamespace,
         string authMountPath,
         string roleId,
-        string secretId,
+        string? secretId,
+        string settingPath,
+        CancellationToken ct);
+
+    Task<VaultAppRoleLoginResult> RenewTokenAsync(
+        Uri address,
+        string? vaultNamespace,
+        string token,
+        string settingPath,
+        CancellationToken ct);
+
+    Task<string> UnwrapAppRoleSecretIdAsync(
+        Uri address,
+        string? vaultNamespace,
+        string wrappingToken,
+        string expectedCreationPath,
         string settingPath,
         CancellationToken ct);
 }

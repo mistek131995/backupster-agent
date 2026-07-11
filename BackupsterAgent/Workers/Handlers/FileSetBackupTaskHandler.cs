@@ -5,6 +5,7 @@ using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.State;
+using BackupsterAgent.Services.Dashboard;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Workers.Handlers;
@@ -38,7 +39,10 @@ public sealed class FileSetBackupTaskHandler : IAgentTaskHandler
         task.Type == AgentTaskType.Backup
         && !string.IsNullOrWhiteSpace(task.Backup?.FileSetName);
 
-    public async Task<PatchAgentTaskDto> HandleAsync(AgentTaskForAgentDto task, CancellationToken ct)
+    public async Task<PatchAgentTaskDto> HandleAsync(
+        AgentTaskForAgentDto task,
+        DashboardTokenSnapshot tokenSnapshot,
+        CancellationToken ct)
     {
         var fileSetName = task.Backup!.FileSetName!;
 
@@ -80,7 +84,7 @@ public sealed class FileSetBackupTaskHandler : IAgentTaskHandler
         BackupResult result;
         try
         {
-            result = await _fileSetBackupJob.RunAsync(config, storage, ct);
+            result = await _fileSetBackupJob.RunAsync(config, storage, ct, tokenSnapshot);
         }
         catch (OperationCanceledException)
         {

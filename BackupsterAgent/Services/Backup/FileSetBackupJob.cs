@@ -1,6 +1,7 @@
 using BackupsterAgent.Configuration;
 using BackupsterAgent.Domain;
 using BackupsterAgent.Services.Backup.Coordinator;
+using BackupsterAgent.Services.Dashboard;
 
 namespace BackupsterAgent.Services.Backup;
 
@@ -18,6 +19,8 @@ public sealed class FileSetBackupJob
     public Task<BackupResult> RunAsync(
         FileSetConfig config,
         StorageConfig storage,
-        CancellationToken ct) =>
-        _coordinator.RunAsync(new FileSetBackupDescriptor(config, storage, _pipeline), ct);
+        CancellationToken ct,
+        DashboardTokenSnapshot? tokenSnapshot = null) =>
+        _coordinator.RunAsync(
+            new FileSetBackupDescriptor(config, storage, _pipeline), ct, tokenSnapshot);
 }

@@ -1,6 +1,7 @@
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Common;
+using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Services.Dashboard.Clients;
 using BackupsterAgent.Workers.Handlers;
 
@@ -13,17 +14,20 @@ public sealed class AgentTaskPollingService : BackgroundService
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(5);
 
     private readonly IAgentTaskClient _client;
+    private readonly IDashboardTokenSnapshotProvider _tokenSnapshotProvider;
     private readonly IReadOnlyList<IAgentTaskHandler> _handlers;
     private readonly IAgentActivityLock _activityLock;
     private readonly ILogger<AgentTaskPollingService> _logger;
 
     public AgentTaskPollingService(
         IAgentTaskClient client,
+        IDashboardTokenSnapshotProvider tokenSnapshotProvider,
         IEnumerable<IAgentTaskHandler> handlers,
         IAgentActivityLock activityLock,
         ILogger<AgentTaskPollingService> logger)
     {
         _client = client;
+        _tokenSnapshotProvider = tokenSnapshotProvider;
         _handlers = handlers.ToArray();
         _activityLock = activityLock;
         _logger = logger;
@@ -36,16 +40,20 @@ public sealed class AgentTaskPollingService : BackgroundService
             PollInterval.TotalSeconds, InitialBackoff.TotalSeconds, MaxBackoff.TotalSeconds);
 
         var backoff = InitialBackoff;
+        DashboardTokenSnapshot? tokenSnapshot = null;
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var task = await _client.FetchTaskAsync(stoppingToken);
+                tokenSnapshot ??= await _tokenSnapshotProvider.CaptureAsync(stoppingToken);
+                var task = await _client.FetchTaskAsync(stoppingToken, tokenSnapshot);
                 backoff = InitialBackoff;
 
                 if (task is null)
                 {
+                    if (!tokenSnapshot.IsAvailable)
+                        tokenSnapshot = null;
                     if (!await DelayOrCancel(PollInterval, stoppingToken)) break;
                     continue;
                 }
@@ -56,7 +64,7 @@ public sealed class AgentTaskPollingService : BackgroundService
                     PatchAgentTaskDto patch;
                     try
                     {
-                        patch = await DispatchAsync(task, stoppingToken);
+                        patch = await DispatchAsync(task, tokenSnapshot, stoppingToken);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
@@ -78,7 +86,7 @@ public sealed class AgentTaskPollingService : BackgroundService
 
                     try
                     {
-                        await _client.PatchTaskAsync(task.Id, patch, patchCt);
+                        await _client.PatchTaskAsync(task.Id, patch, patchCt, tokenSnapshot);
                     }
                     catch (Exception ex)
                     {
@@ -88,6 +96,7 @@ public sealed class AgentTaskPollingService : BackgroundService
                     }
                 }
 
+                tokenSnapshot = null;
                 if (cancelled) break;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -110,12 +119,15 @@ public sealed class AgentTaskPollingService : BackgroundService
         _logger.LogInformation("AgentTaskPollingService stopped");
     }
 
-    private Task<PatchAgentTaskDto> DispatchAsync(AgentTaskForAgentDto task, CancellationToken ct)
+    private Task<PatchAgentTaskDto> DispatchAsync(
+        AgentTaskForAgentDto task,
+        DashboardTokenSnapshot tokenSnapshot,
+        CancellationToken ct)
     {
         foreach (var handler in _handlers)
         {
             if (handler.CanHandle(task))
-                return handler.HandleAsync(task, ct);
+                return handler.HandleAsync(task, tokenSnapshot, ct);
         }
 
         return Task.FromResult(RejectUnsupported(task, task.Type.ToString()));

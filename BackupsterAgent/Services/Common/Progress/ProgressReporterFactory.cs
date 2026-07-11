@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BackupsterAgent.Contracts;
 using BackupsterAgent.Enums;
+using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Services.Dashboard.Clients;
 
 namespace BackupsterAgent.Services.Common.Progress;
@@ -21,30 +22,37 @@ public sealed class ProgressReporterFactory : IProgressReporterFactory
         _loggerFactory = loggerFactory;
     }
 
-    public IProgressReporter<RestoreStage> CreateForRestore(Guid taskId)
+    public IProgressReporter<RestoreStage> CreateForRestore(
+        Guid taskId,
+        DashboardTokenSnapshot tokenSnapshot)
     {
         var logger = _loggerFactory.CreateLogger<ProgressReporter<RestoreStage>>();
         return new ProgressReporter<RestoreStage>(
-            (snap, ct) => _taskClient.ReportProgressAsync(taskId, ToTaskDto(snap), ct),
+            (snap, ct) => _taskClient.ReportProgressAsync(taskId, ToTaskDto(snap), ct, tokenSnapshot),
             logger);
     }
 
-    public IProgressReporter<DeleteStage> CreateForDelete(Guid taskId)
+    public IProgressReporter<DeleteStage> CreateForDelete(
+        Guid taskId,
+        DashboardTokenSnapshot tokenSnapshot)
     {
         var logger = _loggerFactory.CreateLogger<ProgressReporter<DeleteStage>>();
         return new ProgressReporter<DeleteStage>(
-            (snap, ct) => _taskClient.ReportProgressAsync(taskId, ToTaskDto(snap), ct),
+            (snap, ct) => _taskClient.ReportProgressAsync(taskId, ToTaskDto(snap), ct, tokenSnapshot),
             logger);
     }
 
-    public IProgressReporter<BackupStage> CreateForBackup(Guid backupRecordId, bool offline = false)
+    public IProgressReporter<BackupStage> CreateForBackup(
+        Guid backupRecordId,
+        DashboardTokenSnapshot tokenSnapshot,
+        bool offline = false)
     {
         if (offline)
             return new NullProgressReporter<BackupStage>();
 
         var logger = _loggerFactory.CreateLogger<ProgressReporter<BackupStage>>();
         return new ProgressReporter<BackupStage>(
-            (snap, ct) => _backupClient.ReportProgressAsync(backupRecordId, ToDto(snap), ct),
+            (snap, ct) => _backupClient.ReportProgressAsync(backupRecordId, ToDto(snap), ct, tokenSnapshot),
             logger);
     }
 

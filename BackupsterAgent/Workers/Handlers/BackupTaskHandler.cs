@@ -6,6 +6,7 @@ using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.State;
+using BackupsterAgent.Services.Dashboard;
 using Microsoft.Extensions.Options;
 
 namespace BackupsterAgent.Workers.Handlers;
@@ -39,7 +40,10 @@ public sealed class BackupTaskHandler : IAgentTaskHandler
         task.Type == AgentTaskType.Backup
         && string.IsNullOrWhiteSpace(task.Backup?.FileSetName);
 
-    public async Task<PatchAgentTaskDto> HandleAsync(AgentTaskForAgentDto task, CancellationToken ct)
+    public async Task<PatchAgentTaskDto> HandleAsync(
+        AgentTaskForAgentDto task,
+        DashboardTokenSnapshot tokenSnapshot,
+        CancellationToken ct)
     {
         if (task.Backup is null)
         {
@@ -105,7 +109,8 @@ public sealed class BackupTaskHandler : IAgentTaskHandler
         BackupResult result;
         try
         {
-            result = await _backupJob.RunAsync(config, storage, mode, ct, task.Backup.BaseBackupRecordId);
+            result = await _backupJob.RunAsync(
+                config, storage, mode, ct, task.Backup.BaseBackupRecordId, tokenSnapshot);
 
             if (result.ChainBroken)
             {
@@ -114,7 +119,12 @@ public sealed class BackupTaskHandler : IAgentTaskHandler
                     task.Id, databaseName, storage.Name, result.BackupRecordId?.ToString() ?? "-");
 
                 var autoFullResult = await _backupJob.RunAsync(
-                    config, storage, BackupMode.Physical, ct, baseBackupRecordId: null);
+                    config,
+                    storage,
+                    BackupMode.Physical,
+                    ct,
+                    baseBackupRecordId: null,
+                    tokenSnapshot: tokenSnapshot);
 
                 if (autoFullResult.Success)
                 {

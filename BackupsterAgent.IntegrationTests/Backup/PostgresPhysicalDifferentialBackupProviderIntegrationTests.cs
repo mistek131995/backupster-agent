@@ -462,6 +462,7 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             activityLock,
             runTracker: null!,
             recordClient,
+            new StubDashboardTokenSnapshotProvider(),
             Options.Create(new List<DatabaseConfig> { database }),
             NullLogger<BackupWorker>.Instance);
 
@@ -776,6 +777,7 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
 
         var coordinator = new BackupRunCoordinator(
             recordClient,
+            new StubDashboardTokenSnapshotProvider(),
             new NullProgressReporterFactory(),
             new NoopOutboxStore(),
             new System.Diagnostics.ActivitySource("BackupsterAgent.IntegrationTests"),
@@ -852,14 +854,27 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
 
     private sealed class NullProgressReporterFactory : IProgressReporterFactory
     {
-        public IProgressReporter<RestoreStage> CreateForRestore(Guid taskId) =>
+        public IProgressReporter<RestoreStage> CreateForRestore(
+            Guid taskId,
+            DashboardTokenSnapshot tokenSnapshot) =>
             new NullProgressReporter<RestoreStage>();
 
-        public IProgressReporter<DeleteStage> CreateForDelete(Guid taskId) =>
+        public IProgressReporter<DeleteStage> CreateForDelete(
+            Guid taskId,
+            DashboardTokenSnapshot tokenSnapshot) =>
             new NullProgressReporter<DeleteStage>();
 
-        public IProgressReporter<BackupStage> CreateForBackup(Guid backupRecordId, bool offline = false) =>
+        public IProgressReporter<BackupStage> CreateForBackup(
+            Guid backupRecordId,
+            DashboardTokenSnapshot tokenSnapshot,
+            bool offline = false) =>
             new NullProgressReporter<BackupStage>();
+    }
+
+    private sealed class StubDashboardTokenSnapshotProvider : IDashboardTokenSnapshotProvider
+    {
+        public Task<DashboardTokenSnapshot> CaptureAsync(CancellationToken ct) =>
+            Task.FromResult(new DashboardTokenSnapshot("integration-test-token"));
     }
 
     private sealed class NoopOutboxStore : IOutboxStore
@@ -893,7 +908,10 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
         public List<OpenBackupRecordDto> Opened { get; } = [];
         public Dictionary<Guid, FinalizeBackupRecordDto> Finalized { get; } = [];
 
-        public Task<OpenRecordResult> OpenAsync(OpenBackupRecordDto dto, CancellationToken ct)
+        public Task<OpenRecordResult> OpenAsync(
+            OpenBackupRecordDto dto,
+            CancellationToken ct,
+            DashboardTokenSnapshot? tokenSnapshot = null)
         {
             Opened.Add(dto);
 
@@ -915,13 +933,18 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             throw new NotSupportedException($"Unexpected backup mode: '{dto.BackupMode}'.");
         }
 
-        public Task ReportProgressAsync(Guid backupRecordId, BackupProgressDto progress, CancellationToken ct) =>
+        public Task ReportProgressAsync(
+            Guid backupRecordId,
+            BackupProgressDto progress,
+            CancellationToken ct,
+            DashboardTokenSnapshot? tokenSnapshot = null) =>
             Task.CompletedTask;
 
         public Task<FinalizeRecordResult> FinalizeAsync(
             Guid backupRecordId,
             FinalizeBackupRecordDto dto,
-            CancellationToken ct)
+            CancellationToken ct,
+            DashboardTokenSnapshot? tokenSnapshot = null)
         {
             Finalized[backupRecordId] = dto;
             return Task.FromResult(new FinalizeRecordResult(DashboardAvailability.Ok));
@@ -931,7 +954,8 @@ public sealed class PostgresPhysicalDifferentialBackupProviderIntegrationTests
             string database,
             string storage,
             BackupMode mode,
-            CancellationToken ct)
+            CancellationToken ct,
+            DashboardTokenSnapshot? tokenSnapshot = null)
         {
             Assert.That(mode, Is.EqualTo(BackupMode.Physical));
             return Task.FromResult(new LastSuccessfulLookupResult(

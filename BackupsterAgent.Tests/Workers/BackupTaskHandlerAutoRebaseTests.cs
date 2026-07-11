@@ -5,6 +5,7 @@ using BackupsterAgent.Enums;
 using BackupsterAgent.Services.Backup;
 using BackupsterAgent.Services.Common.Resolvers;
 using BackupsterAgent.Services.Common.State;
+using BackupsterAgent.Services.Dashboard;
 using BackupsterAgent.Workers.Handlers;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -62,7 +63,8 @@ public sealed class BackupTaskHandlerAutoRebaseTests
 
         var task = MakeBackupTask("db1", BackupMode.PhysicalDifferential, baseRecordId: Guid.NewGuid());
 
-        var patch = await _handler.HandleAsync(task, CancellationToken.None);
+        var tokenSnapshot = new DashboardTokenSnapshot("task-token");
+        var patch = await _handler.HandleAsync(task, tokenSnapshot, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -74,6 +76,8 @@ public sealed class BackupTaskHandlerAutoRebaseTests
                 "Second call must be Physical (auto-rebase FULL)");
             Assert.That(_runner.Calls[1].BaseBackupRecordId, Is.Null,
                 "Auto-FULL must not reference any base record");
+            Assert.That(_runner.Calls[0].TokenSnapshot, Is.SameAs(tokenSnapshot));
+            Assert.That(_runner.Calls[1].TokenSnapshot, Is.SameAs(tokenSnapshot));
 
             Assert.That(patch.Status, Is.EqualTo(AgentTaskStatus.Failed),
                 "Task status must reflect the failed DIFF, not the rebase FULL");
@@ -95,7 +99,8 @@ public sealed class BackupTaskHandlerAutoRebaseTests
 
         var task = MakeBackupTask("db1", BackupMode.PhysicalDifferential, baseRecordId: Guid.NewGuid());
 
-        var patch = await _handler.HandleAsync(task, CancellationToken.None);
+        var patch = await _handler.HandleAsync(
+            task, new DashboardTokenSnapshot("task-token"), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -118,7 +123,8 @@ public sealed class BackupTaskHandlerAutoRebaseTests
 
         var task = MakeBackupTask("db1", BackupMode.PhysicalDifferential, baseRecordId: Guid.NewGuid());
 
-        var patch = await _handler.HandleAsync(task, CancellationToken.None);
+        var patch = await _handler.HandleAsync(
+            task, new DashboardTokenSnapshot("task-token"), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -145,16 +151,17 @@ public sealed class BackupTaskHandlerAutoRebaseTests
     private sealed class RecordingJobRunner : IBackupJobRunner
     {
         public Queue<BackupResult> Queue { get; } = new();
-        public List<(BackupMode Mode, Guid? BaseBackupRecordId)> Calls { get; } = new();
+        public List<(BackupMode Mode, Guid? BaseBackupRecordId, DashboardTokenSnapshot? TokenSnapshot)> Calls { get; } = new();
 
         public Task<BackupResult> RunAsync(
             DatabaseConfig config,
             StorageConfig storage,
             BackupMode mode,
             CancellationToken ct,
-            Guid? baseBackupRecordId = null)
+            Guid? baseBackupRecordId = null,
+            DashboardTokenSnapshot? tokenSnapshot = null)
         {
-            Calls.Add((mode, baseBackupRecordId));
+            Calls.Add((mode, baseBackupRecordId, tokenSnapshot));
             if (!Queue.TryDequeue(out var next))
                 throw new InvalidOperationException(
                     "RecordingJobRunner: no canned BackupResult queued for this call");

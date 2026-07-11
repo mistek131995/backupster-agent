@@ -917,6 +917,214 @@ public sealed class SecretResolverTests
     }
 
     [Test]
+    public async Task HashicorpVaultSecretReader_RenewsTokenBeforeLeaseExpires()
+    {
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var backend = new FakeHashicorpVaultSecretBackend
+        {
+            LoginResult = new VaultAppRoleLoginResult("login-token", 100, true),
+            RenewResult = new VaultAppRoleLoginResult("renewed-token", 200, true),
+        };
+        var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod",
+                    Address = "https://vault.example.net",
+                    Auth = new VaultAuthConfig
+                    {
+                        Method = "AppRole",
+                        RoleId = "role-id",
+                        SecretId = "secret-id",
+                    },
+                },
+            ],
+            backend,
+            time);
+        var secret = new SecretRef
+        {
+            Provider = "hashicorp-vault",
+            Name = "prod",
+            Path = "backupster/db",
+        };
+
+        await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+        time.Advance(TimeSpan.FromSeconds(91));
+        await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(backend.LoginCalls, Is.EqualTo(1));
+            Assert.That(backend.RenewCalls, Is.EqualTo(1));
+            Assert.That(backend.LastRenewToken, Is.EqualTo("login-token"));
+            Assert.That(backend.ReadTokens, Is.EqualTo(new[] { "login-token", "renewed-token" }));
+        });
+    }
+
+    [Test]
+    public async Task HashicorpVaultSecretReader_RenewsTokenWithoutAnotherSecretRead()
+    {
+        var backend = new FakeHashicorpVaultSecretBackend
+        {
+            LoginResult = new VaultAppRoleLoginResult("login-token", 2, true),
+            RenewResult = new VaultAppRoleLoginResult("renewed-token", 3600, true),
+        };
+        await using var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod",
+                    Address = "https://vault.example.net",
+                    Auth = new VaultAuthConfig
+                    {
+                        Method = "AppRole",
+                        RoleId = "role-id",
+                        SecretId = "secret-id",
+                    },
+                },
+            ],
+            backend);
+
+        await reader.ReadAsync(
+            new SecretRef { Provider = "hashicorp-vault", Name = "prod", Path = "backupster/db" },
+            "Connections['pg'].Password",
+            CancellationToken.None);
+        await backend.RenewalObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(backend.LoginCalls, Is.EqualTo(1));
+            Assert.That(backend.RenewCalls, Is.EqualTo(1));
+            Assert.That(backend.ReadCalls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task HashicorpVaultSecretReader_ReauthenticatesWhenRenewalIsRejected()
+    {
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var backend = new FakeHashicorpVaultSecretBackend
+        {
+            LoginResults =
+            {
+                new VaultAppRoleLoginResult("first-token", 100, true),
+                new VaultAppRoleLoginResult("second-token", 100, true),
+            },
+            RenewException = new SecretResolutionException(
+                "Renewal rejected",
+                new VaultApiException(
+                    "Forbidden",
+                    HttpStatusCode.Forbidden,
+                    ["invalid token", "permission denied"])),
+        };
+        var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod",
+                    Address = "https://vault.example.net",
+                    Auth = new VaultAuthConfig
+                    {
+                        Method = "AppRole",
+                        RoleId = "role-id",
+                        SecretId = "secret-id",
+                    },
+                },
+            ],
+            backend,
+            time);
+        var secret = new SecretRef
+        {
+            Provider = "hashicorp-vault",
+            Name = "prod",
+            Path = "backupster/db",
+        };
+
+        await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+        time.Advance(TimeSpan.FromSeconds(91));
+        await reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(backend.RenewCalls, Is.EqualTo(1));
+            Assert.That(backend.LoginCalls, Is.EqualTo(2));
+            Assert.That(backend.ReadTokens, Is.EqualTo(new[] { "first-token", "second-token" }));
+        });
+    }
+
+    [Test]
+    public async Task HashicorpVaultSecretReader_AppRoleWithoutSecretIdOmitsIt()
+    {
+        var backend = new FakeHashicorpVaultSecretBackend();
+        var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod",
+                    Address = "https://vault.example.net",
+                    Auth = new VaultAuthConfig
+                    {
+                        Method = "AppRole",
+                        RoleId = "role-id",
+                    },
+                },
+            ],
+            backend);
+
+        await reader.ReadAsync(
+            new SecretRef { Provider = "hashicorp-vault", Name = "prod", Path = "backupster/db" },
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(backend.LoginCalls, Is.EqualTo(1));
+            Assert.That(backend.LastLoginSecretId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task HashicorpVaultSecretReader_ResponseWrappingTokenIsUnwrappedBeforeLogin()
+    {
+        var backend = new FakeHashicorpVaultSecretBackend
+        {
+            UnwrappedSecretId = "unwrapped-secret-id",
+        };
+        var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod",
+                    Address = "https://vault.example.net",
+                    Namespace = "admin",
+                    Auth = new VaultAuthConfig
+                    {
+                        Method = "AppRole",
+                        RoleId = "role-id",
+                        SecretId = "wrapping-token",
+                        SecretIdMode = "ResponseWrappingToken",
+                        SecretIdWrappingExpectedCreationPath = "auth/approle/role/backupster/secret-id",
+                    },
+                },
+            ],
+            backend);
+
+        await reader.ReadAsync(
+            new SecretRef { Provider = "hashicorp-vault", Name = "prod", Path = "backupster/db" },
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(backend.UnwrapCalls, Is.EqualTo(1));
+            Assert.That(backend.LastWrappingToken, Is.EqualTo("wrapping-token"));
+            Assert.That(backend.LastExpectedCreationPath, Is.EqualTo("auth/approle/role/backupster/secret-id"));
+            Assert.That(backend.LastUnwrapNamespace, Is.EqualTo("admin"));
+            Assert.That(backend.LastLoginSecretId, Is.EqualTo("unwrapped-secret-id"));
+        });
+    }
+
+    [Test]
     public async Task HashicorpVaultSecretReader_AppRoleZeroLeaseDurationCachesToken()
     {
         var backend = new FakeHashicorpVaultSecretBackend
@@ -961,7 +1169,7 @@ public sealed class SecretResolverTests
     }
 
     [Test]
-    public async Task HashicorpVaultSecretReader_AppRoleForbiddenReadInvalidatesTokenAndRetriesOnce()
+    public async Task HashicorpVaultSecretReader_InvalidTokenReadReauthenticatesAndRetriesOnce()
     {
         var backend = new FakeHashicorpVaultSecretBackend
         {
@@ -975,7 +1183,10 @@ public sealed class SecretResolverTests
                 if (call == 1)
                     throw new SecretResolutionException(
                         "Vault forbidden",
-                        new HttpRequestException("Forbidden", null, HttpStatusCode.Forbidden));
+                        new VaultApiException(
+                            "Forbidden",
+                            HttpStatusCode.Forbidden,
+                            ["invalid token", "permission denied"]));
 
                 return "{\"value\":\"from-vault\"}";
             },
@@ -1013,6 +1224,64 @@ public sealed class SecretResolverTests
             Assert.That(backend.LoginCalls, Is.EqualTo(2));
             Assert.That(backend.ReadCalls, Is.EqualTo(2));
             Assert.That(backend.ReadTokens, Is.EqualTo(new[] { "stale-token", "fresh-token" }));
+        });
+    }
+
+    [Test]
+    public async Task HashicorpVaultSecretReader_PermissionDeniedKeepsCachedToken()
+    {
+        var backend = new FakeHashicorpVaultSecretBackend
+        {
+            LoginResult = new VaultAppRoleLoginResult("login-token", 3600, true),
+            ReadResultFactory = (call, _) =>
+            {
+                if (call == 1)
+                    throw new SecretResolutionException(
+                        "Vault forbidden",
+                        new VaultApiException(
+                            "Forbidden",
+                            HttpStatusCode.Forbidden,
+                            ["permission denied"]));
+
+                return "{\"value\":\"from-vault\"}";
+            },
+        };
+        var reader = new HashicorpVaultSecretReader(
+            [
+                new VaultSecretProviderConfig
+                {
+                    Name = "prod",
+                    Address = "https://vault.example.net",
+                    Auth = new VaultAuthConfig
+                    {
+                        Method = "AppRole",
+                        RoleId = "role-id",
+                        SecretId = "secret-id",
+                    },
+                },
+            ],
+            backend);
+        var secret = new SecretRef
+        {
+            Provider = "hashicorp-vault",
+            Name = "prod",
+            Path = "backupster/db",
+        };
+
+        var ex = Assert.ThrowsAsync<SecretResolutionException>(
+            () => reader.ReadAsync(secret, "Connections['pg'].Password", CancellationToken.None));
+        var value = await reader.ReadAsync(
+            secret,
+            "Connections['pg'].Password",
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Is.Not.Empty);
+            Assert.That(value, Is.EqualTo("from-vault"));
+            Assert.That(backend.LoginCalls, Is.EqualTo(1));
+            Assert.That(backend.ReadCalls, Is.EqualTo(2));
+            Assert.That(backend.ReadTokens, Is.EqualTo(new[] { "login-token", "login-token" }));
         });
     }
 
@@ -1466,10 +1735,15 @@ public sealed class SecretResolverTests
     {
         public string KvValue { get; init; } = "{\"value\":\"from-vault\"}";
         public VaultAppRoleLoginResult LoginResult { get; init; } = new("login-token", 3600, true);
+        public VaultAppRoleLoginResult RenewResult { get; init; } = new("renewed-token", 3600, true);
+        public SecretResolutionException? RenewException { get; init; }
         public List<VaultAppRoleLoginResult> LoginResults { get; } = [];
+        public string UnwrappedSecretId { get; init; } = "unwrapped-secret-id";
         public Func<int, string, string>? ReadResultFactory { get; init; }
         public int ReadCalls { get; private set; }
         public int LoginCalls { get; private set; }
+        public int RenewCalls { get; private set; }
+        public int UnwrapCalls { get; private set; }
         public Uri? LastReadAddress { get; private set; }
         public string? LastReadNamespace { get; private set; }
         public string? LastReadToken { get; private set; }
@@ -1480,7 +1754,13 @@ public sealed class SecretResolverTests
         public string? LastLoginAuthMountPath { get; private set; }
         public string? LastLoginRoleId { get; private set; }
         public string? LastLoginSecretId { get; private set; }
+        public string? LastRenewToken { get; private set; }
+        public string? LastWrappingToken { get; private set; }
+        public string? LastExpectedCreationPath { get; private set; }
+        public string? LastUnwrapNamespace { get; private set; }
         public List<string> ReadTokens { get; } = [];
+        public TaskCompletionSource<bool> RenewalObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<string> ReadKvV2Async(
             Uri address,
@@ -1511,7 +1791,7 @@ public sealed class SecretResolverTests
             string? vaultNamespace,
             string authMountPath,
             string roleId,
-            string secretId,
+            string? secretId,
             string settingPath,
             CancellationToken ct)
         {
@@ -1524,6 +1804,54 @@ public sealed class SecretResolverTests
                 ? LoginResults[LoginCalls - 1]
                 : LoginResult;
             return Task.FromResult(result);
+        }
+
+        public Task<VaultAppRoleLoginResult> RenewTokenAsync(
+            Uri address,
+            string? vaultNamespace,
+            string token,
+            string settingPath,
+            CancellationToken ct)
+        {
+            RenewCalls++;
+            LastRenewToken = token;
+            RenewalObserved.TrySetResult(true);
+            if (RenewException is not null)
+                throw RenewException;
+
+            return Task.FromResult(RenewResult);
+        }
+
+        public Task<string> UnwrapAppRoleSecretIdAsync(
+            Uri address,
+            string? vaultNamespace,
+            string wrappingToken,
+            string expectedCreationPath,
+            string settingPath,
+            CancellationToken ct)
+        {
+            UnwrapCalls++;
+            LastWrappingToken = wrappingToken;
+            LastExpectedCreationPath = expectedCreationPath;
+            LastUnwrapNamespace = vaultNamespace;
+            return Task.FromResult(UnwrappedSecretId);
+        }
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _utcNow;
+
+        public ManualTimeProvider(DateTimeOffset utcNow)
+        {
+            _utcNow = utcNow;
+        }
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan value)
+        {
+            _utcNow += value;
         }
     }
 

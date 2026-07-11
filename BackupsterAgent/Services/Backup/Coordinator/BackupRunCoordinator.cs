@@ -17,6 +17,7 @@ public sealed class BackupRunCoordinator
         "Бэкап не выполнен. Подробности смотрите в логах агента.";
 
     private readonly IBackupRecordClient _recordClient;
+    private readonly IDashboardTokenSnapshotProvider _tokenSnapshotProvider;
     private readonly IProgressReporterFactory _reporterFactory;
     private readonly IOutboxStore _outboxStore;
     private readonly ActivitySource _activitySource;
@@ -25,6 +26,7 @@ public sealed class BackupRunCoordinator
 
     public BackupRunCoordinator(
         IBackupRecordClient recordClient,
+        IDashboardTokenSnapshotProvider tokenSnapshotProvider,
         IProgressReporterFactory reporterFactory,
         IOutboxStore outboxStore,
         ActivitySource activitySource,
@@ -32,6 +34,7 @@ public sealed class BackupRunCoordinator
         ILogger<BackupRunCoordinator> logger)
     {
         _recordClient = recordClient;
+        _tokenSnapshotProvider = tokenSnapshotProvider;
         _reporterFactory = reporterFactory;
         _outboxStore = outboxStore;
         _activitySource = activitySource;
@@ -39,7 +42,10 @@ public sealed class BackupRunCoordinator
         _logger = logger;
     }
 
-    public async Task<BackupResult> RunAsync(IBackupRunDescriptor descriptor, CancellationToken ct)
+    public async Task<BackupResult> RunAsync(
+        IBackupRunDescriptor descriptor,
+        CancellationToken ct,
+        DashboardTokenSnapshot? tokenSnapshot = null)
     {
         using var activity = _activitySource.StartActivity(descriptor.ActivityName);
         foreach (var tag in descriptor.ActivityTags)
@@ -49,8 +55,10 @@ public sealed class BackupRunCoordinator
             "{Name} starting. TraceId: {TraceId}",
             descriptor.DisplayName, activity?.TraceId.ToString() ?? "-");
 
+        tokenSnapshot ??= await _tokenSnapshotProvider.CaptureAsync(ct);
         var startedAt = DateTime.UtcNow;
-        var openResult = await _recordClient.OpenAsync(descriptor.BuildOpenDto(startedAt), ct);
+        var openResult = await _recordClient.OpenAsync(
+            descriptor.BuildOpenDto(startedAt), ct, tokenSnapshot);
 
         if (openResult.Status == DashboardAvailability.PermanentSkip)
         {
@@ -75,7 +83,8 @@ public sealed class BackupRunCoordinator
                 descriptor.DisplayName, clientTaskId);
         }
 
-        await using var reporter = _reporterFactory.CreateForBackup(recordId ?? Guid.Empty, offline);
+        await using var reporter = _reporterFactory.CreateForBackup(
+            recordId ?? Guid.Empty, tokenSnapshot, offline);
 
         PipelineOutcome outcome;
         bool cancelled = false;
@@ -127,7 +136,7 @@ public sealed class BackupRunCoordinator
         else
         {
             var finalizeResult = await FinalizeRecordAsync(
-                descriptor, recordId!.Value, finalizeDto, ct, cancelled);
+                descriptor, recordId!.Value, finalizeDto, tokenSnapshot, ct, cancelled);
 
             if (finalizeResult.Status == DashboardAvailability.OfflineRetryable && !cancelled)
             {
@@ -175,6 +184,7 @@ public sealed class BackupRunCoordinator
         IBackupRunDescriptor descriptor,
         Guid recordId,
         FinalizeBackupRecordDto dto,
+        DashboardTokenSnapshot tokenSnapshot,
         CancellationToken runCt,
         bool cancelled)
     {
@@ -183,7 +193,7 @@ public sealed class BackupRunCoordinator
 
         try
         {
-            return await _recordClient.FinalizeAsync(recordId, dto, finalizeCt);
+            return await _recordClient.FinalizeAsync(recordId, dto, finalizeCt, tokenSnapshot);
         }
         catch (Exception ex) when (cancelled)
         {

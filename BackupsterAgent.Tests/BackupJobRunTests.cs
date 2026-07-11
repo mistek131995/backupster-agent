@@ -28,6 +28,8 @@ public sealed class BackupJobRunTests
     private FakeBackupRecordClient _recordClient = null!;
     private OutboxStore _outboxStore = null!;
     private StubBackupProvider _provider = null!;
+    private FakeDashboardTokenSnapshotProvider _tokenSnapshotProvider = null!;
+    private FakeProgressReporterFactory _reporterFactory = null!;
 
     [SetUp]
     public void SetUp()
@@ -41,6 +43,8 @@ public sealed class BackupJobRunTests
         _uploader = new FakeRecordingUploadProvider();
         _recordClient = new FakeBackupRecordClient();
         _provider = new StubBackupProvider(_tempRoot);
+        _tokenSnapshotProvider = new FakeDashboardTokenSnapshotProvider();
+        _reporterFactory = new FakeProgressReporterFactory();
     }
 
     [TearDown]
@@ -66,6 +70,10 @@ public sealed class BackupJobRunTests
             Assert.That(_recordClient.FinalizeCalls, Is.EqualTo(1));
             Assert.That(_recordClient.LastFinalize!.Status, Is.EqualTo(BackupStatus.Success));
             Assert.That(_recordClient.LastOpen!.StartedAt, Is.Not.Null);
+            Assert.That(_tokenSnapshotProvider.CaptureCalls, Is.EqualTo(1));
+            Assert.That(_recordClient.LastOpenTokenSnapshot, Is.SameAs(_tokenSnapshotProvider.Snapshot));
+            Assert.That(_reporterFactory.LastBackupTokenSnapshot, Is.SameAs(_tokenSnapshotProvider.Snapshot));
+            Assert.That(_recordClient.LastFinalizeTokenSnapshot, Is.SameAs(_tokenSnapshotProvider.Snapshot));
         });
 
         var outbox = await _outboxStore.ListAsync(CancellationToken.None);
@@ -346,7 +354,8 @@ public sealed class BackupJobRunTests
 
         var coordinator = new BackupRunCoordinator(
             _recordClient,
-            new FakeProgressReporterFactory(),
+            _tokenSnapshotProvider,
+            _reporterFactory,
             _outboxStore,
             new ActivitySource("BackupsterAgent.Tests"),
             encryption,
